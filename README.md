@@ -7,7 +7,7 @@
 <p align="center"><strong>A local-first workspace for turning long videos into polished short-form clips.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.8.0">Latest release: v0.8.0</a>
+  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.8.1">Latest release: v0.8.1</a>
   &nbsp; | &nbsp;
   <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases">Downloads</a>
   &nbsp; | &nbsp;
@@ -24,7 +24,7 @@ These screenshots are captured from the Shorts Studio application itself.
 | --- | --- |
 | ![Shorts Studio dashboard](docs/screenshots/dashboard.png) | ![Shorts Studio editing workspace](docs/screenshots/workspace.png) |
 
-The theme switch applies to the entire interface. The light System view is shown here as well:
+The theme switch applies to the entire interface. The light Settings view is shown here as well:
 
 ![Shorts Studio light theme and update control](docs/screenshots/system-light.png)
 
@@ -47,7 +47,7 @@ The theme switch applies to the entire interface. The light System view is shown
 
 ### Recommended: installer
 
-1. Download [ShortsStudio-Setup-v0.8.0.exe](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.8.0/ShortsStudio-Setup-v0.8.0.exe).
+1. Download [ShortsStudio-Setup-v0.8.1.exe](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.8.1/ShortsStudio-Setup-v0.8.1.exe).
 2. Run the installer and choose whether to create a desktop shortcut.
 3. Start **Shorts Studio** from the Start menu or desktop.
 
@@ -57,7 +57,7 @@ Windows may show SmartScreen for an unsigned build. Select **More info -> Run an
 
 ### Portable ZIP
 
-1. Download [ShortsStudio-v0.8.0-windows.zip](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.8.0/ShortsStudio-v0.8.0-windows.zip).
+1. Download [ShortsStudio-v0.8.1-windows.zip](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.8.1/ShortsStudio-v0.8.1-windows.zip).
 2. Extract the entire ZIP to a folder (do not run the EXE inside the archive).
 3. Run `unblock_and_start.bat`, or double-click `ShortsStudio.exe` after Windows has unblocked the files.
 
@@ -65,7 +65,14 @@ The ZIP is self-contained and can be moved to another Windows 10/11 64-bit machi
 
 ### Updating from inside the app
 
-Open **System** in the sidebar and click **Check for updates**. If a newer packaged release is available, the button changes to **Install vX.Y.Z**. Confirm once; Shorts Studio downloads the Windows package, preserves your projects and `.env`, replaces the package, and restarts. If you are running from source, the same control opens the GitHub release page so you can update the source checkout safely.
+Open **Settings** in the sidebar (or use the top-bar **Settings** button) and click **Check for updates**. If a newer packaged release is available, the button changes to **Install vX.Y.Z**. Confirm once; Shorts Studio downloads the Windows package, preserves your projects and `.env`, replaces the package, and restarts. If you are running from source, the same control opens the GitHub release page so you can update the source checkout safely.
+
+Settings also includes:
+
+- **Appearance:** Dark, Light, or system theme, plus a reduced-motion preference.
+- **Rendering defaults:** Local/API mode, output resolution, caption preset, aspect ratio, face framing, and a default save folder for new projects.
+- **Storage & privacy:** The active output path, free space, an **Open output folder** shortcut, and a local-first processing explanation.
+- **Runtime diagnostics:** FFmpeg, FFprobe, Whisper, CUDA, disk space, and concurrency status with a refresh action.
 
 ## Source setup
 
@@ -107,7 +114,7 @@ For local Whisper acceleration on a supported NVIDIA GPU:
 .\install_gpu_windows.bat
 ```
 
-The script checks for `nvidia-smi`, installs a CUDA-enabled PyTorch wheel, and leaves CPU available as a fallback. In the app, select **Whisper device -> CUDA GPU**. The System view reports the detected device and current fallback reason.
+The script checks for `nvidia-smi`, installs a CUDA-enabled PyTorch wheel, and leaves CPU available as a fallback. In the app, select **Whisper device -> CUDA GPU**. The Settings view reports the detected device and current fallback reason.
 
 ## Configuration
 
@@ -194,7 +201,7 @@ The generated `dist`, `build`, and `release` directories are intentionally ignor
 
 - **The window opens in a browser:** install the Microsoft WebView2 Runtime, or set `SHORTS_STUDIO_BROWSER=false` and restart. Browser fallback is expected when WebView2 cannot load.
 - **SmartScreen warns about the EXE:** use the release links above and choose `More info -> Run anyway`; the current public binaries are not commercially signed.
-- **CUDA DLL or driver errors:** use System -> diagnostics, install/update the NVIDIA driver, rerun `install_gpu_windows.bat`, or select CPU. CPU mode remains supported.
+- **CUDA DLL or driver errors:** use Settings -> diagnostics, install/update the NVIDIA driver, rerun `install_gpu_windows.bat`, or select CPU. CPU mode remains supported.
 - **No provider key:** Local mode can use the built-in heuristic fallback when `LOCAL_HEURISTIC_FALLBACK=true`; API mode requires `MUAPI_API_KEY`.
 - **YouTube download errors:** try a local upload or update yt-dlp with `venv\Scripts\python.exe -m pip install --upgrade yt-dlp`.
 - **Port 7860 is busy:** launch with `launcher.py --port 7861`; the desktop launcher also chooses a free loopback port automatically.
