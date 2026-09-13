@@ -7,7 +7,7 @@
 <p align="center"><strong>A local-first workspace for turning long videos into polished short-form clips.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.8.4">Latest release: v0.8.4</a>
+  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.9.0">Latest release: v0.9.0</a>
   &nbsp; | &nbsp;
   <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases">Downloads</a>
   &nbsp; | &nbsp;
@@ -15,6 +15,45 @@
 </p>
 
 Shorts Studio is an independent desktop and web workspace maintained by **wiifhub**. It takes a YouTube URL or a local video, finds strong moments, gives you control over the framing and captions, and renders ready-to-publish clips. Local mode keeps source media and rendered files on your computer; API mode is available when you prefer hosted processing.
+
+## Docker deployment
+
+Release `v0.9.0` adds a reproducible server image for Linux hosts, Docker Desktop, NAS machines, and home servers. The container serves the same FastAPI workspace over HTTP; it does not need the Windows desktop shell or a separate Python installation on the host.
+
+### Quick start (CPU)
+
+From a checkout of this repository:
+
+```bash
+cp .env.docker.example .env.docker
+# Edit .env.docker if you want MuAPI, OpenAI, or Gemini ranking.
+docker compose --env-file .env.docker up --build
+```
+
+Then open <http://127.0.0.1:7860>. Projects, uploads, transcripts, Whisper models, and rendered clips live in the named `shorts_studio_data` volume and survive container restarts. `docker compose down` keeps that data; `docker compose down -v` removes it.
+
+The published CPU image is also available at `ghcr.io/wiifhub/shorts-studio:latest` and is built for `linux/amd64`:
+
+```bash
+docker run --rm -p 127.0.0.1:7860:7860 \
+  -v shorts_studio_data:/data \
+  --env-file .env.docker \
+  ghcr.io/wiifhub/shorts-studio:latest
+```
+
+### NVIDIA GPU mode
+
+Install the NVIDIA Container Toolkit first, then run the opt-in Compose profile:
+
+```bash
+docker compose --env-file .env.docker --profile gpu up --build shorts-studio-gpu
+```
+
+The GPU workspace is available at <http://127.0.0.1:7861> and uses `LOCAL_WHISPER_DEVICE=cuda` by default. Set `LOCAL_WHISPER_MODEL` in `.env.docker` to choose a different model. CPU mode remains the fallback when no GPU is available.
+
+The Compose file binds to loopback for safety. If you intentionally serve it to another machine, put it behind your own authentication and TLS/reverse proxy; do not expose the unauthenticated FastAPI port directly to the public internet. API keys are passed at runtime and are never copied into the image.
+
+The Docker image intentionally omits `pywebview` and `pystray`: the browser is the container's desktop surface. The regular Windows package still provides the browser-free native window.
 
 ## Screenshots
 
@@ -47,6 +86,8 @@ The theme switch applies to the entire interface. The light Settings view is sho
 - **Use hosted providers safely** by entering MuAPI, OpenAI, or Gemini credentials in Settings. Session-entered keys are sent only with the relevant job and are never saved in project files.
 
 ## Windows installation
+
+The latest packaged Windows desktop binaries are v0.8.4. The v0.9.0 release adds the Docker/server distribution above; the Windows installer and portable ZIP remain available while the next desktop binary is being built.
 
 ### Recommended: installer
 
@@ -132,6 +173,7 @@ Copy `.env.example` to `.env` and edit only the settings you need. Never commit 
 | `LOCAL_WHISPER_MODEL` | `tiny`, `base`, `small`, `medium`, or `large-v3` | `base` |
 | `LOCAL_WHISPER_DEVICE` | `auto`, `cpu`, or `cuda` | `auto` |
 | `LOCAL_OUTPUT_DIR` | Source-mode project/output root | `output` |
+| `SHORTS_STUDIO_DATA_DIR` | Container/user data root for projects, caches, and update state | unset (Docker: `/data`) |
 | `LOCAL_BURN_CAPTIONS` | Burn captions into local MP4 files | `true` |
 | `LOCAL_HEURISTIC_FALLBACK` | Rank locally without a provider key | `true` |
 | `SHORTS_STUDIO_BROWSER` | Force browser fallback instead of WebView2 | `false` |
@@ -186,6 +228,10 @@ main.py                CLI entry point
 install_windows.bat    Source dependency setup
 build_portable.bat     PyInstaller portable build
 build_installer.bat    Inno Setup installer build
+Dockerfile             CPU server image
+Dockerfile.gpu         NVIDIA CUDA server image
+docker-compose.yml     CPU/GPU Compose profiles
+requirements-docker.txt Container server dependencies
 output/                Local projects (ignored by Git)
 ```
 
@@ -200,6 +246,15 @@ Build from a clean Windows checkout with the local dependencies installed:
 ```
 
 The generated `dist`, `build`, and `release` directories are intentionally ignored by Git. Before publishing, verify the EXE starts, `/api/health` returns 200, the theme switch works in both modes, the Quit action stops the listener, and the ZIP/installer hashes match the uploaded files.
+
+The Docker image is built and published automatically by `.github/workflows/docker.yml` on pushes to `main` and version tags. A local Docker build is available on any Docker host:
+
+```bash
+docker build -t shorts-studio:local .
+docker run --rm -p 127.0.0.1:7860:7860 -v shorts_studio_data:/data shorts-studio:local
+```
+
+The GPU image is built locally through the Compose `gpu` profile because it requires the host's NVIDIA runtime. The published CPU image is intentionally limited to `linux/amd64`; the Python/Whisper dependency wheels are not promised for every ARM board.
 
 ## Troubleshooting
 

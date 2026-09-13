@@ -1,0 +1,88 @@
+name: shorts-studio
+
+services:
+  shorts-studio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/wiifhub/shorts-studio:latest
+    init: true
+    ports:
+      - "127.0.0.1:${SHORTS_PORT:-7860}:7860"
+    environment:
+      LOCAL_OUTPUT_DIR: /data/output
+      SHORTS_STUDIO_DATA_DIR: /data
+      HF_HOME: /data/models
+      HUGGINGFACE_HUB_CACHE: /data/models/hub
+      XDG_CACHE_HOME: /data/cache
+      SHORTS_STUDIO_HEADLESS: "true"
+      SHORTS_STUDIO_BROWSER: "true"
+      SHORTS_PORT: "7860"
+      LOCAL_WHISPER_MODEL: ${LOCAL_WHISPER_MODEL:-base}
+      LOCAL_WHISPER_DEVICE: ${LOCAL_WHISPER_DEVICE:-auto}
+      LOCAL_BURN_CAPTIONS: ${LOCAL_BURN_CAPTIONS:-true}
+      LOCAL_HEURISTIC_FALLBACK: ${LOCAL_HEURISTIC_FALLBACK:-true}
+      SHORTS_MAX_UPLOAD_MB: ${SHORTS_MAX_UPLOAD_MB:-2048}
+      SHORTS_MIN_FREE_GB: ${SHORTS_MIN_FREE_GB:-0.5}
+      SHORTS_AUTO_RESUME: ${SHORTS_AUTO_RESUME:-true}
+      MUAPI_API_KEY: ${MUAPI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+    volumes:
+      - shorts_studio_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/api/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  # Requires Docker Desktop/Engine with the NVIDIA Container Toolkit. It is
+  # opt-in so a normal CPU install never attempts to reserve a GPU.
+  shorts-studio-gpu:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    image: ghcr.io/wiifhub/shorts-studio:gpu
+    init: true
+    ports:
+      - "127.0.0.1:${SHORTS_GPU_PORT:-7861}:7860"
+    environment:
+      LOCAL_OUTPUT_DIR: /data/output
+      SHORTS_STUDIO_DATA_DIR: /data
+      HF_HOME: /data/models
+      HUGGINGFACE_HUB_CACHE: /data/models/hub
+      XDG_CACHE_HOME: /data/cache
+      SHORTS_STUDIO_HEADLESS: "true"
+      SHORTS_STUDIO_BROWSER: "true"
+      SHORTS_PORT: "7860"
+      LOCAL_WHISPER_MODEL: ${LOCAL_WHISPER_MODEL:-base}
+      LOCAL_WHISPER_DEVICE: ${LOCAL_WHISPER_DEVICE:-cuda}
+      LOCAL_BURN_CAPTIONS: ${LOCAL_BURN_CAPTIONS:-true}
+      LOCAL_HEURISTIC_FALLBACK: ${LOCAL_HEURISTIC_FALLBACK:-true}
+      SHORTS_MAX_UPLOAD_MB: ${SHORTS_MAX_UPLOAD_MB:-2048}
+      SHORTS_MIN_FREE_GB: ${SHORTS_MIN_FREE_GB:-0.5}
+      SHORTS_AUTO_RESUME: ${SHORTS_AUTO_RESUME:-true}
+      MUAPI_API_KEY: ${MUAPI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+    gpus: all
+    volumes:
+      - shorts_studio_gpu_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/api/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 45s
+      retries: 3
+
+volumes:
+  shorts_studio_data:
+  shorts_studio_gpu_data:

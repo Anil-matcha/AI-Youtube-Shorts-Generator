@@ -1,9 +1,13 @@
 .env
+.env.*
+!.env.example
+!.env.docker.example
 __pycache__/
 *.pyc
 .venv/
 venv/
 output/
+docker-data/
 build/
 dist/
 release/

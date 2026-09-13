@@ -54,7 +54,7 @@ from shorts_generator.config import (  # noqa: E402
     runtime_credentials,
 )
 
-app = FastAPI(title="Shorts Studio", version="0.8.4")
+app = FastAPI(title="Shorts Studio", version="0.9.0")
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
 _jobs: Dict[str, Dict[str, Any]] = {}
@@ -97,7 +97,7 @@ _max_upload_mb = _positive_int_env("SHORTS_MAX_UPLOAD_MB", 2048)
 _max_upload_bytes = _max_upload_mb * 1024 * 1024
 _auto_resume = os.getenv("SHORTS_AUTO_RESUME", "true").strip().lower() in {"1", "true", "yes", "on"}
 
-_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.8.4").strip().lstrip("v") or "0.8.4"
+_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.9.0").strip().lstrip("v") or "0.9.0"
 _GITHUB_REPO = "wiifhub/AI-Youtube-Shorts-Generator"
 _update_lock = threading.Lock()
 _update_state: Dict[str, Any] = {
@@ -1068,16 +1068,25 @@ def open_folder(request: OpenFolderRequest) -> Dict[str, Any]:
         folder.mkdir(parents=True, exist_ok=True)
     except (OSError, RuntimeError) as exc:
         raise HTTPException(400, f"output folder is unavailable: {exc}") from exc
-    try:
-        if os.name == "nt":
-            os.startfile(str(folder))  # type: ignore[attr-defined]
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(folder)])
-        else:
-            subprocess.Popen(["xdg-open", str(folder)])
-    except OSError as exc:
-        raise HTTPException(500, f"could not open folder: {exc}") from exc
-    return {"status": "opened", "path": str(folder)}
+    opened = False
+    headless = os.getenv("SHORTS_STUDIO_HEADLESS", "false").strip().lower() in {"1", "true", "yes", "on"}
+    if not headless:
+        try:
+            if os.name == "nt":
+                os.startfile(str(folder))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+            opened = True
+        except FileNotFoundError:
+            # A server/container may not have a desktop opener. Returning the
+            # path is still useful and avoids turning a successful export into
+            # a misleading 500 response.
+            opened = False
+        except OSError as exc:
+            raise HTTPException(500, f"could not open folder: {exc}") from exc
+    return {"status": "opened" if opened else "available", "opened": opened, "path": str(folder)}
 
 
 @app.post("/api/jobs/{job_id}/clips/{index}")
@@ -1709,6 +1718,11 @@ def _whisper_model_cached(model_name: str) -> bool:
         Path.home() / ".cache" / "huggingface" / "hub",
         Path(os.getenv("LOCALAPPDATA", "")) / "huggingface" / "hub",
     ]
+    for env_name in ("HF_HOME", "HUGGINGFACE_HUB_CACHE"):
+        configured = os.getenv(env_name, "").strip()
+        if configured:
+            cache_root = Path(configured).expanduser()
+            roots.extend((cache_root / "hub", cache_root))
     token = f"models--Systran--faster-whisper-{model}"
     return any((root / token).is_dir() for root in roots if str(root))
 

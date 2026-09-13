@@ -1,0 +1,10 @@
+-r requirements.txt
+
+# Server/container dependencies. Desktop-only pywebview and pystray are
+# intentionally omitted because the container serves the UI over HTTP.
+yt-dlp>=2024.1.1
+faster-whisper>=1.0.0
+openai>=1.0.0
+google-genai>=1.0.0
+opencv-python-headless>=4.8.0
+Pillow>=10.0
