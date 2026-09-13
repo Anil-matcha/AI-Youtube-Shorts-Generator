@@ -30,7 +30,7 @@ def _display_seconds(value: object) -> float:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="AI YouTube Shorts Generator")
+    parser = argparse.ArgumentParser(description="Shorts Studio — local-first short-form video editor")
     parser.add_argument("url", help="YouTube URL, file:// URL, or local file path")
     parser.add_argument(
         "--mode",

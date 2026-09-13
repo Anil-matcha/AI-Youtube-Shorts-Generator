@@ -53,7 +53,7 @@ from shorts_generator.config import (  # noqa: E402
     gpu_status,
 )
 
-app = FastAPI(title="AI YouTube Shorts Generator", version="1.0")
+app = FastAPI(title="Shorts Studio", version="0.8.0")
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
 _jobs: Dict[str, Dict[str, Any]] = {}
@@ -91,6 +91,19 @@ _allowed_upload_extensions = {
 _max_upload_mb = _positive_int_env("SHORTS_MAX_UPLOAD_MB", 2048)
 _max_upload_bytes = _max_upload_mb * 1024 * 1024
 _auto_resume = os.getenv("SHORTS_AUTO_RESUME", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.8.0").strip().lstrip("v") or "0.8.0"
+_GITHUB_REPO = "wiifhub/AI-Youtube-Shorts-Generator"
+_update_lock = threading.Lock()
+_update_state: Dict[str, Any] = {
+    "status": "idle",
+    "current_version": _APP_VERSION,
+    "latest_version": None,
+    "progress": 0,
+    "total": 0,
+    "message": "",
+    "error": None,
+}
 
 
 def _nonnegative_float_env(name: str, default: float) -> float:
@@ -1685,17 +1698,247 @@ def diagnostics() -> Dict[str, Any]:
     }
 
 
+def _version_tuple(value: Any) -> tuple[int, int, int]:
+    match = re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", str(value or ""))
+    if not match:
+        return (0, 0, 0)
+    return tuple(int(part or 0) for part in match.groups())  # type: ignore[return-value]
+
+
+def _github_release() -> Dict[str, Any]:
+    import requests
+
+    response = requests.get(
+        f"https://api.github.com/repos/{_GITHUB_REPO}/releases/latest",
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "ShortsStudio-Updater"},
+        timeout=(8, 30),
+    )
+    response.raise_for_status()
+    release = response.json()
+    if not isinstance(release, dict):
+        raise RuntimeError("GitHub returned an invalid release response")
+    return release
+
+
+def _package_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return ROOT
+
+
+def _package_root_writable() -> bool:
+    if not getattr(sys, "frozen", False):
+        return False
+    root = _package_root()
+    probe = root / f".shorts-studio-update-{uuid.uuid4().hex}.tmp"
+    try:
+        probe.write_text("ok", encoding="ascii")
+        probe.unlink(missing_ok=True)
+        return True
+    except OSError:
+        try:
+            probe.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+
+
+def _update_dir() -> Path:
+    data_root = Path(os.getenv("SHORTS_STUDIO_DATA_DIR") or _output_root.parent).expanduser()
+    return data_root / "updates"
+
+
+def _select_release_asset(release: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    raw_assets = release.get("assets")
+    assets = raw_assets if isinstance(raw_assets, list) else []
+    candidates: list[Dict[str, str]] = []
+    for raw in assets:
+        if not isinstance(raw, dict):
+            continue
+        name = Path(str(raw.get("name") or "")).name
+        url = str(raw.get("browser_download_url") or "").strip()
+        if not name or not url:
+            continue
+        lower = name.lower()
+        if lower.endswith(".zip") and "window" in lower:
+            candidates.append({"name": name, "url": url, "kind": "zip"})
+        elif lower.endswith(".exe") and ("setup" in lower or "installer" in lower):
+            candidates.append({"name": name, "url": url, "kind": "installer"})
+    if not candidates:
+        return None
+    if _package_root_writable():
+        return next((asset for asset in candidates if asset["kind"] == "zip"), candidates[0])
+    if getattr(sys, "frozen", False):
+        return next((asset for asset in candidates if asset["kind"] == "installer"), candidates[0])
+    return None
+
+
+def _release_info(release: Dict[str, Any]) -> Dict[str, Any]:
+    tag = str(release.get("tag_name") or "").strip()
+    if not tag or _version_tuple(tag) == (0, 0, 0):
+        raise RuntimeError("GitHub release did not include a usable version tag")
+    latest = tag.lstrip("vV")
+    current_version = _APP_VERSION
+    asset = _select_release_asset(release)
+    return {
+        "available": True,
+        "update_available": _version_tuple(latest) > _version_tuple(current_version),
+        "current_version": current_version,
+        "latest_version": latest,
+        "tag": tag,
+        "url": str(release.get("html_url") or f"https://github.com/{_GITHUB_REPO}/releases/tag/{tag}"),
+        "name": str(release.get("name") or f"Shorts Studio {tag}"),
+        "published_at": release.get("published_at"),
+        "asset": asset,
+        "can_install": bool(asset and _version_tuple(latest) > _version_tuple(current_version)),
+        "frozen": bool(getattr(sys, "frozen", False)),
+    }
+
+
+def _set_update_state(**values: Any) -> Dict[str, Any]:
+    with _update_lock:
+        _update_state.update(values)
+        return dict(_update_state)
+
+
+def _ps_quote(value: Any) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _write_zip_updater(zip_path: Path, install_root: Path) -> Path:
+    update_root = zip_path.parent
+    script = update_root / f"apply-{uuid.uuid4().hex}.ps1"
+    pid = os.getpid()
+    script_text = f"""$ErrorActionPreference = 'Stop'
+$pidToWait = {pid}
+$zip = {_ps_quote(zip_path)}
+$install = {_ps_quote(install_root)}
+$stage = Join-Path ([IO.Path]::GetTempPath()) ('ShortsStudio-update-' + [guid]::NewGuid().ToString('N'))
+try {{
+  while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 500 }}
+  New-Item -ItemType Directory -Path $stage -Force | Out-Null
+  Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
+  $payload = Join-Path $stage 'ShortsStudio'
+  if (-not (Test-Path -LiteralPath $payload)) {{ throw 'The downloaded update did not contain a ShortsStudio folder.' }}
+  & robocopy $payload $install /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS | Out-Null
+  if ($LASTEXITCODE -gt 7) {{ throw "Update copy failed with robocopy exit code $LASTEXITCODE." }}
+  Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+  Start-Process -FilePath (Join-Path $install 'ShortsStudio.exe') -WorkingDirectory $install
+}} catch {{
+  Add-Content -LiteralPath (Join-Path $stage 'update-error.txt') -Value $_.Exception.Message -ErrorAction SilentlyContinue
+}} finally {{
+  Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+}}
+"""
+    script.write_text(script_text, encoding="utf-8")
+    return script
+
+
+def _launch_update(asset: Dict[str, str], downloaded: Path) -> None:
+    if asset.get("kind") == "zip":
+        script = _write_zip_updater(downloaded, _package_root())
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", str(script)],
+            cwd=str(downloaded.parent),
+            creationflags=flags,
+        )
+    else:
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(
+            [str(downloaded), "/SILENT", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"],
+            cwd=str(downloaded.parent),
+            creationflags=flags,
+        )
+
+
+def _download_and_apply(asset: Dict[str, str], latest: str) -> None:
+    import requests
+
+    target_dir = _update_dir()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    filename = Path(asset["name"]).name
+    target = target_dir / filename
+    partial = target.with_name(target.name + ".part")
+    try:
+        _set_update_state(status="downloading", latest_version=latest, asset_name=filename, progress=0, total=0, message=f"Downloading {filename}", error=None)
+        with requests.get(
+            asset["url"],
+            headers={"Accept": "application/octet-stream", "User-Agent": "ShortsStudio-Updater"},
+            stream=True,
+            timeout=(15, 120),
+        ) as response:
+            response.raise_for_status()
+            total = int(response.headers.get("content-length") or 0)
+            downloaded_bytes = 0
+            _set_update_state(total=total)
+            with partial.open("wb") as output:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if not chunk:
+                        continue
+                    output.write(chunk)
+                    downloaded_bytes += len(chunk)
+                    _set_update_state(progress=downloaded_bytes, total=total)
+        os.replace(partial, target)
+        _set_update_state(status="restarting", progress=target.stat().st_size, total=target.stat().st_size, path=str(target), message="Update downloaded. Restarting Shorts Studio…", error=None)
+        _launch_update(asset, target)
+        threading.Thread(target=lambda: (time.sleep(0.35), os._exit(0)), name="shorts-studio-update-exit", daemon=True).start()
+    except Exception as exc:
+        try:
+            partial.unlink(missing_ok=True)
+        except OSError:
+            pass
+        _set_update_state(status="error", message="Update failed", error=str(exc))
+
+
 @app.get("/api/update")
 def update_check() -> Dict[str, Any]:
-    """Check the public GitHub release without downloading or changing files."""
-    import requests
+    """Check the wiifhub release and describe the in-app update path."""
     try:
-        response = requests.get("https://api.github.com/repos/wiifhub/AI-Youtube-Shorts-Generator/releases/latest", timeout=8)
-        response.raise_for_status()
-        release = response.json()
-        return {"available": True, "tag": release.get("tag_name"), "url": release.get("html_url"), "name": release.get("name")}
+        info = _release_info(_github_release())
+        _set_update_state(
+            status="available" if info["update_available"] else "current",
+            current_version=info["current_version"],
+            latest_version=info["latest_version"],
+            progress=0,
+            total=0,
+            message="Update available" if info["update_available"] else "Shorts Studio is up to date",
+            error=None,
+        )
+        info["state"] = dict(_update_state)
+        return info
     except Exception as exc:
-        return {"available": False, "error": str(exc)}
+        _set_update_state(status="error", message="Update check failed", error=str(exc))
+        return {"available": False, "update_available": False, "current_version": _APP_VERSION, "error": str(exc), "state": dict(_update_state)}
+
+
+@app.get("/api/update/status")
+def update_status() -> Dict[str, Any]:
+    with _update_lock:
+        return dict(_update_state)
+
+
+@app.post("/api/update/apply")
+def update_apply() -> Dict[str, Any]:
+    """Download and apply the newest packaged release, then restart the app."""
+    with _update_lock:
+        if _update_state.get("status") in {"checking", "starting", "downloading", "restarting"}:
+            return dict(_update_state)
+    try:
+        release = _github_release()
+        info = _release_info(release)
+        if not info["update_available"]:
+            return {"status": "current", "message": "Shorts Studio is already up to date", **info}
+        asset = info.get("asset")
+        if not asset or not info.get("can_install"):
+            return {"status": "manual", "message": "This source install needs a manual update from the GitHub release page.", **info}
+        _set_update_state(status="starting", current_version=info["current_version"], latest_version=info["latest_version"], progress=0, total=0, message="Starting update…", error=None)
+        threading.Thread(target=_download_and_apply, args=(asset, info["latest_version"]), name="shorts-studio-update", daemon=True).start()
+        return {"status": "starting", "message": "Update started", **info}
+    except Exception as exc:
+        _set_update_state(status="error", message="Update failed", error=str(exc))
+        return {"status": "error", "message": "Update failed", "error": str(exc), "current_version": _APP_VERSION}
 
 
 def main() -> None:

@@ -165,16 +165,31 @@ def main() -> None:
         _show_message("Shorts Studio is already running", "Close the existing Shorts Studio window before starting another one.")
         return
 
-    root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-    os.chdir(root)
-    os.environ["PATH"] = str(root) + os.pathsep + os.environ.get("PATH", "")
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
+    frozen = bool(getattr(sys, "frozen", False))
+    resource_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    package_root = Path(sys.executable).resolve().parent if frozen else resource_root
+    os.chdir(resource_root)
+    os.environ["PATH"] = os.pathsep.join(
+        part for part in (str(package_root), str(resource_root), os.environ.get("PATH", "")) if part
+    )
+    if str(resource_root) not in sys.path:
+        sys.path.insert(0, str(resource_root))
+
+    # A packaged app runs from PyInstaller's resource directory, so the
+    # normal python-dotenv search would miss a user-created .env beside the
+    # executable. Load that file explicitly before importing web.app.
+    if frozen:
+        try:
+            from dotenv import load_dotenv
+
+            load_dotenv(package_root / ".env", override=False)
+        except Exception:
+            pass
 
     # Program Files is not reliably writable by a normal user.  Keep generated
     # projects in the user's profile for installed/portable builds while still
     # loading an optional .env beside the executable.
-    if getattr(sys, "_MEIPASS", None):
+    if frozen:
         user_data = Path(os.getenv("LOCALAPPDATA") or Path.home()) / "ShortsStudio"
         os.environ.setdefault("LOCAL_OUTPUT_DIR", str(user_data / "output"))
         os.environ.setdefault("SHORTS_STUDIO_DATA_DIR", str(user_data))
