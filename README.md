@@ -7,7 +7,7 @@
 <p align="center"><strong>A local-first workspace for turning long videos into polished short-form clips.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.8.1">Latest release: v0.8.1</a>
+  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.8.2">Latest release: v0.8.2</a>
   &nbsp; | &nbsp;
   <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases">Downloads</a>
   &nbsp; | &nbsp;
@@ -42,12 +42,13 @@ The theme switch applies to the entire interface. The light Settings view is sho
 - **Use dark or light mode** from the top-bar switch. Your choice is saved locally and applies to panels, forms, previews, captions, timelines, dialogs, status states, and the closed screen.
 - **Update in place** from the Settings view. Packaged Windows builds can download the newest release from this repository and restart without a reinstall.
 - **Run without a browser** in the packaged desktop build through an embedded WebView2 window. A browser fallback remains available when WebView2 is unavailable.
+- **Use hosted providers safely** by entering MuAPI, OpenAI, or Gemini credentials in Settings. Session-entered keys are sent only with the relevant job and are never saved in project files.
 
 ## Windows installation
 
 ### Recommended: installer
 
-1. Download [ShortsStudio-Setup-v0.8.1.exe](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.8.1/ShortsStudio-Setup-v0.8.1.exe).
+1. Download [ShortsStudio-Setup-v0.8.2.exe](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.8.2/ShortsStudio-Setup-v0.8.2.exe).
 2. Run the installer and choose whether to create a desktop shortcut.
 3. Start **Shorts Studio** from the Start menu or desktop.
 
@@ -57,7 +58,7 @@ Windows may show SmartScreen for an unsigned build. Select **More info -> Run an
 
 ### Portable ZIP
 
-1. Download [ShortsStudio-v0.8.1-windows.zip](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.8.1/ShortsStudio-v0.8.1-windows.zip).
+1. Download [ShortsStudio-v0.8.2-windows.zip](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.8.2/ShortsStudio-v0.8.2-windows.zip).
 2. Extract the entire ZIP to a folder (do not run the EXE inside the archive).
 3. Run `unblock_and_start.bat`, or double-click `ShortsStudio.exe` after Windows has unblocked the files.
 
@@ -70,6 +71,7 @@ Open **Settings** in the sidebar (or use the top-bar **Settings** button) and cl
 Settings also includes:
 
 - **Appearance:** Dark, Light, or system theme, plus a reduced-motion preference.
+- **API credentials:** Enter a MuAPI key for API mode, or optional OpenAI/Gemini keys for local highlight ranking. The fields are masked, session-only, and excluded from saved jobs.
 - **Rendering defaults:** Local/API mode, output resolution, caption preset, aspect ratio, face framing, and a default save folder for new projects.
 - **Storage & privacy:** The active output path, free space, an **Open output folder** shortcut, and a local-first processing explanation.
 - **Runtime diagnostics:** FFmpeg, FFprobe, Whisper, CUDA, disk space, and concurrency status with a refresh action.
@@ -102,9 +104,9 @@ Use the **Quit** button in the app to stop the local server. `Ctrl+C` in the ter
 
 ## Local and API modes
 
-The workspace defaults to Local mode. Local mode uses `yt-dlp`, `faster-whisper`, OpenCV, and FFmpeg on your machine. Highlight ranking can use OpenAI or Gemini, or the built-in heuristic fallback when no key is configured. Local rendering does not impose a per-clip service limit, but it does use your CPU/GPU, storage, and any provider API you select.
+The workspace defaults to Local mode. Local mode uses `yt-dlp`, `faster-whisper`, OpenCV, and FFmpeg on your machine. Highlight ranking can use OpenAI or Gemini, or the built-in heuristic fallback when no key is configured. Enter an optional local ranking key in **Settings -> API credentials**, or configure it in `.env`. Local rendering does not impose a per-clip service limit, but it does use your CPU/GPU, storage, and any provider API you select.
 
-API mode delegates download, transcription, ranking, and auto-crop to the configured MuAPI service. Add `MUAPI_API_KEY` to `.env` before choosing API mode. Provider terms, network availability, and API costs are separate from Shorts Studio.
+API mode delegates download, transcription, ranking, and auto-crop to the configured MuAPI service. Enter `MUAPI_API_KEY` in **Settings -> API credentials** for the current session, or add it to `.env` for a persistent local setup. Session keys are held in memory, sent only to MuAPI for the job, and are not written to project files. Provider terms, network availability, and API costs are separate from Shorts Studio.
 
 ### Optional CUDA setup
 
@@ -122,9 +124,9 @@ Copy `.env.example` to `.env` and edit only the settings you need. Never commit 
 
 | Setting | Purpose | Default |
 | --- | --- | --- |
-| `MUAPI_API_KEY` | API mode authentication | empty |
+| `MUAPI_API_KEY` | Persistent API mode authentication (Settings can supply a session-only key instead) | empty |
 | `LLM_PROVIDER` | Local ranking provider: `openai` or `gemini` | `openai` |
-| `OPENAI_API_KEY` / `GEMINI_API_KEY` | Optional local ranking keys | empty |
+| `OPENAI_API_KEY` / `GEMINI_API_KEY` | Optional persistent local ranking keys (Settings can supply session-only keys instead) | empty |
 | `LOCAL_WHISPER_MODEL` | `tiny`, `base`, `small`, `medium`, or `large-v3` | `base` |
 | `LOCAL_WHISPER_DEVICE` | `auto`, `cpu`, or `cuda` | `auto` |
 | `LOCAL_OUTPUT_DIR` | Source-mode project/output root | `output` |
@@ -158,7 +160,7 @@ The loopback FastAPI service powers the desktop shell and can be used by local t
 | `GET /api/health` | Liveness check |
 | `GET /api/system` | FFmpeg, storage, CUDA, model, and setup status |
 | `GET /api/jobs` | List saved projects |
-| `POST /api/jobs` / `POST /api/jobs/batch` | Start one or many projects |
+| `POST /api/jobs` / `POST /api/jobs/batch` | Start one or many projects; optional `X-MuAPI-Key`, `X-OpenAI-Key`, `X-Gemini-Key`, and `X-LLM-Provider` headers supply session credentials |
 | `GET /api/jobs/{id}` | Read progress and results |
 | `POST /api/jobs/{id}/cancel` | Cancel a running project |
 | `POST /api/jobs/{id}/preview` | Render a lightweight draft |
@@ -202,7 +204,7 @@ The generated `dist`, `build`, and `release` directories are intentionally ignor
 - **The window opens in a browser:** install the Microsoft WebView2 Runtime, or set `SHORTS_STUDIO_BROWSER=false` and restart. Browser fallback is expected when WebView2 cannot load.
 - **SmartScreen warns about the EXE:** use the release links above and choose `More info -> Run anyway`; the current public binaries are not commercially signed.
 - **CUDA DLL or driver errors:** use Settings -> diagnostics, install/update the NVIDIA driver, rerun `install_gpu_windows.bat`, or select CPU. CPU mode remains supported.
-- **No provider key:** Local mode can use the built-in heuristic fallback when `LOCAL_HEURISTIC_FALLBACK=true`; API mode requires `MUAPI_API_KEY`.
+- **No provider key:** Enter a session key under Settings -> API credentials, configure the matching `.env` variable, or let Local mode use the built-in heuristic fallback when `LOCAL_HEURISTIC_FALLBACK=true`. API mode requires a MuAPI key.
 - **YouTube download errors:** try a local upload or update yt-dlp with `venv\Scripts\python.exe -m pip install --upgrade yt-dlp`.
 - **Port 7860 is busy:** launch with `launcher.py --port 7861`; the desktop launcher also chooses a free loopback port automatically.
 - **A render stops:** open the project again. Persisted logs, interrupted-job recovery, Retry, and recoverable output folders are designed to preserve completed work.

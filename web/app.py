@@ -28,7 +28,7 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from fastapi import File, FastAPI, HTTPException, UploadFile
+from fastapi import File, FastAPI, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -51,15 +51,20 @@ from shorts_generator.config import (  # noqa: E402
     MUAPI_API_KEY,
     OPENAI_API_KEY,
     gpu_status,
+    runtime_credentials,
 )
 
-app = FastAPI(title="Shorts Studio", version="0.8.1")
+app = FastAPI(title="Shorts Studio", version="0.8.2")
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
 _jobs: Dict[str, Dict[str, Any]] = {}
 _lock = threading.Lock()
 _cancel_events: Dict[str, threading.Event] = {}
+# UI-supplied credentials live only for the lifetime of an active job.  They
+# are never included in the persisted request, snapshots, metadata, or logs.
+_job_credentials: Dict[str, Dict[str, str]] = {}
 _job_id_pattern = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_max_credential_length = 4096
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -92,7 +97,7 @@ _max_upload_mb = _positive_int_env("SHORTS_MAX_UPLOAD_MB", 2048)
 _max_upload_bytes = _max_upload_mb * 1024 * 1024
 _auto_resume = os.getenv("SHORTS_AUTO_RESUME", "true").strip().lower() in {"1", "true", "yes", "on"}
 
-_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.8.1").strip().lstrip("v") or "0.8.1"
+_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.8.2").strip().lstrip("v") or "0.8.2"
 _GITHUB_REPO = "wiifhub/AI-Youtube-Shorts-Generator"
 _update_lock = threading.Lock()
 _update_state: Dict[str, Any] = {
@@ -277,6 +282,7 @@ class JobRequest(BaseModel):
     whisper_device: Optional[str] = None
     output_height: int = Field(1920, ge=0, le=4320)
     save_folder: Optional[str] = None
+    llm_provider: Optional[str] = None
 
 
 class BatchRequest(JobRequest):
@@ -412,12 +418,62 @@ def _cleanup_job_temporary_files(job: Dict[str, Any]) -> None:
         return
 
 
-def _start_job_thread(job_id: str, req: JobRequest) -> None:
-    thread = threading.Thread(target=_run_job, args=(job_id, req), daemon=True)
+def _clean_runtime_credential(value: Optional[str], label: str) -> Optional[str]:
+    """Normalize a UI credential without ever logging or persisting it."""
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > _max_credential_length:
+        raise HTTPException(400, f"{label} is too long")
+    if any(char in cleaned for char in "\r\n"):
+        raise HTTPException(400, f"{label} contains invalid characters")
+    return cleaned
+
+
+def _runtime_credentials_from_headers(
+    muapi_api_key: Optional[str] = None,
+    openai_api_key: Optional[str] = None,
+    gemini_api_key: Optional[str] = None,
+    llm_provider: Optional[str] = None,
+) -> Dict[str, str]:
+    """Build a non-persistent credential map from request headers."""
+    values: Dict[str, str] = {}
+    for key, value, label in (
+        ("muapi", muapi_api_key, "MuAPI API key"),
+        ("openai", openai_api_key, "OpenAI API key"),
+        ("gemini", gemini_api_key, "Gemini API key"),
+    ):
+        cleaned = _clean_runtime_credential(value, label)
+        if cleaned:
+            values[key] = cleaned
+    if llm_provider is not None:
+        provider = str(llm_provider).strip().lower()
+        if provider not in {"openai", "gemini"}:
+            raise HTTPException(400, "LLM provider must be openai or gemini")
+        values["llm_provider"] = provider
+    return values
+
+
+def _start_job_thread(
+    job_id: str,
+    req: JobRequest,
+    credentials: Optional[Dict[str, str]] = None,
+) -> None:
+    thread = threading.Thread(
+        target=_run_job,
+        args=(job_id, req, dict(credentials or {})),
+        daemon=True,
+    )
     thread.start()
 
 
-def _run_job(job_id: str, req: JobRequest) -> None:
+def _run_job(
+    job_id: str,
+    req: JobRequest,
+    credentials: Optional[Dict[str, str]] = None,
+) -> None:
     slot_acquired = False
 
     def progress(stage: str, message: str) -> None:
@@ -445,39 +501,47 @@ def _run_job(job_id: str, req: JobRequest) -> None:
         with _lock:
             _jobs[job_id]["output_dir"] = str(job_output_dir)
             _persist_job_locked(_jobs[job_id])
-        result = generate_shorts(
-            youtube_url=req.url.strip(),
-            num_clips=req.num_clips,
-            aspect_ratio=req.aspect_ratio,
-            download_format=req.download_format,
-            language=req.language or None,
-            mode=req.mode,
-            progress=progress,
-            output_dir=str(job_output_dir) if req.mode == "local" else None,
-            caption_style=req.caption_style,
-            remove_silence=req.remove_silence,
-            normalize_audio=req.normalize_audio,
-            denoise_audio=req.denoise_audio,
-            remove_filler_words=req.remove_filler_words,
-            caption_position=req.caption_position,
-            caption_font=req.caption_font,
-            caption_size=req.caption_size,
-            caption_color=req.caption_color,
-            focus=req.focus,
-            background_music=req.background_music,
-            watermark=req.watermark,
-            auto_reframe=req.auto_reframe,
-            crop_position=req.crop_position,
-            fit_mode=req.fit_mode,
-            zoom=req.zoom,
-            intro=req.intro,
-            outro=req.outro,
-            jump_cuts=req.jump_cuts,
-            layout=req.layout,
-            whisper_model=req.whisper_model,
-            whisper_device=req.whisper_device,
-            output_height=req.output_height,
-        )
+        supplied = dict(credentials or {})
+        with runtime_credentials(
+            muapi_api_key=supplied.get("muapi"),
+            openai_api_key=supplied.get("openai"),
+            gemini_api_key=supplied.get("gemini"),
+            llm_provider=supplied.get("llm_provider") or req.llm_provider,
+        ):
+            result = generate_shorts(
+                youtube_url=req.url.strip(),
+                num_clips=req.num_clips,
+                aspect_ratio=req.aspect_ratio,
+                download_format=req.download_format,
+                language=req.language or None,
+                mode=req.mode,
+                progress=progress,
+                output_dir=str(job_output_dir) if req.mode == "local" else None,
+                caption_style=req.caption_style,
+                remove_silence=req.remove_silence,
+                normalize_audio=req.normalize_audio,
+                denoise_audio=req.denoise_audio,
+                remove_filler_words=req.remove_filler_words,
+                caption_position=req.caption_position,
+                caption_font=req.caption_font,
+                caption_size=req.caption_size,
+                caption_color=req.caption_color,
+                focus=req.focus,
+                background_music=req.background_music,
+                watermark=req.watermark,
+                auto_reframe=req.auto_reframe,
+                crop_position=req.crop_position,
+                fit_mode=req.fit_mode,
+                zoom=req.zoom,
+                intro=req.intro,
+                outro=req.outro,
+                jump_cuts=req.jump_cuts,
+                layout=req.layout,
+                whisper_model=req.whisper_model,
+                whisper_device=req.whisper_device,
+                output_height=req.output_height,
+                llm_provider=req.llm_provider,
+            )
         if not isinstance(result, dict):
             raise RuntimeError("pipeline returned an invalid result object")
         transcript = _dict_value(result.get("transcript"))
@@ -546,6 +610,7 @@ def _run_job(job_id: str, req: JobRequest) -> None:
             _job_slots.release()
         with _lock:
             _cancel_events.pop(job_id, None)
+            _job_credentials.pop(job_id, None)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -553,11 +618,25 @@ def index() -> FileResponse:
     return FileResponse(STATIC / "index.html")
 
 
-def _enqueue_job(req: JobRequest) -> Dict[str, Any]:
+def _enqueue_job(
+    req: JobRequest,
+    credentials: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     if req.mode not in ("api", "local"):
         raise HTTPException(400, "mode must be api or local")
     if not req.url or not req.url.strip():
         raise HTTPException(400, "url/path cannot be blank")
+    if req.llm_provider is not None:
+        provider = str(req.llm_provider).strip().lower()
+        if provider not in {"openai", "gemini"}:
+            raise HTTPException(400, "LLM provider must be openai or gemini")
+        req.llm_provider = provider
+    supplied_credentials = dict(credentials or {})
+    if req.mode == "api" and not (supplied_credentials.get("muapi") or MUAPI_API_KEY):
+        raise HTTPException(
+            400,
+            "API mode needs a MuAPI API key. Enter it in Settings or configure MUAPI_API_KEY in .env.",
+        )
     try:
         free_gb = shutil.disk_usage(_output_root).free / (1024 ** 3)
     except OSError:
@@ -614,11 +693,14 @@ def _enqueue_job(req: JobRequest) -> Dict[str, Any]:
                 "whisper_device": req.whisper_device,
                 "output_height": req.output_height,
                 "save_folder": req.save_folder,
+                "llm_provider": req.llm_provider,
             },
         }
         _cancel_events[job_id] = threading.Event()
+        if supplied_credentials:
+            _job_credentials[job_id] = supplied_credentials
         _persist_job_locked(_jobs[job_id])
-    _start_job_thread(job_id, req)
+    _start_job_thread(job_id, req, supplied_credentials)
     with _lock:
         return _job_snapshot(_jobs[job_id])
 
@@ -660,12 +742,30 @@ async def resume_interrupted_jobs() -> None:
 
 
 @app.post("/api/jobs")
-def create_job(req: JobRequest) -> Dict[str, Any]:
-    return _enqueue_job(req)
+def create_job(
+    req: JobRequest,
+    x_muapi_key: Optional[str] = Header(default=None, alias="X-MuAPI-Key"),
+    x_openai_key: Optional[str] = Header(default=None, alias="X-OpenAI-Key"),
+    x_gemini_key: Optional[str] = Header(default=None, alias="X-Gemini-Key"),
+    x_llm_provider: Optional[str] = Header(default=None, alias="X-LLM-Provider"),
+) -> Dict[str, Any]:
+    credentials = _runtime_credentials_from_headers(
+        x_muapi_key, x_openai_key, x_gemini_key, x_llm_provider
+    )
+    return _enqueue_job(req, credentials)
 
 
 @app.post("/api/jobs/batch")
-def create_batch_jobs(req: BatchRequest) -> Dict[str, Any]:
+def create_batch_jobs(
+    req: BatchRequest,
+    x_muapi_key: Optional[str] = Header(default=None, alias="X-MuAPI-Key"),
+    x_openai_key: Optional[str] = Header(default=None, alias="X-OpenAI-Key"),
+    x_gemini_key: Optional[str] = Header(default=None, alias="X-Gemini-Key"),
+    x_llm_provider: Optional[str] = Header(default=None, alias="X-LLM-Provider"),
+) -> Dict[str, Any]:
+    credentials = _runtime_credentials_from_headers(
+        x_muapi_key, x_openai_key, x_gemini_key, x_llm_provider
+    )
     jobs = []
     for url in req.urls:
         clean_url = url.strip()
@@ -702,8 +802,9 @@ def create_batch_jobs(req: BatchRequest) -> Dict[str, Any]:
             whisper_device=req.whisper_device,
             output_height=req.output_height,
             save_folder=req.save_folder,
+            llm_provider=req.llm_provider,
         )
-        jobs.append(_enqueue_job(item))
+        jobs.append(_enqueue_job(item, credentials))
     if not jobs:
         raise HTTPException(400, "batch did not contain any usable URLs or file paths")
     return {"jobs": jobs}
@@ -863,7 +964,13 @@ def restore_job(job_id: str) -> Dict[str, Any]:
 
 
 @app.post("/api/jobs/{job_id}/retry")
-def retry_job(job_id: str) -> Dict[str, Any]:
+def retry_job(
+    job_id: str,
+    x_muapi_key: Optional[str] = Header(default=None, alias="X-MuAPI-Key"),
+    x_openai_key: Optional[str] = Header(default=None, alias="X-OpenAI-Key"),
+    x_gemini_key: Optional[str] = Header(default=None, alias="X-Gemini-Key"),
+    x_llm_provider: Optional[str] = Header(default=None, alias="X-LLM-Provider"),
+) -> Dict[str, Any]:
     """Restart a failed/interrupted/draft project with its saved settings."""
     with _lock:
         job = _jobs.get(job_id)
@@ -879,6 +986,14 @@ def retry_job(job_id: str) -> Dict[str, Any]:
         req = JobRequest.model_validate(request)
     except Exception as exc:
         raise HTTPException(400, f"saved project settings are invalid: {exc}") from exc
+    credentials = _runtime_credentials_from_headers(
+        x_muapi_key, x_openai_key, x_gemini_key, x_llm_provider
+    )
+    if req.mode == "api" and not (credentials.get("muapi") or MUAPI_API_KEY):
+        raise HTTPException(
+            400,
+            "API mode needs a MuAPI API key. Enter it in Settings before retrying.",
+        )
     with _lock:
         job = _jobs.get(job_id)
         if not job:
@@ -894,9 +1009,11 @@ def retry_job(job_id: str) -> Dict[str, Any]:
         job["logs"] = list(job.get("logs") or [])[-79:]
         _append_job_log(job, "queued", job["message"])
         _cancel_events[job_id] = threading.Event()
+        if credentials:
+            _job_credentials[job_id] = credentials
         _persist_job_locked(job)
         snapshot = _job_snapshot(job)
-    _start_job_thread(job_id, req)
+    _start_job_thread(job_id, req, credentials)
     return snapshot
 
 

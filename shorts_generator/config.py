@@ -1,6 +1,9 @@
 import json
 import math
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Iterator, Optional
 
 from dotenv import load_dotenv
 
@@ -34,6 +37,69 @@ LOCAL_WHISPER_DEVICE = os.getenv("LOCAL_WHISPER_DEVICE", "auto").strip().lower()
 LOCAL_OUTPUT_DIR = os.getenv("LOCAL_OUTPUT_DIR", "output").strip() or "output"
 LOCAL_BURN_CAPTIONS = os.getenv("LOCAL_BURN_CAPTIONS", "true").strip().lower() == "true"
 LOCAL_HEURISTIC_FALLBACK = os.getenv("LOCAL_HEURISTIC_FALLBACK", "true").strip().lower() == "true"
+
+
+# The web editor can accept credentials for the current session without writing
+# them to job metadata, .env files, or the repository.  Context-local values
+# are isolated per worker thread so two queued jobs never share a submitted
+# key accidentally.  A missing override falls back to the normal environment
+# variable, preserving CLI and .env behavior.
+_RUNTIME_CREDENTIALS: ContextVar[dict[str, str]] = ContextVar(
+    "shorts_studio_runtime_credentials", default={}
+)
+
+
+def current_api_key(name: str) -> str:
+    """Return a runtime credential override or its environment fallback."""
+    key_name = str(name or "").strip().lower()
+    configured = {
+        "muapi": MUAPI_API_KEY,
+        "openai": OPENAI_API_KEY,
+        "gemini": GEMINI_API_KEY,
+    }.get(key_name, "")
+    values = _RUNTIME_CREDENTIALS.get()
+    return str(values.get(key_name, configured) or "").strip()
+
+
+def current_llm_provider() -> str:
+    """Return the session-selected local ranking provider."""
+    values = _RUNTIME_CREDENTIALS.get()
+    return str(values.get("llm_provider", LLM_PROVIDER) or "openai").strip().lower()
+
+
+@contextmanager
+def runtime_credentials(
+    *,
+    muapi_api_key: Optional[str] = None,
+    openai_api_key: Optional[str] = None,
+    gemini_api_key: Optional[str] = None,
+    llm_provider: Optional[str] = None,
+) -> Iterator[None]:
+    """Temporarily apply credentials supplied by the local UI.
+
+    Values are intentionally context-local and never persisted. ``None``
+    leaves the environment fallback active; an empty value removes a previous
+    override in the current context.
+    """
+    values = dict(_RUNTIME_CREDENTIALS.get())
+    for name, value in (
+        ("muapi", muapi_api_key),
+        ("openai", openai_api_key),
+        ("gemini", gemini_api_key),
+        ("llm_provider", llm_provider),
+    ):
+        if value is None:
+            continue
+        cleaned = str(value).strip()
+        if cleaned:
+            values[name] = cleaned
+        else:
+            values.pop(name, None)
+    token = _RUNTIME_CREDENTIALS.set(values)
+    try:
+        yield
+    finally:
+        _RUNTIME_CREDENTIALS.reset(token)
 
 
 def gpu_status() -> dict:
@@ -95,26 +161,29 @@ else:
 
 
 def require_api_key() -> str:
-    if not MUAPI_API_KEY:
+    key = current_api_key("muapi")
+    if not key:
         raise RuntimeError(
             "MUAPI_API_KEY is not set. Add it to your .env file or export it as an env var."
         )
-    return MUAPI_API_KEY
+    return key
 
 
 def require_openai_key() -> str:
-    if not OPENAI_API_KEY:
+    key = current_api_key("openai")
+    if not key:
         raise RuntimeError(
             "OPENAI_API_KEY is not set. Local mode needs an OpenAI key for highlight ranking. "
             "Add it to your .env or export it, or switch back to --mode api."
         )
-    return OPENAI_API_KEY
+    return key
 
 
 def require_gemini_key() -> str:
-    if not GEMINI_API_KEY:
+    key = current_api_key("gemini")
+    if not key:
         raise RuntimeError(
             "GEMINI_API_KEY is not set. Local mode needs a Gemini key when LLM_PROVIDER=gemini. "
             "Add it to your .env or export it, or switch LLM_PROVIDER back to openai."
         )
-    return GEMINI_API_KEY
+    return key

@@ -4,8 +4,8 @@ import time
 
 from ..config import (
     GEMINI_MODEL,
-    LLM_PROVIDER,
     OPENAI_MODEL,
+    current_llm_provider,
     require_gemini_key,
     require_openai_key,
 )
@@ -119,7 +119,7 @@ def call_gemini_llm(prompt: str) -> str:
 
 def call_local_llm(prompt: str) -> str:
     """Dispatch to the configured local LLM provider."""
-    provider = (LLM_PROVIDER or "openai").strip().lower()
+    provider = current_llm_provider()
     if provider == "openai":
         return call_openai_llm(prompt)
     if provider == "gemini":

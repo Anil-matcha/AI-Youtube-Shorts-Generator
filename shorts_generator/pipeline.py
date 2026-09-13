@@ -12,11 +12,11 @@ ProgressFn = Optional[Callable[[str, str], None]]
 
 from .clipper import crop_highlights
 from .config import (
-    GEMINI_API_KEY,
-    LLM_PROVIDER,
+    current_api_key,
+    current_llm_provider,
     LOCAL_BURN_CAPTIONS,
     LOCAL_HEURISTIC_FALLBACK,
-    OPENAI_API_KEY,
+    runtime_credentials,
 )
 from .downloader import download_youtube
 from .highlights import call_muapi_llm, get_highlights
@@ -60,6 +60,7 @@ def _run_local(
     whisper_model: Optional[str] = None,
     whisper_device: Optional[str] = None,
     output_height: int = 1920,
+    llm_provider: Optional[str] = None,
 ) -> Dict:
     from .local.clipper import crop_highlights_local
     from .local.downloader import download_youtube_local
@@ -97,9 +98,9 @@ def _run_local(
         )
 
     _emit(progress, "rank", "Ranking viral highlights...")
-    provider = str(LLM_PROVIDER or "openai").strip().lower()
-    llm_configured = (provider == "openai" and bool(OPENAI_API_KEY)) or (
-        provider == "gemini" and bool(GEMINI_API_KEY)
+    provider = str(llm_provider or current_llm_provider() or "openai").strip().lower()
+    llm_configured = (provider == "openai" and bool(current_api_key("openai"))) or (
+        provider == "gemini" and bool(current_api_key("gemini"))
     )
     if LOCAL_HEURISTIC_FALLBACK and not llm_configured:
         _emit(
@@ -111,9 +112,12 @@ def _run_local(
             "highlights": rank_highlights_offline(transcript, num_clips=num_clips)
         }
     else:
-        highlights_result = get_highlights(
-            transcript, num_clips=num_clips, llm_fn=call_local_llm, focus=focus
-        )
+        # Keep the dispatcher aligned with the explicit function argument even
+        # when callers invoke ``generate_shorts`` outside the web worker.
+        with runtime_credentials(llm_provider=provider):
+            highlights_result = get_highlights(
+                transcript, num_clips=num_clips, llm_fn=call_local_llm, focus=focus
+            )
     all_highlights: List[Dict] = highlights_result.get("highlights", [])
     if not all_highlights:
         raise RuntimeError("Highlight generator returned zero clips.")
@@ -232,6 +236,7 @@ def generate_shorts(
     whisper_model: Optional[str] = None,
     whisper_device: Optional[str] = None,
     output_height: int = 1920,
+    llm_provider: Optional[str] = None,
 ) -> Dict:
     """Run the full pipeline and return a structured result.
 
@@ -258,6 +263,8 @@ def generate_shorts(
         fit_mode: crop to fill, or fit the full frame over a blurred background.
         zoom: fit-mode foreground scale from 0.5 (out) to 1.5 (in).
         output_height: local output canvas height in pixels (0 keeps 1920).
+        llm_provider: local ranking provider (`openai` or `gemini`); defaults to
+            ``LLM_PROVIDER`` from the environment.
 
     Returns:
         {
@@ -306,6 +313,7 @@ def generate_shorts(
             whisper_model,
             whisper_device,
             output_height,
+            llm_provider,
         )
     if mode == "api":
         return _run_api(
