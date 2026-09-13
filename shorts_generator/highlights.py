@@ -10,6 +10,7 @@ The LLM call is pluggable via the `llm_fn` argument so the same prompts can
 drive either MuAPI (default, --mode api) or a direct local LLM client
 (--mode local).
 """
+
 import json
 import math
 import re
@@ -63,8 +64,8 @@ Respond ONLY with valid JSON (no markdown, no explanation):
 {{"highlights":[{{"title":"string","start_time":float,"end_time":float,"score":int,"hook_sentence":"string","virality_reason":"string"}}]}}"""
 
 
-CHUNK_SIZE_SECONDS = 1200       # 20-min chunks for long videos
-LONG_VIDEO_THRESHOLD = 1800     # chunk videos longer than 30 min
+CHUNK_SIZE_SECONDS = 1200  # 20-min chunks for long videos
+LONG_VIDEO_THRESHOLD = 1800  # chunk videos longer than 30 min
 CHUNK_OVERLAP_SECONDS = 60
 GPT_CALL_TIMEOUT_SECONDS = 300  # cap LLM polls at 5 min — a wedged call should fail fast
 MAX_HIGHLIGHT_API_ATTEMPTS = 3
@@ -108,7 +109,7 @@ def _parse_json_loose(raw: str) -> Dict:
         start = text.find("{")
         end = text.rfind("}")
         if start != -1 and end != -1:
-            return json.loads(text[start:end + 1])
+            return json.loads(text[start : end + 1])
         raise
 
 
@@ -170,11 +171,9 @@ def _sanitize_highlights(raw_highlights: object, duration: float) -> List[Dict]:
 
 def detect_content_type(transcript: Dict, llm_fn: LLMFn = call_muapi_llm) -> Dict[str, str]:
     segments = _items(transcript.get("segments", []) if isinstance(transcript, dict) else [])
-    sample = " ".join(
-        str(segment.get("text") or "").strip()
-        for segment in segments[:25]
-        if isinstance(segment, dict)
-    )[:3000]
+    sample = " ".join(str(segment.get("text") or "").strip() for segment in segments[:25] if isinstance(segment, dict))[
+        :3000
+    ]
     prompt = f"{CONTENT_TYPE_PROMPT}\n\nTranscript sample:\n{sample}"
     try:
         raw = llm_fn(prompt)
@@ -204,9 +203,7 @@ def build_transcript_text(transcript: Dict) -> str:
         if text_value:
             lines.append(f"[{start:.1f}s] {text_value}")
     text = "\n".join(lines)
-    visual_events = _items(
-        transcript.get("visual_events") if isinstance(transcript, dict) else []
-    )
+    visual_events = _items(transcript.get("visual_events") if isinstance(transcript, dict) else [])
     if visual_events:
         text += "\n\nVisual signals (use as supporting evidence, not as guaranteed context):\n"
         visual_lines = []
@@ -246,10 +243,7 @@ def chunk_transcript(transcript: Dict) -> List[Dict]:
     start = 0
     while start < duration:
         end = min(start + CHUNK_SIZE_SECONDS, duration)
-        chunk_segs = [
-            s for s in segments
-            if s["start"] >= start and s["end"] <= end + CHUNK_OVERLAP_SECONDS
-        ]
+        chunk_segs = [s for s in segments if s["start"] >= start and s["end"] <= end + CHUNK_OVERLAP_SECONDS]
         if chunk_segs:
             chunk = dict(transcript) if isinstance(transcript, dict) else {}
             chunk["segments"] = chunk_segs
@@ -354,9 +348,7 @@ def dedupe_highlights(highlights: List[Dict]) -> List[Dict]:
     return kept
 
 
-def snap_highlight_boundaries(
-    highlights: List[Dict], transcript: Dict
-) -> List[Dict]:
+def snap_highlight_boundaries(highlights: List[Dict], transcript: Dict) -> List[Dict]:
     """Snap model timestamps to the nearest Whisper segment boundaries.
 
     LLM timestamps are useful estimates, but they frequently land in the
@@ -443,7 +435,10 @@ def get_highlights(
             default=0.0,
         )
     content_info = detect_content_type(transcript, llm_fn=llm_fn)
-    print(f"[highlights] content={content_info.get('content_type')} density={content_info.get('density')} duration={duration:.0f}s", flush=True)
+    print(
+        f"[highlights] content={content_info.get('content_type')} density={content_info.get('density')} duration={duration:.0f}s",
+        flush=True,
+    )
 
     if duration >= LONG_VIDEO_THRESHOLD:
         chunks = chunk_transcript(transcript)
@@ -487,9 +482,7 @@ def get_highlights(
             all_highlights.extend(chunk_highlights)
 
         if not all_highlights:
-            raise RuntimeError(
-                "Highlight generator returned zero clips across all chunks."
-            )
+            raise RuntimeError("Highlight generator returned zero clips across all chunks.")
         highlights = dedupe_highlights(all_highlights)
     else:
         text = build_transcript_text(transcript)

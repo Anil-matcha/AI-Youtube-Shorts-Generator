@@ -3,6 +3,7 @@
 Given the source video URL plus a highlight's start/end and a target aspect
 ratio, MuAPI returns a vertically-cropped short ready for posting.
 """
+
 import math
 from typing import Dict
 

@@ -5,6 +5,7 @@ usable.  This module ranks short transcript windows using deterministic
 signals (speech density and emphasis punctuation) so a user can render a
 first project before configuring an optional LLM provider.
 """
+
 from __future__ import annotations
 
 import math

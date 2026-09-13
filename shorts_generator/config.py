@@ -10,8 +10,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MUAPI_API_KEY = os.getenv("MUAPI_API_KEY", "").strip()
-MUAPI_BASE_URL = (os.getenv("MUAPI_BASE_URL", "https://api.muapi.ai/api/v1").strip() or "https://api.muapi.ai/api/v1").rstrip("/")
-
+MUAPI_BASE_URL = (
+    os.getenv("MUAPI_BASE_URL", "https://api.muapi.ai/api/v1").strip() or "https://api.muapi.ai/api/v1"
+).rstrip("/")
 
 
 def _positive_float_env(name: str, default: float) -> float:
@@ -50,9 +51,7 @@ FACE_DNN_CONFIG = os.getenv("SHORTS_FACE_DNN_CONFIG", "").strip()
 # are isolated per worker thread so two queued jobs never share a submitted
 # key accidentally.  A missing override falls back to the normal environment
 # variable, preserving CLI and .env behavior.
-_RUNTIME_CREDENTIALS: ContextVar[dict[str, str]] = ContextVar(
-    "shorts_studio_runtime_credentials", default={}
-)
+_RUNTIME_CREDENTIALS: ContextVar[dict[str, str]] = ContextVar("shorts_studio_runtime_credentials", default={})
 
 
 def current_api_key(name: str) -> str:
@@ -113,6 +112,7 @@ def gpu_status() -> dict:
     status = {"cuda_available": False, "device_name": None, "reason": "CUDA runtime unavailable"}
     try:
         import torch  # type: ignore
+
         if torch.cuda.is_available():
             status.update(cuda_available=True, device_name=torch.cuda.get_device_name(0), reason="ready")
         else:
@@ -122,6 +122,7 @@ def gpu_status() -> dict:
     if not status["cuda_available"]:
         try:
             import ctranslate2  # type: ignore
+
             count = int(ctranslate2.get_cuda_device_count())
             if count > 0:
                 status.update(
@@ -136,6 +137,7 @@ def gpu_status() -> dict:
                 status["reason"] = str(exc)
     return status
 
+
 # VAD (Voice Activity Detection) settings for faster-whisper
 # Default threshold is 0.5; lower = more sensitive, higher = less sensitive
 # Default min_speech_duration_ms is 250ms; increase to avoid tiny false positives
@@ -148,13 +150,17 @@ if _vad_params_env:
         parsed_vad = json.loads(_vad_params_env)
     except (TypeError, ValueError):
         parsed_vad = None
-    LOCAL_WHISPER_VAD_PARAMETERS = parsed_vad if isinstance(parsed_vad, dict) else {
-        "threshold": 0.5,
-        "min_speech_duration_ms": 250,
-        "max_speech_duration_s": float("inf"),
-        "min_silence_duration_ms": 2000,
-        "speech_pad_ms": 400,
-    }
+    LOCAL_WHISPER_VAD_PARAMETERS = (
+        parsed_vad
+        if isinstance(parsed_vad, dict)
+        else {
+            "threshold": 0.5,
+            "min_speech_duration_ms": 250,
+            "max_speech_duration_s": float("inf"),
+            "min_silence_duration_ms": 2000,
+            "speech_pad_ms": 400,
+        }
+    )
 else:
     # Match faster-whisper defaults when VAD is enabled
     LOCAL_WHISPER_VAD_PARAMETERS = {
@@ -169,9 +175,7 @@ else:
 def require_api_key() -> str:
     key = current_api_key("muapi")
     if not key:
-        raise RuntimeError(
-            "MUAPI_API_KEY is not set. Add it to your .env file or export it as an env var."
-        )
+        raise RuntimeError("MUAPI_API_KEY is not set. Add it to your .env file or export it as an env var.")
     return key
 
 

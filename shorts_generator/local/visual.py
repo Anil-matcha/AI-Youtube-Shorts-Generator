@@ -1,4 +1,5 @@
 """Lightweight local visual-event analysis for highlight ranking."""
+
 from __future__ import annotations
 
 import math
@@ -60,9 +61,17 @@ def analyze_video(media_path: str, sample_seconds: float = 1.0) -> List[Dict]:
             if previous is not None:
                 change = float(cv2.absdiff(small, previous).mean())
                 if change >= 24.0:
-                    events.append({"time": round(timestamp, 2), "type": "scene_change", "score": round(min(1.0, change / 80.0), 3)})
+                    events.append(
+                        {
+                            "time": round(timestamp, 2),
+                            "type": "scene_change",
+                            "score": round(min(1.0, change / 80.0), 3),
+                        }
+                    )
             if face_count >= 2:
-                events.append({"time": round(timestamp, 2), "type": "multiple_speakers", "score": min(1.0, face_count / 4.0)})
+                events.append(
+                    {"time": round(timestamp, 2), "type": "multiple_speakers", "score": min(1.0, face_count / 4.0)}
+                )
             elif face_count == 1:
                 events.append({"time": round(timestamp, 2), "type": "speaker_visible", "score": 0.35})
             previous = small
@@ -100,6 +109,7 @@ def extract_thumbnail(media_path: str, timestamp: float, out_path: str, text: st
         raise RuntimeError(f"could not read thumbnail frame at {timestamp_value:.1f}s")
     if text:
         import textwrap
+
         lines = textwrap.wrap(" ".join(str(text).split()), width=22)[:3]
         y = max(60, frame.shape[0] - 80 * len(lines))
         for line in lines:

@@ -1,4 +1,5 @@
 """Local LLM backend - OpenAI or Gemini, selected by LLM_PROVIDER."""
+
 import re
 import time
 
@@ -35,8 +36,7 @@ def call_openai_llm(prompt: str) -> str:
         from openai import OpenAI  # type: ignore
     except ImportError as e:
         raise RuntimeError(
-            "openai is required for --mode local. Install it with:\n"
-            "    pip install -r requirements-local.txt"
+            "openai is required for --mode local. Install it with:\n    pip install -r requirements-local.txt"
         ) from e
 
     client = OpenAI(api_key=require_openai_key())
@@ -55,8 +55,7 @@ def call_openai_llm(prompt: str) -> str:
                 raise
             delay = _retry_delay_seconds(e, attempt)
             print(
-                f"[llm/openai] rate limited (attempt {attempt}/{_MAX_LLM_RETRIES}); "
-                f"retrying in {delay:.0f}s",
+                f"[llm/openai] rate limited (attempt {attempt}/{_MAX_LLM_RETRIES}); retrying in {delay:.0f}s",
                 flush=True,
             )
             time.sleep(delay)
@@ -108,8 +107,7 @@ def call_gemini_llm(prompt: str) -> str:
                 raise
             delay = _retry_delay_seconds(e, attempt)
             print(
-                f"[llm/gemini] rate limited (attempt {attempt}/{_MAX_LLM_RETRIES}); "
-                f"retrying in {delay:.0f}s",
+                f"[llm/gemini] rate limited (attempt {attempt}/{_MAX_LLM_RETRIES}); retrying in {delay:.0f}s",
                 flush=True,
             )
             time.sleep(delay)
@@ -124,6 +122,4 @@ def call_local_llm(prompt: str) -> str:
         return call_openai_llm(prompt)
     if provider == "gemini":
         return call_gemini_llm(prompt)
-    raise RuntimeError(
-        f"Unknown LLM_PROVIDER={provider!r}. Use 'openai' or 'gemini'."
-    )
+    raise RuntimeError(f"Unknown LLM_PROVIDER={provider!r}. Use 'openai' or 'gemini'.")

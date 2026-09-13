@@ -1,4 +1,5 @@
 """Fast, network-free API and static-asset regression tests."""
+
 from __future__ import annotations
 
 import math

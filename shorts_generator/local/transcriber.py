@@ -3,6 +3,7 @@
 Reads a local media file and returns the same shape the highlight generator
 expects: {duration, segments[start, end, text]}.
 """
+
 import os
 import json
 import math
@@ -17,6 +18,7 @@ def _cuda_ready() -> bool:
     """Check CUDA through PyTorch or CTranslate2, whichever is installed."""
     try:
         import torch  # type: ignore
+
         if torch.cuda.is_available():
             torch.zeros(1, device="cuda")
             return True
@@ -24,6 +26,7 @@ def _cuda_ready() -> bool:
         pass
     try:
         import ctranslate2  # type: ignore
+
         return int(ctranslate2.get_cuda_device_count()) > 0
     except (ImportError, OSError, RuntimeError, TypeError, ValueError):
         return False
@@ -67,9 +70,7 @@ def _parse_srt_timestamp(value: str) -> float:
     return hours * 3600 + minutes * 60 + seconds + (millis / 1000.0)
 
 
-def _write_srt_cache(
-    media_path: str, transcript: Dict, cache_dir: Optional[str] = None
-) -> Path:
+def _write_srt_cache(media_path: str, transcript: Dict, cache_dir: Optional[str] = None) -> Path:
     cache_path = _transcript_cache_path(media_path, cache_dir=cache_dir)
     lines = []
     valid_segments = []
@@ -141,7 +142,9 @@ def _resolve_device(requested: Optional[str] = None) -> str:
         raise ValueError("Whisper device must be auto, cpu, or cuda")
     if requested == "cuda":
         if not _cuda_ready():
-            raise RuntimeError("CUDA was selected, but no usable CUDA device was detected. Install a current NVIDIA driver or run install_gpu_windows.bat")
+            raise RuntimeError(
+                "CUDA was selected, but no usable CUDA device was detected. Install a current NVIDIA driver or run install_gpu_windows.bat"
+            )
         return "cuda"
     if requested != "auto":
         return requested
@@ -187,8 +190,7 @@ def transcribe_local(
                 cache_path.unlink(missing_ok=True)
             else:
                 print(
-                    f"[transcribe/local] {len(cached['segments'])} cached segments, "
-                    f"{cached['duration']:.0f}s of audio",
+                    f"[transcribe/local] {len(cached['segments'])} cached segments, {cached['duration']:.0f}s of audio",
                     flush=True,
                 )
                 return cached
@@ -197,8 +199,7 @@ def transcribe_local(
         from faster_whisper import WhisperModel  # type: ignore
     except ImportError as e:
         raise RuntimeError(
-            "faster-whisper is required for --mode local. Install it with:\n"
-            "    pip install -r requirements-local.txt"
+            "faster-whisper is required for --mode local. Install it with:\n    pip install -r requirements-local.txt"
         ) from e
 
     selected_device = _resolve_device(device)
@@ -259,11 +260,13 @@ def transcribe_local(
                 continue
             if not math.isfinite(word_start) or not math.isfinite(word_end) or word_end <= word_start:
                 continue
-            words.append({
-                "start": word_start,
-                "end": word_end,
-                "word": str(getattr(word, "word", "") or "").strip(),
-            })
+            words.append(
+                {
+                    "start": word_start,
+                    "end": word_end,
+                    "word": str(getattr(word, "word", "") or "").strip(),
+                }
+            )
         if words:
             segment["words"] = words
         segments.append(segment)

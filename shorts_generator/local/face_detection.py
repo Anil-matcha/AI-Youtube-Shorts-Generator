@@ -4,6 +4,7 @@ The OpenCV SSD detector is preferred when its model files are available.  The
 model is intentionally optional so the application remains self-contained and
 offline-friendly; ``auto`` falls back to OpenCV's bundled Haar cascade.
 """
+
 from __future__ import annotations
 
 import sys
@@ -19,8 +20,14 @@ FaceDetector = Callable[[Any], List[FaceBox]]
 def _model_paths() -> Tuple[Path, Path]:
     """Resolve optional DNN model/config paths for source and frozen builds."""
     root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2]))
-    model = Path(FACE_DNN_MODEL).expanduser() if FACE_DNN_MODEL else root / "assets" / "face_detector" / "res10_300x300_ssd_iter_140000.caffemodel"
-    config = Path(FACE_DNN_CONFIG).expanduser() if FACE_DNN_CONFIG else root / "assets" / "face_detector" / "deploy.prototxt"
+    model = (
+        Path(FACE_DNN_MODEL).expanduser()
+        if FACE_DNN_MODEL
+        else root / "assets" / "face_detector" / "res10_300x300_ssd_iter_140000.caffemodel"
+    )
+    config = (
+        Path(FACE_DNN_CONFIG).expanduser() if FACE_DNN_CONFIG else root / "assets" / "face_detector" / "deploy.prototxt"
+    )
     return model, config
 
 

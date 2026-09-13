@@ -1,4 +1,5 @@
 """Thin MuAPI client: submit a job, poll until it finishes, return the result."""
+
 import time
 import math
 from typing import Any, Dict, Optional

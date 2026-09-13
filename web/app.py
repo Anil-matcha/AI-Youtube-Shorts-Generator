@@ -1,8 +1,9 @@
 """Web UI for the YouTube Shorts generator.
 
-    python -m web.app
-    # then open http://127.0.0.1:7860
+python -m web.app
+# then open http://127.0.0.1:7860
 """
+
 from __future__ import annotations
 
 import json
@@ -60,7 +61,7 @@ from shorts_generator.config import (  # noqa: E402
 
 app = FastAPI(
     title="Shorts Studio",
-    version="0.9.3",
+    version="0.9.4",
     description="Local-first video highlight extraction, editing, and export workspace.",
     contact={"name": "Shorts Studio", "url": "https://github.com/wiifhub/AI-Youtube-Shorts-Generator"},
     license_info={"name": "MIT"},
@@ -116,6 +117,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     _logger.exception("Unhandled %s error on %s %s", type(exc).__name__, request.method, request.url.path)
     return _error_response("Internal server error", "internal_error", 500)
 
+
 _jobs: Dict[str, Dict[str, Any]] = {}
 _lock = threading.Lock()
 _cancel_events: Dict[str, threading.Event] = {}
@@ -157,7 +159,7 @@ _max_upload_bytes = _max_upload_mb * 1024 * 1024
 _max_json_bytes = _positive_int_env("SHORTS_MAX_JSON_MB", 2) * 1024 * 1024
 _auto_resume = os.getenv("SHORTS_AUTO_RESUME", "true").strip().lower() in {"1", "true", "yes", "on"}
 
-_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.9.3").strip().lstrip("v") or "0.9.3"
+_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.9.4").strip().lstrip("v") or "0.9.4"
 _GITHUB_REPO = "wiifhub/AI-Youtube-Shorts-Generator"
 _update_lock = threading.Lock()
 _update_state: Dict[str, Any] = {
@@ -265,9 +267,7 @@ def _job_media_path(job: Dict[str, Any], value: Any) -> Optional[Path]:
         return None
     try:
         candidate = Path(str(value)).expanduser().resolve()
-        output_dir = Path(
-            str(job.get("output_dir") or (_jobs_dir / str(job.get("id") or "")))
-        ).expanduser().resolve()
+        output_dir = Path(str(job.get("output_dir") or (_jobs_dir / str(job.get("id") or "")))).expanduser().resolve()
         candidate.relative_to(output_dir)
     except (OSError, RuntimeError, ValueError, TypeError):
         return None
@@ -507,9 +507,7 @@ def _filter_log_entries_locked(
             entries = [entry for entry in entries if entry["stage"].casefold() in allowed]
     if search:
         entries = [
-            entry
-            for entry in entries
-            if search in f"{entry['project']} {entry['stage']} {entry['message']}".casefold()
+            entry for entry in entries if search in f"{entry['project']} {entry['stage']} {entry['message']}".casefold()
         ]
     return entries
 
@@ -611,8 +609,15 @@ def _cleanup_job_temporary_files(job: Dict[str, Any]) -> None:
         if not root.is_dir():
             return
         scratch_suffixes = (
-            ".part", ".cut.mp4", ".base.mp4", ".render.mp4", ".audio.mp4",
-            ".jump.mp4", ".extras.mp4", ".branded.mp4", ".silent.mp4",
+            ".part",
+            ".cut.mp4",
+            ".base.mp4",
+            ".render.mp4",
+            ".audio.mp4",
+            ".jump.mp4",
+            ".extras.mp4",
+            ".branded.mp4",
+            ".silent.mp4",
             ".regenerate.mp4",
         )
         for item in root.rglob("*"):
@@ -855,11 +860,13 @@ def _enqueue_job(
             "API mode needs a MuAPI API key. Enter it in Settings or configure MUAPI_API_KEY in .env.",
         )
     try:
-        free_gb = shutil.disk_usage(_output_root).free / (1024 ** 3)
+        free_gb = shutil.disk_usage(_output_root).free / (1024**3)
     except OSError:
         free_gb = 0.0
     if _min_free_gb and free_gb < _min_free_gb:
-        raise HTTPException(507, f"not enough free disk space ({free_gb:.2f} GB available; {_min_free_gb:.2f} GB required)")
+        raise HTTPException(
+            507, f"not enough free disk space ({free_gb:.2f} GB available; {_min_free_gb:.2f} GB required)"
+        )
     job_id = uuid.uuid4().hex[:12]
     default_name = re.sub(r"[^A-Za-z0-9 _-]+", " ", req.url.rsplit("/", 1)[-1]).strip()
     default_name = " ".join(default_name.split())[:80] or "Untitled project"
@@ -966,9 +973,7 @@ def create_job(
     x_gemini_key: Optional[str] = Header(default=None, alias="X-Gemini-Key"),
     x_llm_provider: Optional[str] = Header(default=None, alias="X-LLM-Provider"),
 ) -> Dict[str, Any]:
-    credentials = _runtime_credentials_from_headers(
-        x_muapi_key, x_openai_key, x_gemini_key, x_llm_provider
-    )
+    credentials = _runtime_credentials_from_headers(x_muapi_key, x_openai_key, x_gemini_key, x_llm_provider)
     return _enqueue_job(req, credentials)
 
 
@@ -980,9 +985,7 @@ def create_batch_jobs(
     x_gemini_key: Optional[str] = Header(default=None, alias="X-Gemini-Key"),
     x_llm_provider: Optional[str] = Header(default=None, alias="X-LLM-Provider"),
 ) -> Dict[str, Any]:
-    credentials = _runtime_credentials_from_headers(
-        x_muapi_key, x_openai_key, x_gemini_key, x_llm_provider
-    )
+    credentials = _runtime_credentials_from_headers(x_muapi_key, x_openai_key, x_gemini_key, x_llm_provider)
     jobs = []
     for url in req.urls:
         clean_url = url.strip()
@@ -1203,9 +1206,7 @@ def retry_job(
         req = JobRequest.model_validate(request)
     except Exception as exc:
         raise HTTPException(400, f"saved project settings are invalid: {exc}") from exc
-    credentials = _runtime_credentials_from_headers(
-        x_muapi_key, x_openai_key, x_gemini_key, x_llm_provider
-    )
+    credentials = _runtime_credentials_from_headers(x_muapi_key, x_openai_key, x_gemini_key, x_llm_provider)
     if req.llm_provider:
         credentials["llm_provider"] = req.llm_provider
     elif credentials.get("llm_provider"):
@@ -1443,9 +1444,7 @@ def update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
             }
             replacement["undo_path"] = undo_path if os.path.isfile(undo_path) else None
             replacement["undo_metadata"] = {
-                key: value
-                for key, value in old.items()
-                if key not in {"undo_path", "undo_metadata"}
+                key: value for key, value in old.items() if key not in {"undo_path", "undo_metadata"}
             }
             try:
                 from shorts_generator.local.visual import extract_thumbnail
@@ -1565,7 +1564,13 @@ def get_waveform(job_id: str, bins: int = 240) -> Dict[str, Any]:
         source = job.get("raw_source_video_url")
         output_dir = Path(str(job.get("output_dir") or (_jobs_dir / job_id))).expanduser().resolve()
     if not source or not Path(str(source)).is_file():
-        return {"duration": 0.0, "peaks": [], "available": False, "error": "Source audio is unavailable", "code": "source_unavailable"}
+        return {
+            "duration": 0.0,
+            "peaks": [],
+            "available": False,
+            "error": "Source audio is unavailable",
+            "code": "source_unavailable",
+        }
     source_path = Path(str(source)).expanduser().resolve()
     cache_path = output_dir / "waveform.json"
     try:
@@ -1575,7 +1580,12 @@ def get_waveform(job_id: str, bins: int = 240) -> Dict[str, Any]:
     try:
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
         if isinstance(cached, dict) and cached.get("signature") == signature and isinstance(cached.get("peaks"), list):
-            return {"duration": float(cached.get("duration") or 0.0), "peaks": cached["peaks"], "available": True, "cached": True}
+            return {
+                "duration": float(cached.get("duration") or 0.0),
+                "peaks": cached["peaks"],
+                "available": True,
+                "cached": True,
+            }
     except (OSError, ValueError, TypeError):
         pass
     try:
@@ -1583,7 +1593,21 @@ def get_waveform(job_id: str, bins: int = 240) -> Dict[str, Any]:
 
         ffmpeg = _find_ffmpeg()
         probe = subprocess.run(
-            [ffmpeg, "-hide_banner", "-i", str(source_path), "-f", "s16le", "-ac", "1", "-ar", "2000", "-v", "error", "-"],
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-i",
+                str(source_path),
+                "-f",
+                "s16le",
+                "-ac",
+                "1",
+                "-ar",
+                "2000",
+                "-v",
+                "error",
+                "-",
+            ],
             capture_output=True,
             timeout=90,
             check=False,
@@ -1592,7 +1616,13 @@ def get_waveform(job_id: str, bins: int = 240) -> Dict[str, Any]:
         samples = array("h")
         samples.frombytes(raw[: len(raw) - (len(raw) % 2)])
         if not samples:
-            return {"duration": 0.0, "peaks": [], "available": False, "error": "No audio samples found", "code": "audio_unavailable"}
+            return {
+                "duration": 0.0,
+                "peaks": [],
+                "available": False,
+                "error": "No audio samples found",
+                "code": "audio_unavailable",
+            }
         step = max(1, len(samples) // bins)
         peaks = []
         for start in range(0, len(samples), step):
@@ -1603,7 +1633,9 @@ def get_waveform(job_id: str, bins: int = 240) -> Dict[str, Any]:
                 break
         duration = len(samples) / 2000.0
         output_dir.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps({"signature": signature, "duration": duration, "peaks": peaks}), encoding="utf-8")
+        cache_path.write_text(
+            json.dumps({"signature": signature, "duration": duration, "peaks": peaks}), encoding="utf-8"
+        )
         return {"duration": duration, "peaks": peaks, "available": True, "cached": False}
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, TimeoutError) as exc:
         return {"duration": 0.0, "peaks": [], "available": False, "error": str(exc), "code": "waveform_unavailable"}
@@ -1636,9 +1668,30 @@ def export_job(job_id: str):
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
         bundle.writestr("metadata.json", json.dumps(manifest, ensure_ascii=False, indent=2))
-        bundle.writestr("publishing/youtube_shorts.json", json.dumps({"platform": "youtube_shorts", "items": [s["creator_metadata"] for s in manifest["shorts"]]}, ensure_ascii=False, indent=2))
-        bundle.writestr("publishing/tiktok.json", json.dumps({"platform": "tiktok", "items": [s["creator_metadata"] for s in manifest["shorts"]]}, ensure_ascii=False, indent=2))
-        bundle.writestr("publishing/instagram_reels.json", json.dumps({"platform": "instagram_reels", "items": [s["creator_metadata"] for s in manifest["shorts"]]}, ensure_ascii=False, indent=2))
+        bundle.writestr(
+            "publishing/youtube_shorts.json",
+            json.dumps(
+                {"platform": "youtube_shorts", "items": [s["creator_metadata"] for s in manifest["shorts"]]},
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+        bundle.writestr(
+            "publishing/tiktok.json",
+            json.dumps(
+                {"platform": "tiktok", "items": [s["creator_metadata"] for s in manifest["shorts"]]},
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+        bundle.writestr(
+            "publishing/instagram_reels.json",
+            json.dumps(
+                {"platform": "instagram_reels", "items": [s["creator_metadata"] for s in manifest["shorts"]]},
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
         for index, short in enumerate(raw_shorts, 1):
             path = _job_media_path(job, short.get("clip_url"))
             if path and path.is_file():
@@ -1701,7 +1754,9 @@ def _captions_for_short(short: Dict[str, Any], transcript: Any, format_name: str
             continue
         count += 1
         lines.append(f"{count}" if not vtt else "")
-        lines.append(f"{_subtitle_timestamp(left - clip_start, vtt)} --> {_subtitle_timestamp(right - clip_start, vtt)}")
+        lines.append(
+            f"{_subtitle_timestamp(left - clip_start, vtt)} --> {_subtitle_timestamp(right - clip_start, vtt)}"
+        )
         lines.append(text)
         lines.append("")
     return "\n".join(lines) if count else ""
@@ -1782,6 +1837,7 @@ def preview_clip(job_id: str, update: ClipUpdate) -> Dict[str, Any]:
     if style not in {"clean", "bold", "boxed", "karaoke"}:
         raise HTTPException(400, "caption_style must be clean, bold, boxed, or karaoke")
     from shorts_generator.local.clipper import crop_clip_local
+
     preview_dir = Path(output_dir) / "previews"
     preview_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -1804,17 +1860,26 @@ def preview_clip(job_id: str, update: ClipUpdate) -> Dict[str, Any]:
         "layout": update.layout,
         "output_height": min(960, update.output_height or 1920),
     }
-    preview_key = hashlib.sha256(json.dumps(preview_payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:20]
+    preview_key = hashlib.sha256(json.dumps(preview_payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[
+        :20
+    ]
     cached = preview_dir / f"preview_{preview_key}.mp4"
     preview = Path(output_dir) / "preview.mp4"
     if cached.is_file():
         shutil.copyfile(cached, preview)
-        return {"preview_url": f"/api/jobs/{job_id}/preview.mp4?key={preview_key}", "path": str(preview), "cached": True}
+        return {
+            "preview_url": f"/api/jobs/{job_id}/preview.mp4?key={preview_key}",
+            "path": str(preview),
+            "cached": True,
+        }
     render_path = preview_dir / f"preview_{preview_key}.render.mp4"
     try:
         crop_clip_local(
-            str(source), update.start_time, update.end_time,
-            str(request.get("aspect_ratio") or "9:16"), str(render_path),
+            str(source),
+            update.start_time,
+            update.end_time,
+            str(request.get("aspect_ratio") or "9:16"),
+            str(render_path),
             caption_segments=_dict_items(transcript.get("segments")),
             burn_captions=LOCAL_BURN_CAPTIONS,
             caption_style=style,
@@ -1829,7 +1894,9 @@ def preview_clip(job_id: str, update: ClipUpdate) -> Dict[str, Any]:
             background_music=request.get("background_music") or None,
             watermark=request.get("watermark") or None,
             auto_reframe=bool(request.get("auto_reframe", True)),
-            crop_position=update.crop_position, fit_mode=update.fit_mode, zoom=update.zoom,
+            crop_position=update.crop_position,
+            fit_mode=update.fit_mode,
+            zoom=update.zoom,
             layout=update.layout,
             output_height=min(960, update.output_height or 1920),
             intro=request.get("intro") or None,
@@ -1986,14 +2053,16 @@ def _setup_report() -> Dict[str, Any]:
     state = _setup_state()
     try:
         usage = shutil.disk_usage(_output_root)
-        free_gb = round(usage.free / (1024 ** 3), 2)
+        free_gb = round(usage.free / (1024**3), 2)
     except OSError:
         free_gb = 0.0
     ffmpeg = shutil.which("ffmpeg")
     ffprobe = shutil.which("ffprobe")
     gpu = gpu_status()
     provider = str(LLM_PROVIDER or "openai").strip().lower()
-    provider_key = bool(OPENAI_API_KEY) if provider == "openai" else bool(GEMINI_API_KEY) if provider == "gemini" else False
+    provider_key = (
+        bool(OPENAI_API_KEY) if provider == "openai" else bool(GEMINI_API_KEY) if provider == "gemini" else False
+    )
     warnings = []
     if not ffmpeg:
         warnings.append("FFmpeg is not available; local rendering cannot start until it is installed or bundled.")
@@ -2072,7 +2141,7 @@ def system_status() -> Dict[str, Any]:
         "whisper_models": ["tiny", "base", "small", "medium", "large-v3"],
         "whisper_devices": ["auto", "cpu", "cuda"],
         "captions_enabled": LOCAL_BURN_CAPTIONS,
-        "free_disk_gb": round(usage.free / (1024 ** 3), 2),
+        "free_disk_gb": round(usage.free / (1024**3), 2),
         "max_concurrent_jobs": _max_concurrent_jobs,
         "setup": _setup_report(),
     }
@@ -2090,7 +2159,7 @@ def diagnostics() -> Dict[str, Any]:
         "ffmpeg_path": ffmpeg,
         "ffmpeg_ready": bool(ffmpeg),
         "output_root": str(_output_root),
-        "free_disk_gb": round(shutil.disk_usage(_output_root).free / (1024 ** 3), 2),
+        "free_disk_gb": round(shutil.disk_usage(_output_root).free / (1024**3), 2),
         "job_counts": counts,
         "captions_enabled": LOCAL_BURN_CAPTIONS,
         "setup": _setup_report(),
@@ -2239,7 +2308,16 @@ def _launch_update(asset: Dict[str, str], downloaded: Path) -> None:
         script = _write_zip_updater(downloaded, _package_root())
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         subprocess.Popen(
-            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", str(script)],
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-WindowStyle",
+                "Hidden",
+                "-File",
+                str(script),
+            ],
             cwd=str(downloaded.parent),
             creationflags=flags,
         )
@@ -2262,7 +2340,15 @@ def _download_and_apply(asset: Dict[str, str], latest: str) -> None:
         filename = Path(asset["name"]).name
         target = target_dir / filename
         partial = target.with_name(target.name + ".part")
-        _set_update_state(status="downloading", latest_version=latest, asset_name=filename, progress=0, total=0, message=f"Downloading {filename}", error=None)
+        _set_update_state(
+            status="downloading",
+            latest_version=latest,
+            asset_name=filename,
+            progress=0,
+            total=0,
+            message=f"Downloading {filename}",
+            error=None,
+        )
         with requests.get(
             asset["url"],
             headers={"Accept": "application/octet-stream", "User-Agent": "ShortsStudio-Updater"},
@@ -2281,9 +2367,18 @@ def _download_and_apply(asset: Dict[str, str], latest: str) -> None:
                     downloaded_bytes += len(chunk)
                     _set_update_state(progress=downloaded_bytes, total=total)
         os.replace(partial, target)
-        _set_update_state(status="restarting", progress=target.stat().st_size, total=target.stat().st_size, path=str(target), message="Update downloaded. Restarting Shorts Studio…", error=None)
+        _set_update_state(
+            status="restarting",
+            progress=target.stat().st_size,
+            total=target.stat().st_size,
+            path=str(target),
+            message="Update downloaded. Restarting Shorts Studio…",
+            error=None,
+        )
         _launch_update(asset, target)
-        threading.Thread(target=lambda: (time.sleep(0.35), os._exit(0)), name="shorts-studio-update-exit", daemon=True).start()
+        threading.Thread(
+            target=lambda: (time.sleep(0.35), os._exit(0)), name="shorts-studio-update-exit", daemon=True
+        ).start()
     except Exception as exc:
         if partial is not None:
             try:
@@ -2340,9 +2435,23 @@ def update_apply() -> Dict[str, Any]:
             return {"status": "current", "message": "Shorts Studio is already up to date", **info}
         asset = info.get("asset")
         if not asset or not info.get("can_install"):
-            return {"status": "manual", "message": "This source install needs a manual update from the GitHub release page.", **info}
-        _set_update_state(status="starting", current_version=info["current_version"], latest_version=info["latest_version"], progress=0, total=0, message="Starting update…", error=None)
-        threading.Thread(target=_download_and_apply, args=(asset, info["latest_version"]), name="shorts-studio-update", daemon=True).start()
+            return {
+                "status": "manual",
+                "message": "This source install needs a manual update from the GitHub release page.",
+                **info,
+            }
+        _set_update_state(
+            status="starting",
+            current_version=info["current_version"],
+            latest_version=info["latest_version"],
+            progress=0,
+            total=0,
+            message="Starting update…",
+            error=None,
+        )
+        threading.Thread(
+            target=_download_and_apply, args=(asset, info["latest_version"]), name="shorts-studio-update", daemon=True
+        ).start()
         return {"status": "starting", "message": "Update started", **info}
     except Exception as exc:
         _set_update_state(status="error", message="Update failed", error=str(exc))

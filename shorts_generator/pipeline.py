@@ -6,6 +6,7 @@ Two modes:
   * mode="local"            — yt-dlp + faster-whisper + OpenAI or Gemini + ffmpeg/opencv.
                               Self-hosted, LLM_PROVIDER selects OpenAI or Gemini.
 """
+
 from typing import Callable, Dict, List, Optional
 
 ProgressFn = Optional[Callable[[str, str], None]]
@@ -93,9 +94,7 @@ def _run_local(
     )
     transcript["visual_events"] = visual_events
     if not transcript["segments"]:
-        raise RuntimeError(
-            "Whisper produced no segments. The video may have no detectable speech."
-        )
+        raise RuntimeError("Whisper produced no segments. The video may have no detectable speech.")
 
     _emit(progress, "rank", "Ranking viral highlights...")
     provider = str(llm_provider or current_llm_provider() or "openai").strip().lower()
@@ -108,16 +107,12 @@ def _run_local(
             "rank",
             "No OpenAI/Gemini key configured; using offline transcript ranking.",
         )
-        highlights_result = {
-            "highlights": rank_highlights_offline(transcript, num_clips=num_clips)
-        }
+        highlights_result = {"highlights": rank_highlights_offline(transcript, num_clips=num_clips)}
     else:
         # Keep the dispatcher aligned with the explicit function argument even
         # when callers invoke ``generate_shorts`` outside the web worker.
         with runtime_credentials(llm_provider=provider):
-            highlights_result = get_highlights(
-                transcript, num_clips=num_clips, llm_fn=call_local_llm, focus=focus
-            )
+            highlights_result = get_highlights(transcript, num_clips=num_clips, llm_fn=call_local_llm, focus=focus)
     all_highlights: List[Dict] = highlights_result.get("highlights", [])
     if not all_highlights:
         raise RuntimeError("Highlight generator returned zero clips.")
@@ -178,14 +173,10 @@ def _run_api(
     _emit(progress, "transcribe", "Transcribing with Whisper...")
     transcript = transcribe(source_url, language=language)
     if not transcript["segments"]:
-        raise RuntimeError(
-            "Whisper produced no segments. The video may have no detectable speech."
-        )
+        raise RuntimeError("Whisper produced no segments. The video may have no detectable speech.")
 
     _emit(progress, "rank", "Ranking viral highlights...")
-    highlights_result = get_highlights(
-        transcript, num_clips=num_clips, llm_fn=call_muapi_llm, focus=focus
-    )
+    highlights_result = get_highlights(transcript, num_clips=num_clips, llm_fn=call_muapi_llm, focus=focus)
     all_highlights: List[Dict] = highlights_result.get("highlights", [])
     if not all_highlights:
         raise RuntimeError("Highlight generator returned zero clips.")

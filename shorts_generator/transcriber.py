@@ -4,6 +4,7 @@ Sends a hosted media URL to MuAPI's Whisper endpoint and returns the segment
 shape expected by the highlight generator: {duration, segments[start,end,text]}.
 The API runs verbose_json server-side, so we get per-segment timestamps for free.
 """
+
 import json
 import math
 from typing import Dict, Optional

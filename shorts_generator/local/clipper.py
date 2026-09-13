@@ -6,6 +6,7 @@ Two stages per highlight:
      window horizontally across the frame to keep faces centred (Haar
      cascade — same approach as the original repo, no external models).
 """
+
 import os
 import re
 import shutil
@@ -50,9 +51,7 @@ def _find_ffmpeg() -> str:
 
     user_profile = os.environ.get("USERPROFILE", "")
     if user_profile:
-        candidates.extend(
-            (Path(user_profile) / "scoop" / "apps" / "ffmpeg").glob("**/ffmpeg.exe")
-        )
+        candidates.extend((Path(user_profile) / "scoop" / "apps" / "ffmpeg").glob("**/ffmpeg.exe"))
 
     for extra in (
         Path(r"C:\ffmpeg\bin\ffmpeg.exe"),
@@ -216,7 +215,9 @@ def _write_ass_captions(
     if clip_end <= clip_start:
         return 0
     style_key = str(caption_style or "bold").strip().lower()
-    font_size, primary, secondary, back, outline, border_style, alignment = _caption_style_values(caption_style, caption_position)
+    font_size, primary, secondary, back, outline, border_style, alignment = _caption_style_values(
+        caption_style, caption_position
+    )
     try:
         requested_size = int(caption_size) if caption_size else 0
     except (TypeError, ValueError, OverflowError):
@@ -254,17 +255,9 @@ def _write_ass_captions(
             end = float(segment.get("end", 0.0))
         except (TypeError, ValueError, OverflowError):
             continue
-        if (
-            not math.isfinite(start)
-            or not math.isfinite(end)
-            or end <= start
-            or end <= clip_start
-            or start >= clip_end
-        ):
+        if not math.isfinite(start) or not math.isfinite(end) or end <= start or end <= clip_start or start >= clip_end:
             continue
-        text = _escape_ass_text(
-            segment.get("text", ""), remove_filler_words=remove_filler_words
-        )
+        text = _escape_ass_text(segment.get("text", ""), remove_filler_words=remove_filler_words)
         if not text:
             continue
         relative_start = max(0.0, start - clip_start)
@@ -277,17 +270,10 @@ def _write_ass_captions(
                 try:
                     word_start = max(relative_start, float(word["start"]) - clip_start)
                     word_end = min(relative_end, float(word["end"]) - clip_start)
-                    word_text = _escape_ass_text(
-                        word.get("word", ""), remove_filler_words=remove_filler_words
-                    )
+                    word_text = _escape_ass_text(word.get("word", ""), remove_filler_words=remove_filler_words)
                 except (KeyError, TypeError, ValueError, OverflowError):
                     continue
-                if (
-                    math.isfinite(word_start)
-                    and math.isfinite(word_end)
-                    and word_end > word_start
-                    and word_text
-                ):
+                if math.isfinite(word_start) and math.isfinite(word_end) and word_end > word_start and word_text:
                     timed_words.append((word_start, word_end, word_text))
             if not timed_words:
                 plain_words = " ".join(text.split(r"\N")).split()
@@ -305,9 +291,7 @@ def _write_ass_captions(
                 plain_words = [word for _, _, word in timed_words]
                 for word_start, word_end, word in timed_words:
                     highlighted = " ".join(
-                        (r"{\c&H0000FFFF&}" + candidate + r"{\c&H00FFFFFF&}")
-                        if candidate == word
-                        else candidate
+                        (r"{\c&H0000FFFF&}" + candidate + r"{\c&H00FFFFFF&}") if candidate == word else candidate
                         for candidate in plain_words
                     )
                     lines.append(
@@ -333,9 +317,7 @@ def _write_ass_captions(
     return count
 
 
-def _has_caption_window(
-    clip_start: float, clip_end: float, segments: Optional[List[Dict]]
-) -> bool:
+def _has_caption_window(clip_start: float, clip_end: float, segments: Optional[List[Dict]]) -> bool:
     """Return whether at least one non-empty transcript segment overlaps a clip."""
     clip_start = _finite_float(clip_start, 0.0)
     clip_end = _finite_float(clip_end, clip_start)
@@ -432,12 +414,26 @@ def _cut_subclip(source_path: str, start: float, end: float, out_path: str) -> s
     """ffmpeg -ss start -to end -> re-encoded mp4 with audio."""
     ffmpeg = _find_ffmpeg()
     cmd = [
-        ffmpeg, "-y", "-loglevel", "error",
-        "-i", source_path,
-        "-ss", f"{start:.3f}",
-        "-to", f"{end:.3f}",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-        "-c:a", "aac", "-b:a", "128k",
+        ffmpeg,
+        "-y",
+        "-loglevel",
+        "error",
+        "-i",
+        source_path,
+        "-ss",
+        f"{start:.3f}",
+        "-to",
+        f"{end:.3f}",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "20",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
         out_path,
     ]
     subprocess.run(cmd, check=True)
@@ -460,8 +456,7 @@ def _reframe_vertical(
         import cv2  # type: ignore
     except ImportError as e:
         raise RuntimeError(
-            "opencv-python is required for --mode local. Install it with:\n"
-            "    pip install -r requirements-local.txt"
+            "opencv-python is required for --mode local. Install it with:\n    pip install -r requirements-local.txt"
         ) from e
 
     target_ratio = _ratio(aspect_ratio)
@@ -477,7 +472,37 @@ def _reframe_vertical(
         out_w = max(2, int(round(out_h * target_ratio)) // 2 * 2)
         half = max(2, out_w // 2)
         split_filter = f"[0:v]crop=iw/2:ih:0:0,scale={half}:{out_h}:force_original_aspect_ratio=decrease,pad={half}:{out_h}:(ow-iw)/2:(oh-ih)/2[left];[0:v]crop=iw/2:ih:iw/2:0,scale={half}:{out_h}:force_original_aspect_ratio=decrease,pad={half}:{out_h}:(ow-iw)/2:(oh-ih)/2[right];[left][right]hstack=inputs=2[v]"
-        subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-i", in_path, "-filter_complex", split_filter, "-map", "[v]", "-map", "0:a:0?", "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-shortest", out_path], check=True)
+        subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                in_path,
+                "-filter_complex",
+                split_filter,
+                "-map",
+                "[v]",
+                "-map",
+                "0:a:0?",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "20",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-shortest",
+                out_path,
+            ],
+            check=True,
+        )
         return out_path
     fit_name = str(fit_mode or "crop").strip().lower()
     if fit_name == "fit_blur":
@@ -490,13 +515,37 @@ def _reframe_vertical(
             f"[0:v]scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,scale=iw*{zoom:.3f}:ih*{zoom:.3f}[fg];"
             f"[bg][fg]overlay=(W-w)/2:(H-h)/2[v]"
         )
-        subprocess.run([
-            ffmpeg, "-y", "-loglevel", "error", "-i", in_path,
-            "-filter_complex", filter_complex, "-map", "[v]", "-map", "0:a:0?",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
-            "-shortest", out_path,
-        ], check=True)
+        subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                in_path,
+                "-filter_complex",
+                filter_complex,
+                "-map",
+                "[v]",
+                "-map",
+                "0:a:0?",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "20",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-shortest",
+                out_path,
+            ],
+            check=True,
+        )
         return out_path
     cap = cv2.VideoCapture(in_path)
     if not cap.isOpened():
@@ -578,7 +627,7 @@ def _reframe_vertical(
         cx, cy = last_center
         x0 = max(0, min(src_w - crop_w, cx - crop_w // 2))
         y0 = max(0, min(src_h - crop_h, cy - crop_h // 2))
-        cropped = frame[y0:y0 + crop_h, x0:x0 + crop_w]
+        cropped = frame[y0 : y0 + crop_h, x0 : x0 + crop_w]
         if cropped.shape[1] != output_crop_w or cropped.shape[0] != output_crop_h:
             cropped = cv2.resize(cropped, (output_crop_w, output_crop_h), interpolation=cv2.INTER_AREA)
         writer.write(cropped)
@@ -589,12 +638,24 @@ def _reframe_vertical(
     # Mux audio from the cut clip back onto the silent reframed video.
     ffmpeg = _find_ffmpeg()
     cmd = [
-        ffmpeg, "-y", "-loglevel", "error",
-        "-i", silent_path,
-        "-i", in_path,
-        "-c:v", "copy",
-        "-c:a", "aac", "-b:a", "128k",
-        "-map", "0:v:0", "-map", "1:a:0?",
+        ffmpeg,
+        "-y",
+        "-loglevel",
+        "error",
+        "-i",
+        silent_path,
+        "-i",
+        in_path,
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0?",
         "-shortest",
         out_path,
     ]
@@ -720,9 +781,21 @@ def _apply_audio_processing(
             ffmpeg = _find_ffmpeg()
             subprocess.run(
                 [
-                    ffmpeg, "-y", "-loglevel", "error", "-i", out_path,
-                    "-af", ",".join(audio_filters), "-c:v", "copy",
-                    "-c:a", "aac", "-b:a", "128k", processed_path,
+                    ffmpeg,
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    out_path,
+                    "-af",
+                    ",".join(audio_filters),
+                    "-c:v",
+                    "copy",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "128k",
+                    processed_path,
                 ],
                 check=True,
             )
@@ -778,7 +851,20 @@ def _apply_media_extras(out_path: str, background_music: Optional[str], watermar
                 cmd += ["-map", maps[1]]
         else:
             cmd += ["-map", "0:v:0", "-map", "0:a:0?"]
-        cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "20", "-c:a", "aac", "-b:a", "128k", "-shortest", extra_path]
+        cmd += [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "20",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-shortest",
+            extra_path,
+        ]
         subprocess.run(cmd, check=True)
         os.replace(extra_path, out_path)
     finally:
@@ -834,8 +920,23 @@ def _apply_branding(
         concat = "".join(f"[v{index}][a{index}]" for index in range(len(concat_inputs)))
         filter_complex = ";".join(normalized + [f"{concat}concat=n={len(concat_inputs)}:v=1:a=1[v][a]"])
         args += [
-            "-filter_complex", filter_complex, "-map", "[v]", "-map", "[a]",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-c:a", "aac", "-b:a", "128k", branded,
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[v]",
+            "-map",
+            "[a]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "20",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            branded,
         ]
         subprocess.run(args, check=True)
         os.replace(branded, out_path)
@@ -854,20 +955,36 @@ def _remove_silent_video(in_path: str, out_path: str, threshold: str = "-40dB", 
         shutil.copyfile(in_path, out_path)
         return False
     detect = subprocess.run(
-        [ffmpeg, "-hide_banner", "-i", in_path, "-af", f"silencedetect=noise={threshold}:d={min_silence}", "-f", "null", "-"],
-        capture_output=True, text=True, check=False,
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-i",
+            in_path,
+            "-af",
+            f"silencedetect=noise={threshold}:d={min_silence}",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     log = (detect.stdout or "") + "\n" + (detect.stderr or "")
     starts = [float(x) for x in re.findall(r"silence_start:\s*([0-9.]+)", log)]
     ends = [float(x) for x in re.findall(r"silence_end:\s*([0-9.]+)", log)]
-    probe = subprocess.run([ffmpeg, "-hide_banner", "-i", in_path, "-f", "null", "-"], capture_output=True, text=True, check=False)
+    probe = subprocess.run(
+        [ffmpeg, "-hide_banner", "-i", in_path, "-f", "null", "-"], capture_output=True, text=True, check=False
+    )
     duration_matches = re.findall(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", probe.stderr or "")
     if not duration_matches:
         shutil.copyfile(in_path, out_path)
         return False
     h, m, s = duration_matches[0]
     duration = int(h) * 3600 + int(m) * 60 + float(s)
-    silent = [(max(0.0, start), min(duration, ends[i] if i < len(ends) else duration)) for i, start in enumerate(starts)]
+    silent = [
+        (max(0.0, start), min(duration, ends[i] if i < len(ends) else duration)) for i, start in enumerate(starts)
+    ]
     keep, cursor = [], 0.0
     for start, end in silent:
         if start - cursor > 0.05:
@@ -880,10 +997,40 @@ def _remove_silent_video(in_path: str, out_path: str, threshold: str = "-40dB", 
         return False
     filters, concat_inputs = [], []
     for index, (start, end) in enumerate(keep):
-        filters += [f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{index}]", f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{index}]"]
+        filters += [
+            f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{index}]",
+            f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{index}]",
+        ]
         concat_inputs.append(f"[v{index}][a{index}]")
     filters.append("".join(concat_inputs) + f"concat=n={len(keep)}:v=1:a=1[v][a]")
-    subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-i", in_path, "-filter_complex", ";".join(filters), "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-c:a", "aac", "-b:a", "128k", out_path], check=True)
+    subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            in_path,
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            "[v]",
+            "-map",
+            "[a]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "20",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            out_path,
+        ],
+        check=True,
+    )
     return True
 
 
@@ -941,9 +1088,7 @@ def crop_highlights_local(
             print(f"[clip/local] {i} failed: {message}", flush=True)
             results.append({**h, "clip_url": None, "error": message})
             continue
-        captions_for_clip = burn_captions and _has_caption_window(
-            start_time, end_time, caption_segments
-        )
+        captions_for_clip = burn_captions and _has_caption_window(start_time, end_time, caption_segments)
         try:
             crop_clip_local(
                 source_path,

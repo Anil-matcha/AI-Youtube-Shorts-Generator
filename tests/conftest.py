@@ -1,4 +1,5 @@
 """Shared test isolation for the FastAPI smoke suite."""
+
 from __future__ import annotations
 
 import os

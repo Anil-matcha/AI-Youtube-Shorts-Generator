@@ -3,6 +3,7 @@
 Returns a local mp4 path so the rest of the local pipeline can read it
 directly off disk.
 """
+
 import os
 import re
 from pathlib import Path
@@ -17,8 +18,7 @@ def _import_ytdlp():
         import yt_dlp  # type: ignore
     except ImportError as e:
         raise RuntimeError(
-            "yt-dlp is required for --mode local. Install it with:\n"
-            "    pip install -r requirements-local.txt"
+            "yt-dlp is required for --mode local. Install it with:\n    pip install -r requirements-local.txt"
         ) from e
     return yt_dlp
 
@@ -31,10 +31,7 @@ def _format_for(fmt: str) -> str:
         height = 720
     if height <= 0:
         height = 720
-    return (
-        f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/"
-        f"best[height<={height}][ext=mp4]/best"
-    )
+    return f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/best[height<={height}][ext=mp4]/best"
 
 
 def _extract_youtube_video_id(source: str) -> Optional[str]:
@@ -166,8 +163,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                         break
             if not os.path.isfile(path):
                 raise RuntimeError(
-                    "yt-dlp reported success, but the downloaded video file was not found. "
-                    f"Expected: {path}"
+                    f"yt-dlp reported success, but the downloaded video file was not found. Expected: {path}"
                 )
     except Exception as exc:
         message = str(exc)

@@ -4,6 +4,7 @@ The packaged application prefers an embedded WebView2 window, so users do not
 need to open a separate browser.  Set ``SHORTS_STUDIO_BROWSER=1`` to force the
 fallback browser mode (useful on systems without WebView2).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -59,7 +60,9 @@ def _show_message(title: str, message: str) -> None:
 def _acquire_single_instance() -> bool:
     """Hold a user-scoped lock that is released automatically on exit."""
     global _instance_handle
-    data_root = Path(os.getenv("LOCALAPPDATA") or os.getenv("XDG_CACHE_HOME") or Path.home() / ".cache") / "ShortsStudio"
+    data_root = (
+        Path(os.getenv("LOCALAPPDATA") or os.getenv("XDG_CACHE_HOME") or Path.home() / ".cache") / "ShortsStudio"
+    )
     try:
         data_root.mkdir(parents=True, exist_ok=True)
         lock_path = data_root / "instance.lock"
@@ -178,7 +181,9 @@ def main() -> None:
         os.environ["SHORTS_PORT"] = str(args.port)
 
     if not _acquire_single_instance():
-        _show_message("Shorts Studio is already running", "Close the existing Shorts Studio window before starting another one.")
+        _show_message(
+            "Shorts Studio is already running", "Close the existing Shorts Studio window before starting another one."
+        )
         return
 
     frozen = bool(getattr(sys, "frozen", False))
@@ -221,7 +226,10 @@ def main() -> None:
     thread.start()
     if not _wait_for_server(url):
         server.should_exit = True
-        _show_message("Shorts Studio could not start", "The local editor server did not become ready. Check the diagnostics log and try again.")
+        _show_message(
+            "Shorts Studio could not start",
+            "The local editor server did not become ready. Check the diagnostics log and try again.",
+        )
         return
 
     use_browser = os.getenv("SHORTS_STUDIO_BROWSER", "0").strip().lower() in {"1", "true", "yes", "on"}
