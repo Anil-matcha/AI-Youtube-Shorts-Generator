@@ -7,7 +7,7 @@
 <p align="center"><strong>A local-first workspace for turning long videos into polished short-form clips.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.9.1">Latest release: v0.9.1</a>
+  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.9.2">Latest release: v0.9.2</a>
   &nbsp; | &nbsp;
   <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases">Downloads</a>
   &nbsp; | &nbsp;
@@ -18,7 +18,7 @@ Shorts Studio is an independent desktop and web workspace maintained by **wiifhu
 
 ## Docker deployment
 
-Release `v0.9.1` bundles the Windows desktop app and the reproducible Docker server image in one release. Docker supports Linux hosts, Docker Desktop, NAS machines, and home servers; the container serves the same FastAPI workspace over HTTP and does not need the Windows desktop shell or a separate Python installation on the host.
+Release `v0.9.2` bundles the Windows desktop app and the reproducible Docker server image in one release. Docker supports Linux hosts, Docker Desktop, NAS machines, and home servers; the container serves the same FastAPI workspace over HTTP and does not need the Windows desktop shell or a separate Python installation on the host.
 
 ### Quick start (CPU)
 
@@ -32,13 +32,13 @@ docker compose --env-file .env.docker up --build
 
 Then open <http://127.0.0.1:7860>. Projects, uploads, transcripts, Whisper models, and rendered clips live in the named `shorts_studio_data` volume and survive container restarts. `docker compose down` keeps that data; `docker compose down -v` removes it.
 
-The published CPU image is also available at `ghcr.io/wiifhub/shorts-studio:v0.9.1` (the `latest` tag tracks the newest release) and is built for `linux/amd64`:
+The published CPU image is also available at `ghcr.io/wiifhub/shorts-studio:v0.9.2` (the `latest` tag tracks the newest release) and is built for `linux/amd64`:
 
 ```bash
 docker run --rm -p 127.0.0.1:7860:7860 \
   -v shorts_studio_data:/data \
   --env-file .env.docker \
-  ghcr.io/wiifhub/shorts-studio:v0.9.1
+  ghcr.io/wiifhub/shorts-studio:v0.9.2
 ```
 
 ### NVIDIA GPU mode
@@ -84,14 +84,15 @@ The theme switch applies to the entire interface. The light Settings view is sho
 - **Update in place** from the Settings view. Packaged Windows builds can download the newest release from this repository and restart without a reinstall.
 - **Run without a browser** in the packaged desktop build through an embedded WebView2 window. A browser fallback remains available when WebView2 is unavailable.
 - **Use hosted providers safely** by entering MuAPI, OpenAI, or Gemini credentials in Settings. Session-entered keys are sent only with the relevant job and are never saved in project files.
+- **Inspect activity without a terminal** in the Logs view. Filter all projects or one project by level and text, refresh while a render is running, and download the visible entries or a single project's full log. Log output is bounded and credential-redacted.
 
 ## Windows installation
 
-The latest packaged Windows desktop binaries are v0.9.1, released alongside the Docker distribution above.
+The latest packaged Windows desktop binaries are v0.9.2, released alongside the Docker distribution above.
 
 ### Recommended: installer
 
-1. Download [ShortsStudio-Setup-v0.9.1.exe](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.9.1/ShortsStudio-Setup-v0.9.1.exe).
+1. Download [ShortsStudio-Setup-v0.9.2.exe](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.9.2/ShortsStudio-Setup-v0.9.2.exe).
 2. Run the installer and choose whether to create a desktop shortcut.
 3. Start **Shorts Studio** from the Start menu or desktop.
 
@@ -101,7 +102,7 @@ Windows may show SmartScreen for an unsigned build. Select **More info -> Run an
 
 ### Portable ZIP
 
-1. Download [ShortsStudio-v0.9.1-windows.zip](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.9.1/ShortsStudio-v0.9.1-windows.zip).
+1. Download [ShortsStudio-v0.9.2-windows.zip](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.9.2/ShortsStudio-v0.9.2-windows.zip).
 2. Extract the entire ZIP to a folder (do not run the EXE inside the archive).
 3. Run `unblock_and_start.bat`, or double-click `ShortsStudio.exe` after Windows has unblocked the files.
 
@@ -206,6 +207,9 @@ The loopback FastAPI service powers the desktop shell and can be used by local t
 | `GET /api/jobs` | List saved projects |
 | `POST /api/jobs` / `POST /api/jobs/batch` | Start one or many projects; optional `X-MuAPI-Key`, `X-OpenAI-Key`, `X-Gemini-Key`, and `X-LLM-Provider` headers supply session credentials |
 | `GET /api/jobs/{id}` | Read progress and results |
+| `GET /api/logs` | Browse bounded, credential-redacted activity logs with project, level, stage, text, and limit filters |
+| `GET /api/logs/download` | Download the currently filtered activity log as plain text |
+| `GET /api/jobs/{id}/logs` | Download one project's full activity log (legacy route) |
 | `POST /api/jobs/{id}/cancel` | Cancel a running project |
 | `POST /api/jobs/{id}/preview` | Render a lightweight draft |
 | `POST /api/jobs/{id}/clips/{index}` | Regenerate one clip with editor settings |

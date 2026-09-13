@@ -28,7 +28,7 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from fastapi import File, FastAPI, Header, HTTPException, UploadFile
+from fastapi import File, FastAPI, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -54,7 +54,7 @@ from shorts_generator.config import (  # noqa: E402
     runtime_credentials,
 )
 
-app = FastAPI(title="Shorts Studio", version="0.9.1")
+app = FastAPI(title="Shorts Studio", version="0.9.2")
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
 _jobs: Dict[str, Dict[str, Any]] = {}
@@ -97,7 +97,7 @@ _max_upload_mb = _positive_int_env("SHORTS_MAX_UPLOAD_MB", 2048)
 _max_upload_bytes = _max_upload_mb * 1024 * 1024
 _auto_resume = os.getenv("SHORTS_AUTO_RESUME", "true").strip().lower() in {"1", "true", "yes", "on"}
 
-_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.9.1").strip().lstrip("v") or "0.9.1"
+_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.9.2").strip().lstrip("v") or "0.9.2"
 _GITHUB_REPO = "wiifhub/AI-Youtube-Shorts-Generator"
 _update_lock = threading.Lock()
 _update_state: Dict[str, Any] = {
@@ -318,6 +318,108 @@ class SetupStateUpdate(BaseModel):
     dismissed: bool = True
 
 
+_log_secret_pattern = re.compile(r"(?i)\b(?:sk-[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{8,}|mu_[A-Za-z0-9_-]{8,})\b")
+_log_level_stages = {
+    "error": {"error"},
+    "warn": {"warning", "warn"},
+    "done": {"done"},
+    "project": {"project"},
+    "running": {
+        "queued",
+        "download",
+        "transcribe",
+        "rank",
+        "render",
+        "caption",
+        "audio",
+        "frame",
+        "thumbnail",
+        "metadata",
+        "upload",
+    },
+}
+
+
+def _redact_log_text(value: Any, job_id: Optional[str] = None) -> str:
+    """Keep credentials out of the log API even if a dependency echoes one."""
+    text = str(value or "")
+    text = _log_secret_pattern.sub("[redacted]", text)
+    if job_id:
+        credentials = _job_credentials.get(job_id) or {}
+        for secret in credentials.values():
+            if isinstance(secret, str) and len(secret) >= 4:
+                text = text.replace(secret, "[redacted]")
+    return text[:4000]
+
+
+def _normalise_log_entry(job_id: str, project: str, entry: Any, index: int) -> Optional[Dict[str, Any]]:
+    if not isinstance(entry, dict):
+        return None
+    try:
+        timestamp = float(entry.get("t") or time.time())
+        if not math.isfinite(timestamp):
+            raise ValueError
+        # datetime.fromtimestamp can reject very large, otherwise-finite values.
+        stamp = datetime.fromtimestamp(timestamp).isoformat(timespec="seconds")
+    except (TypeError, ValueError, OverflowError, OSError):
+        timestamp = time.time()
+        stamp = datetime.fromtimestamp(timestamp).isoformat(timespec="seconds")
+    stage = str(entry.get("stage") or "info").strip()[:32] or "info"
+    return {
+        "id": f"{job_id}:{index}:{timestamp:.6f}",
+        "job_id": job_id,
+        "project": str(project or "Untitled project")[:160],
+        "t": timestamp,
+        "timestamp": stamp,
+        "stage": stage,
+        "message": _redact_log_text(entry.get("message"), job_id),
+    }
+
+
+def _log_entries_locked(job_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Return safe, normalized log entries. The caller must hold ``_lock``."""
+    jobs = [_jobs.get(job_id)] if job_id else list(_jobs.values())
+    entries: List[Dict[str, Any]] = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        current_id = str(job.get("id") or "")
+        request = job.get("request") if isinstance(job.get("request"), dict) else {}
+        project = str(job.get("name") or request.get("url") or current_id or "Untitled project")
+        logs = job.get("logs") if isinstance(job.get("logs"), list) else []
+        for index, raw in enumerate(logs):
+            normalised = _normalise_log_entry(current_id, project, raw, index)
+            if normalised:
+                entries.append(normalised)
+    entries.sort(key=lambda item: (item.get("t", 0), item.get("id", "")), reverse=True)
+    return entries
+
+
+def _filter_log_entries_locked(
+    job_id: Optional[str] = None,
+    level: Optional[str] = None,
+    stage: Optional[str] = None,
+    query: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    entries = _log_entries_locked(job_id)
+    wanted_level = str(level or "").strip().lower()
+    wanted_stage = str(stage or "").strip().lower()
+    search = str(query or "").strip().casefold()
+    if wanted_stage:
+        entries = [entry for entry in entries if entry["stage"].casefold() == wanted_stage]
+    elif wanted_level:
+        allowed = _log_level_stages.get(wanted_level)
+        if allowed is not None:
+            entries = [entry for entry in entries if entry["stage"].casefold() in allowed]
+    if search:
+        entries = [
+            entry
+            for entry in entries
+            if search in f"{entry['project']} {entry['stage']} {entry['message']}".casefold()
+        ]
+    return entries
+
+
 def _job_snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
     status = str(job.get("status") or "unknown")
     request = job.get("request") if isinstance(job.get("request"), dict) else {}
@@ -326,7 +428,18 @@ def _job_snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
         "status": status,
         "stage": str(job.get("stage") or "unknown"),
         "message": str(job.get("message") or ""),
-        "logs": (job.get("logs") if isinstance(job.get("logs"), list) else [])[-80:],
+        "logs": [
+            safe
+            for safe in (
+                {
+                    **entry,
+                    "stage": str(entry.get("stage") or "info")[:32],
+                    "message": _redact_log_text(entry.get("message"), str(job.get("id") or "")),
+                }
+                for entry in ((job.get("logs") if isinstance(job.get("logs"), list) else [])[-80:])
+                if isinstance(entry, dict)
+            )
+        ],
         "error": job.get("error"),
         "result": job.get("result"),
         "created_at": job.get("created_at"),
@@ -345,7 +458,8 @@ def _append_job_log(job: Dict[str, Any], stage: str, message: Any) -> None:
     if not isinstance(logs, list):
         logs = []
         job["logs"] = logs
-    logs.append({"t": time.time(), "stage": str(stage or "info"), "message": str(message or "")})
+    job_id = str(job.get("id") or "")
+    logs.append({"t": time.time(), "stage": str(stage or "info")[:32], "message": _redact_log_text(message, job_id)})
     if len(logs) > 80:
         del logs[:-80]
 
@@ -1030,26 +1144,73 @@ def retry_job(
     return snapshot
 
 
+def _validate_log_filters(job_id: Optional[str], level: Optional[str], stage: Optional[str]) -> None:
+    if job_id and not _job_id_pattern.fullmatch(job_id):
+        raise HTTPException(400, "invalid job id")
+    if level and level.strip().lower() not in {"error", "warn", "running", "done", "project"}:
+        raise HTTPException(400, "invalid log level")
+    if stage and (len(stage) > 32 or not re.fullmatch(r"[A-Za-z0-9_.-]+", stage.strip())):
+        raise HTTPException(400, "invalid log stage")
+
+
+@app.get("/api/logs")
+def list_logs(
+    job_id: Optional[str] = Query(default=None, max_length=64),
+    level: Optional[str] = Query(default=None, max_length=20),
+    stage: Optional[str] = Query(default=None, max_length=32),
+    q: Optional[str] = Query(default=None, max_length=300),
+    limit: int = Query(default=250, ge=1, le=1000),
+) -> Dict[str, Any]:
+    """Return recent project activity without exposing credentials or raw records."""
+    _validate_log_filters(job_id, level, stage)
+    with _lock:
+        if job_id and job_id not in _jobs:
+            raise HTTPException(404, "job not found")
+        entries = _filter_log_entries_locked(job_id, level, stage, q)
+    total = len(entries)
+    return {
+        "logs": entries[:limit],
+        "count": min(total, limit),
+        "total": total,
+        "current_version": _APP_VERSION,
+    }
+
+
+@app.get("/api/logs/download")
+def download_logs(
+    job_id: Optional[str] = Query(default=None, max_length=64),
+    level: Optional[str] = Query(default=None, max_length=20),
+    stage: Optional[str] = Query(default=None, max_length=32),
+    q: Optional[str] = Query(default=None, max_length=300),
+) -> PlainTextResponse:
+    """Download the currently filtered activity log as plain text."""
+    _validate_log_filters(job_id, level, stage)
+    with _lock:
+        if job_id and job_id not in _jobs:
+            raise HTTPException(404, "job not found")
+        entries = list(reversed(_filter_log_entries_locked(job_id, level, stage, q)))
+    lines = [f"{entry['timestamp']} [{entry['project']}] [{entry['stage']}] {entry['message']}" for entry in entries]
+    filename = f"shorts_{job_id}.log" if job_id else "shorts_studio.log"
+    return PlainTextResponse(
+        "\n".join(lines) + ("\n" if lines else ""),
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.get("/api/jobs/{job_id}/logs")
 def download_job_logs(job_id: str):
+    """Backwards-compatible per-project log download."""
+    if not _job_id_pattern.fullmatch(job_id):
+        raise HTTPException(400, "invalid job id")
     with _lock:
-        job = _jobs.get(job_id)
-        if not job:
+        if job_id not in _jobs:
             raise HTTPException(404, "job not found")
-        logs = job.get("logs") if isinstance(job.get("logs"), list) else []
-    lines = []
-    for entry in logs:
-        if not isinstance(entry, dict):
-            continue
-        try:
-            timestamp = float(entry.get("t") or time.time())
-            if not math.isfinite(timestamp):
-                raise ValueError
-        except (TypeError, ValueError, OverflowError, OSError):
-            timestamp = time.time()
-        stamp = datetime.fromtimestamp(timestamp).isoformat(timespec="seconds")
-        lines.append(f"{stamp} [{entry.get('stage', 'info')}] {entry.get('message', '')}")
-    return PlainTextResponse("\n".join(lines) + ("\n" if lines else ""), headers={"Content-Disposition": f'attachment; filename="shorts_{job_id}.log"'})
+        entries = list(reversed(_log_entries_locked(job_id)))
+    lines = [f"{entry['timestamp']} [{entry['stage']}] {entry['message']}" for entry in entries]
+    return PlainTextResponse(
+        "\n".join(lines) + ("\n" if lines else ""),
+        headers={"Content-Disposition": f'attachment; filename="shorts_{job_id}.log"'},
+    )
 
 
 @app.post("/api/open-folder")
