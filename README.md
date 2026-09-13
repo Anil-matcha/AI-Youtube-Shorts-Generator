@@ -7,7 +7,7 @@
 <p align="center"><strong>A local-first workspace for turning long videos into polished short-form clips.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.9.0">Latest release: v0.9.0</a>
+  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.9.1">Latest release: v0.9.1</a>
   &nbsp; | &nbsp;
   <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases">Downloads</a>
   &nbsp; | &nbsp;
@@ -18,7 +18,7 @@ Shorts Studio is an independent desktop and web workspace maintained by **wiifhu
 
 ## Docker deployment
 
-Release `v0.9.0` adds a reproducible server image for Linux hosts, Docker Desktop, NAS machines, and home servers. The container serves the same FastAPI workspace over HTTP; it does not need the Windows desktop shell or a separate Python installation on the host.
+Release `v0.9.1` bundles the Windows desktop app and the reproducible Docker server image in one release. Docker supports Linux hosts, Docker Desktop, NAS machines, and home servers; the container serves the same FastAPI workspace over HTTP and does not need the Windows desktop shell or a separate Python installation on the host.
 
 ### Quick start (CPU)
 
@@ -32,13 +32,13 @@ docker compose --env-file .env.docker up --build
 
 Then open <http://127.0.0.1:7860>. Projects, uploads, transcripts, Whisper models, and rendered clips live in the named `shorts_studio_data` volume and survive container restarts. `docker compose down` keeps that data; `docker compose down -v` removes it.
 
-The published CPU image is also available at `ghcr.io/wiifhub/shorts-studio:latest` and is built for `linux/amd64`:
+The published CPU image is also available at `ghcr.io/wiifhub/shorts-studio:v0.9.1` (the `latest` tag tracks the newest release) and is built for `linux/amd64`:
 
 ```bash
 docker run --rm -p 127.0.0.1:7860:7860 \
   -v shorts_studio_data:/data \
   --env-file .env.docker \
-  ghcr.io/wiifhub/shorts-studio:latest
+  ghcr.io/wiifhub/shorts-studio:v0.9.1
 ```
 
 ### NVIDIA GPU mode
@@ -87,11 +87,11 @@ The theme switch applies to the entire interface. The light Settings view is sho
 
 ## Windows installation
 
-The latest packaged Windows desktop binaries are v0.8.4. The v0.9.0 release adds the Docker/server distribution above; the Windows installer and portable ZIP remain available while the next desktop binary is being built.
+The latest packaged Windows desktop binaries are v0.9.1, released alongside the Docker distribution above.
 
 ### Recommended: installer
 
-1. Download [ShortsStudio-Setup-v0.8.4.exe](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.8.4/ShortsStudio-Setup-v0.8.4.exe).
+1. Download [ShortsStudio-Setup-v0.9.1.exe](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.9.1/ShortsStudio-Setup-v0.9.1.exe).
 2. Run the installer and choose whether to create a desktop shortcut.
 3. Start **Shorts Studio** from the Start menu or desktop.
 
@@ -101,7 +101,7 @@ Windows may show SmartScreen for an unsigned build. Select **More info -> Run an
 
 ### Portable ZIP
 
-1. Download [ShortsStudio-v0.8.4-windows.zip](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.8.4/ShortsStudio-v0.8.4-windows.zip).
+1. Download [ShortsStudio-v0.9.1-windows.zip](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.9.1/ShortsStudio-v0.9.1-windows.zip).
 2. Extract the entire ZIP to a folder (do not run the EXE inside the archive).
 3. Run `unblock_and_start.bat`, or double-click `ShortsStudio.exe` after Windows has unblocked the files.
 

@@ -2,7 +2,7 @@
 ; Build with: ISCC.exe installer\ShortsStudio.iss
 
 #define MyAppName "Shorts Studio"
-#define MyAppVersion "0.9.0"
+#define MyAppVersion "0.9.1"
 #define MyAppPublisher "wiifhub"
 #define MyAppURL "https://github.com/wiifhub/AI-Youtube-Shorts-Generator"
 #define MyAppExeName "ShortsStudio.exe"
