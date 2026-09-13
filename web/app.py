@@ -54,7 +54,7 @@ from shorts_generator.config import (  # noqa: E402
     runtime_credentials,
 )
 
-app = FastAPI(title="Shorts Studio", version="0.8.2")
+app = FastAPI(title="Shorts Studio", version="0.8.3")
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
 _jobs: Dict[str, Dict[str, Any]] = {}
@@ -97,7 +97,7 @@ _max_upload_mb = _positive_int_env("SHORTS_MAX_UPLOAD_MB", 2048)
 _max_upload_bytes = _max_upload_mb * 1024 * 1024
 _auto_resume = os.getenv("SHORTS_AUTO_RESUME", "true").strip().lower() in {"1", "true", "yes", "on"}
 
-_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.8.2").strip().lstrip("v") or "0.8.2"
+_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.8.3").strip().lstrip("v") or "0.8.3"
 _GITHUB_REPO = "wiifhub/AI-Youtube-Shorts-Generator"
 _update_lock = threading.Lock()
 _update_state: Dict[str, Any] = {
@@ -632,6 +632,15 @@ def _enqueue_job(
             raise HTTPException(400, "LLM provider must be openai or gemini")
         req.llm_provider = provider
     supplied_credentials = dict(credentials or {})
+    # The JSON field is the durable project setting; accept the header as a
+    # convenience for API clients that only send session credentials.  When
+    # both are present, the explicit request field wins and the runtime map is
+    # aligned with what will be persisted for retries/resume.
+    header_provider = supplied_credentials.get("llm_provider")
+    if req.llm_provider is None and header_provider:
+        req.llm_provider = header_provider
+    elif req.llm_provider is not None:
+        supplied_credentials["llm_provider"] = req.llm_provider
     if req.mode == "api" and not (supplied_credentials.get("muapi") or MUAPI_API_KEY):
         raise HTTPException(
             400,
@@ -989,6 +998,10 @@ def retry_job(
     credentials = _runtime_credentials_from_headers(
         x_muapi_key, x_openai_key, x_gemini_key, x_llm_provider
     )
+    if req.llm_provider:
+        credentials["llm_provider"] = req.llm_provider
+    elif credentials.get("llm_provider"):
+        req.llm_provider = credentials["llm_provider"]
     if req.mode == "api" and not (credentials.get("muapi") or MUAPI_API_KEY):
         raise HTTPException(
             400,

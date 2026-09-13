@@ -7,7 +7,7 @@
 <p align="center"><strong>A local-first workspace for turning long videos into polished short-form clips.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.8.2">Latest release: v0.8.2</a>
+  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.8.3">Latest release: v0.8.3</a>
   &nbsp; | &nbsp;
   <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases">Downloads</a>
   &nbsp; | &nbsp;
@@ -48,7 +48,7 @@ The theme switch applies to the entire interface. The light Settings view is sho
 
 ### Recommended: installer
 
-1. Download [ShortsStudio-Setup-v0.8.2.exe](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.8.2/ShortsStudio-Setup-v0.8.2.exe).
+1. Download [ShortsStudio-Setup-v0.8.3.exe](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.8.3/ShortsStudio-Setup-v0.8.3.exe).
 2. Run the installer and choose whether to create a desktop shortcut.
 3. Start **Shorts Studio** from the Start menu or desktop.
 
@@ -58,7 +58,7 @@ Windows may show SmartScreen for an unsigned build. Select **More info -> Run an
 
 ### Portable ZIP
 
-1. Download [ShortsStudio-v0.8.2-windows.zip](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.8.2/ShortsStudio-v0.8.2-windows.zip).
+1. Download [ShortsStudio-v0.8.3-windows.zip](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.8.3/ShortsStudio-v0.8.3-windows.zip).
 2. Extract the entire ZIP to a folder (do not run the EXE inside the archive).
 3. Run `unblock_and_start.bat`, or double-click `ShortsStudio.exe` after Windows has unblocked the files.
 
