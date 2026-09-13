@@ -37,6 +37,12 @@ LOCAL_WHISPER_DEVICE = os.getenv("LOCAL_WHISPER_DEVICE", "auto").strip().lower()
 LOCAL_OUTPUT_DIR = os.getenv("LOCAL_OUTPUT_DIR", "output").strip() or "output"
 LOCAL_BURN_CAPTIONS = os.getenv("LOCAL_BURN_CAPTIONS", "true").strip().lower() == "true"
 LOCAL_HEURISTIC_FALLBACK = os.getenv("LOCAL_HEURISTIC_FALLBACK", "true").strip().lower() == "true"
+# Face tracking defaults to ``auto``: use the OpenCV DNN model when the optional
+# files are present, otherwise retain the lightweight Haar fallback.  Set this
+# to ``dnn`` to require the modern detector, or ``haar`` to force the fallback.
+FACE_DETECTOR = os.getenv("SHORTS_FACE_DETECTOR", "auto").strip().lower() or "auto"
+FACE_DNN_MODEL = os.getenv("SHORTS_FACE_DNN_MODEL", "").strip()
+FACE_DNN_CONFIG = os.getenv("SHORTS_FACE_DNN_CONFIG", "").strip()
 
 
 # The web editor can accept credentials for the current session without writing

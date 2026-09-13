@@ -1,13 +1,13 @@
 -r requirements.txt
 
 # Optional dependencies for --mode local.
-yt-dlp>=2024.1.1
-faster-whisper>=1.0.0
-openai>=1.0.0
-google-genai>=1.0.0
-opencv-python>=4.8.0
-pywebview>=5.3
-pystray>=0.19
-Pillow>=10.0
+yt-dlp==2026.7.4
+faster-whisper==1.2.1
+openai==2.49.0
+google-genai==2.14.0
+opencv-python==4.13.0.92
+pywebview==6.2.1
+pystray==0.19.5
+Pillow==12.3.0
 # torch is only needed if you want CUDA Whisper. CPU works without it.
-# torch>=2.0
+# Install requirements-gpu.txt separately when CUDA Whisper is needed.

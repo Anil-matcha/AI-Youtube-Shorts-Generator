@@ -22,7 +22,11 @@ services:
       LOCAL_WHISPER_DEVICE: ${LOCAL_WHISPER_DEVICE:-auto}
       LOCAL_BURN_CAPTIONS: ${LOCAL_BURN_CAPTIONS:-true}
       LOCAL_HEURISTIC_FALLBACK: ${LOCAL_HEURISTIC_FALLBACK:-true}
+      SHORTS_FACE_DETECTOR: ${SHORTS_FACE_DETECTOR:-auto}
+      SHORTS_FACE_DNN_MODEL: ${SHORTS_FACE_DNN_MODEL:-}
+      SHORTS_FACE_DNN_CONFIG: ${SHORTS_FACE_DNN_CONFIG:-}
       SHORTS_MAX_UPLOAD_MB: ${SHORTS_MAX_UPLOAD_MB:-2048}
+      SHORTS_MAX_JSON_MB: ${SHORTS_MAX_JSON_MB:-2}
       SHORTS_MIN_FREE_GB: ${SHORTS_MIN_FREE_GB:-0.5}
       SHORTS_AUTO_RESUME: ${SHORTS_AUTO_RESUME:-true}
       MUAPI_API_KEY: ${MUAPI_API_KEY:-}
@@ -41,7 +45,9 @@ services:
       retries: 3
 
   # Requires Docker Desktop/Engine with the NVIDIA Container Toolkit. It is
-  # opt-in so a normal CPU install never attempts to reserve a GPU.
+  # opt-in so a normal CPU install never attempts to reserve a GPU.  CPU and
+  # GPU profiles intentionally share the same data volume so projects/models
+  # remain available when switching profiles.
   shorts-studio-gpu:
     profiles: ["gpu"]
     build:
@@ -64,7 +70,11 @@ services:
       LOCAL_WHISPER_DEVICE: ${LOCAL_WHISPER_DEVICE:-cuda}
       LOCAL_BURN_CAPTIONS: ${LOCAL_BURN_CAPTIONS:-true}
       LOCAL_HEURISTIC_FALLBACK: ${LOCAL_HEURISTIC_FALLBACK:-true}
+      SHORTS_FACE_DETECTOR: ${SHORTS_FACE_DETECTOR:-auto}
+      SHORTS_FACE_DNN_MODEL: ${SHORTS_FACE_DNN_MODEL:-}
+      SHORTS_FACE_DNN_CONFIG: ${SHORTS_FACE_DNN_CONFIG:-}
       SHORTS_MAX_UPLOAD_MB: ${SHORTS_MAX_UPLOAD_MB:-2048}
+      SHORTS_MAX_JSON_MB: ${SHORTS_MAX_JSON_MB:-2}
       SHORTS_MIN_FREE_GB: ${SHORTS_MIN_FREE_GB:-0.5}
       SHORTS_AUTO_RESUME: ${SHORTS_AUTO_RESUME:-true}
       MUAPI_API_KEY: ${MUAPI_API_KEY:-}
@@ -74,7 +84,7 @@ services:
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
     gpus: all
     volumes:
-      - shorts_studio_gpu_data:/data
+      - shorts_studio_data:/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/api/health', timeout=3).read()"]
@@ -85,4 +95,3 @@ services:
 
 volumes:
   shorts_studio_data:
-  shorts_studio_gpu_data:

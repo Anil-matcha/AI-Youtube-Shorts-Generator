@@ -1,4 +1,4 @@
 # Install the normal local dependencies first, then add a CUDA-enabled
 # PyTorch build for the GPU status check and CUDA Whisper selection.
 -r requirements-local.txt
-torch>=2.2
+torch==2.14.0

@@ -1,6 +1,6 @@
-requests>=2.31
-python-dotenv>=1.0
-fastapi>=0.115
-uvicorn[standard]>=0.30
-pydantic>=2.0
-python-multipart>=0.0.9
+requests==2.34.2
+python-dotenv==1.2.2
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+pydantic==2.13.4
+python-multipart==0.0.32

@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from typing import Dict, List
 
+from .face_detection import create_face_detector
+
 
 def analyze_video(media_path: str, sample_seconds: float = 1.0) -> List[Dict]:
     """Find scene-change and face/reaction signals without a second ML model."""
@@ -39,8 +41,7 @@ def analyze_video(media_path: str, sample_seconds: float = 1.0) -> List[Dict]:
     if not math.isfinite(sample_interval):
         sample_interval = 1.0
     step = max(1, int(fps * max(0.25, sample_interval)))
-    cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    cascade_ready = not cascade.empty()
+    face_detector = create_face_detector(cv2)
     previous = None
     events: List[Dict] = []
     frame_index = 0
@@ -55,11 +56,7 @@ def analyze_video(media_path: str, sample_seconds: float = 1.0) -> List[Dict]:
             timestamp = frame_index / fps
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             small = cv2.resize(gray, (160, 90))
-            face_count = (
-                len(cascade.detectMultiScale(gray, 1.1, 5, minSize=(35, 35)))
-                if cascade_ready
-                else 0
-            )
+            face_count = len(face_detector(frame)) if face_detector is not None else 0
             if previous is not None:
                 change = float(cv2.absdiff(small, previous).mean())
                 if change >= 24.0:

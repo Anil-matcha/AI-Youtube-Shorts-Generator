@@ -2,9 +2,9 @@
 
 # Server/container dependencies. Desktop-only pywebview and pystray are
 # intentionally omitted because the container serves the UI over HTTP.
-yt-dlp>=2024.1.1
-faster-whisper>=1.0.0
-openai>=1.0.0
-google-genai>=1.0.0
-opencv-python-headless>=4.8.0
-Pillow>=10.0
+yt-dlp==2026.7.4
+faster-whisper==1.2.1
+openai==2.49.0
+google-genai==2.14.0
+opencv-python-headless==4.13.0.92
+Pillow==12.3.0

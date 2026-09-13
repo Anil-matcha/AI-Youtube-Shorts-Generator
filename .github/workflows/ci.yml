@@ -1,0 +1,51 @@
+name: Quality checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Lint, type-check, and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install pinned developer dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements-dev.txt
+
+      - name: Ruff
+        run: python -m ruff check shorts_generator web launcher.py main.py tests
+
+      - name: Mypy
+        run: python -m mypy
+
+      - name: Pytest
+        run: python -m pytest
+
+      - name: JavaScript syntax
+        run: node --check web/static/app.js && node --check web/static/theme-init.js
+
+      - name: Dependency audit
+        run: python -m pip_audit -r requirements-dev.txt --progress-spinner off
+
+  compose:
+    name: Validate Docker Compose
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Validate Compose file
+        run: docker compose --env-file .env.docker.example config --quiet

@@ -18,6 +18,7 @@ import textwrap
 from typing import Dict, List, Optional, Tuple
 
 from ..config import LOCAL_OUTPUT_DIR
+from .face_detection import create_face_detector
 
 
 def _remove_with_retry(path: str, attempts: int = 8, delay: float = 0.5) -> None:
@@ -534,11 +535,9 @@ def _reframe_vertical(
     crop_w = max(2, crop_w)
     crop_h = max(2, crop_h)
 
-    face_cascade = None
+    face_detector = None
     if auto_reframe:
-        face_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        )
+        face_detector = create_face_detector(cv2)
 
     silent_path = out_path + ".silent.mp4"
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -556,12 +555,7 @@ def _reframe_vertical(
         if not ret:
             break
 
-        faces = []
-        if face_cascade is not None:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = face_cascade.detectMultiScale(
-                gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40)
-            )
+        faces = face_detector(frame) if face_detector is not None else []
         if len(faces) > 0:
             # Pick the largest face — usually the speaker.
             x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
@@ -699,7 +693,21 @@ def crop_clip_local(
             _remove_with_retry(cut_path)
         if os.path.exists(base_path):
             _remove_with_retry(base_path)
-    audio_filters = []
+    _apply_audio_processing(out_path, remove_silence, normalize_audio, denoise_audio, jump_cuts)
+    _apply_media_extras(out_path, background_music, watermark)
+    _apply_branding(out_path, aspect_ratio, output_height, intro, outro)
+    return out_path
+
+
+def _apply_audio_processing(
+    out_path: str,
+    remove_silence: bool,
+    normalize_audio: bool,
+    denoise_audio: bool,
+    jump_cuts: bool,
+) -> None:
+    """Apply optional audio filters and silent-section removal in sequence."""
+    audio_filters: List[str] = []
     if remove_silence:
         audio_filters.append("silenceremove=stop_periods=-1:stop_duration=0.35:stop_threshold=-40dB")
     if normalize_audio:
@@ -730,100 +738,113 @@ def crop_clip_local(
         finally:
             if os.path.exists(jump_path):
                 _remove_with_retry(jump_path)
-    if background_music or watermark:
-        extra_path = out_path + ".extras.mp4"
-        try:
-            ffmpeg = _find_ffmpeg()
-            inputs = [ffmpeg, "-y", "-loglevel", "error", "-i", out_path]
-            filters = []
-            maps = []
-            input_index = 1
-            if background_music:
-                inputs += ["-stream_loop", "-1", "-i", background_music]
-                if _has_audio_stream(out_path):
-                    filters.append(f"[0:a][{input_index}:a]amix=inputs=2:duration=first:dropout_transition=2[a]")
-                else:
-                    # Some screen recordings contain video only. In that case
-                    # use the supplied music as the complete audio track.
-                    filters.append(f"[{input_index}:a]anull[a]")
-                maps.append("[a]")
-                input_index += 1
-            if watermark:
-                inputs += ["-i", watermark]
-                filters.append(f"[0:v][{input_index}:v]overlay=W-w-24:H-h-24[v]")
-                maps.insert(0, "[v]")
-            if background_music and not watermark:
-                maps.insert(0, "0:v:0")
-            if watermark and not background_music:
-                maps.append("0:a:0?")
-            cmd = inputs
-            if filters:
-                cmd += ["-filter_complex", ";".join(filters)]
-            if maps:
-                cmd += ["-map", maps[0]]
-                if len(maps) > 1:
-                    cmd += ["-map", maps[1]]
+
+
+def _apply_media_extras(out_path: str, background_music: Optional[str], watermark: Optional[str]) -> None:
+    """Mix optional background music and/or watermark into a rendered clip."""
+    if not background_music and not watermark:
+        return
+    extra_path = out_path + ".extras.mp4"
+    try:
+        ffmpeg = _find_ffmpeg()
+        inputs = [ffmpeg, "-y", "-loglevel", "error", "-i", out_path]
+        filters: List[str] = []
+        maps: List[str] = []
+        input_index = 1
+        if background_music:
+            inputs += ["-stream_loop", "-1", "-i", background_music]
+            if _has_audio_stream(out_path):
+                filters.append(f"[0:a][{input_index}:a]amix=inputs=2:duration=first:dropout_transition=2[a]")
             else:
-                cmd += ["-map", "0:v:0", "-map", "0:a:0?"]
-            cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "20", "-c:a", "aac", "-b:a", "128k", "-shortest", extra_path]
-            subprocess.run(cmd, check=True)
-            os.replace(extra_path, out_path)
-        finally:
-            if os.path.exists(extra_path):
-                _remove_with_retry(extra_path)
-    if intro or outro:
-        segments = []
-        for label, media in (("intro", intro), ("clip", out_path), ("outro", outro)):
-            if not media:
-                continue
-            segments.append(media)
-        if len(segments) > 1:
-            branded = out_path + ".branded.mp4"
-            concat_inputs = []
-            silent_audio_paths = []
-            try:
-                ffmpeg = _find_ffmpeg()
-                args = [ffmpeg, "-y", "-loglevel", "error"]
-                for index, media in enumerate(segments):
-                    if not _has_video_stream(media):
-                        raise RuntimeError(f"{media} does not contain a video stream")
-                    concat_media = media
-                    if not _has_audio_stream(media):
-                        concat_media = f"{out_path}.concat_{index}.mp4"
-                        silent_audio_paths.append(concat_media)
-                        _add_silent_audio(media, concat_media)
-                    concat_inputs.append(concat_media)
-                    args += ["-i", concat_media]
-                # Intro/outro files commonly have different dimensions from
-                # the generated vertical clip. Normalize every video stream
-                # to the selected output canvas before concatenating.
-                try:
-                    concat_h = int(output_height)
-                except (TypeError, ValueError, OverflowError):
-                    concat_h = 1920
-                concat_h = max(240, min(4320, concat_h or 1920))
-                concat_w = max(2, int(round(concat_h * _ratio(aspect_ratio))) // 2 * 2)
-                normalized = []
-                for i in range(len(concat_inputs)):
-                    normalized.append(
-                        f"[{i}:v:0]scale={concat_w}:{concat_h}:force_original_aspect_ratio=decrease,"
-                        f"pad={concat_w}:{concat_h}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}];"
-                        f"[{i}:a:0]aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[a{i}]"
-                    )
-                concat = "".join(f"[v{i}][a{i}]" for i in range(len(concat_inputs)))
-                filter_complex = ";".join(normalized + [
-                    f"{concat}concat=n={len(concat_inputs)}:v=1:a=1[v][a]"
-                ])
-                args += ["-filter_complex", filter_complex, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-c:a", "aac", "-b:a", "128k", branded]
-                subprocess.run(args, check=True)
-                os.replace(branded, out_path)
-            finally:
-                if os.path.exists(branded):
-                    _remove_with_retry(branded)
-                for silent_audio_path in silent_audio_paths:
-                    if os.path.exists(silent_audio_path):
-                        _remove_with_retry(silent_audio_path)
-    return out_path
+                # Some screen recordings contain video only. In that case
+                # use the supplied music as the complete audio track.
+                filters.append(f"[{input_index}:a]anull[a]")
+            maps.append("[a]")
+            input_index += 1
+        if watermark:
+            inputs += ["-i", watermark]
+            filters.append(f"[0:v][{input_index}:v]overlay=W-w-24:H-h-24[v]")
+            maps.insert(0, "[v]")
+        if background_music and not watermark:
+            maps.insert(0, "0:v:0")
+        if watermark and not background_music:
+            maps.append("0:a:0?")
+        cmd = inputs
+        if filters:
+            cmd += ["-filter_complex", ";".join(filters)]
+        if maps:
+            cmd += ["-map", maps[0]]
+            if len(maps) > 1:
+                cmd += ["-map", maps[1]]
+        else:
+            cmd += ["-map", "0:v:0", "-map", "0:a:0?"]
+        cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "20", "-c:a", "aac", "-b:a", "128k", "-shortest", extra_path]
+        subprocess.run(cmd, check=True)
+        os.replace(extra_path, out_path)
+    finally:
+        if os.path.exists(extra_path):
+            _remove_with_retry(extra_path)
+
+
+def _apply_branding(
+    out_path: str,
+    aspect_ratio: str,
+    output_height: int,
+    intro: Optional[str],
+    outro: Optional[str],
+) -> None:
+    """Concatenate optional intro/outro media after normalizing every stream."""
+    if not intro and not outro:
+        return
+    segments = [media for media in (intro, out_path, outro) if media]
+    if len(segments) <= 1:
+        return
+    branded = out_path + ".branded.mp4"
+    concat_inputs: List[str] = []
+    silent_audio_paths: List[str] = []
+    try:
+        ffmpeg = _find_ffmpeg()
+        args = [ffmpeg, "-y", "-loglevel", "error"]
+        for index, media in enumerate(segments):
+            if not _has_video_stream(media):
+                raise RuntimeError(f"{media} does not contain a video stream")
+            concat_media = media
+            if not _has_audio_stream(media):
+                concat_media = f"{out_path}.concat_{index}.mp4"
+                silent_audio_paths.append(concat_media)
+                _add_silent_audio(media, concat_media)
+            concat_inputs.append(concat_media)
+            args += ["-i", concat_media]
+        # Intro/outro files commonly have different dimensions from the
+        # generated vertical clip. Normalize every video stream to the selected
+        # output canvas before concatenating.
+        try:
+            concat_h = int(output_height)
+        except (TypeError, ValueError, OverflowError):
+            concat_h = 1920
+        concat_h = max(240, min(4320, concat_h or 1920))
+        concat_w = max(2, int(round(concat_h * _ratio(aspect_ratio))) // 2 * 2)
+        normalized: List[str] = []
+        for index in range(len(concat_inputs)):
+            normalized.append(
+                f"[{index}:v:0]scale={concat_w}:{concat_h}:force_original_aspect_ratio=decrease,"
+                f"pad={concat_w}:{concat_h}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{index}];"
+                f"[{index}:a:0]aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[a{index}]"
+            )
+        concat = "".join(f"[v{index}][a{index}]" for index in range(len(concat_inputs)))
+        filter_complex = ";".join(normalized + [f"{concat}concat=n={len(concat_inputs)}:v=1:a=1[v][a]"])
+        args += [
+            "-filter_complex", filter_complex, "-map", "[v]", "-map", "[a]",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-c:a", "aac", "-b:a", "128k", branded,
+        ]
+        subprocess.run(args, check=True)
+        os.replace(branded, out_path)
+    finally:
+        if os.path.exists(branded):
+            _remove_with_retry(branded)
+        for silent_audio_path in silent_audio_paths:
+            if os.path.exists(silent_audio_path):
+                _remove_with_retry(silent_audio_path)
 
 
 def _remove_silent_video(in_path: str, out_path: str, threshold: str = "-40dB", min_silence: float = 0.35) -> bool:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+from importlib import resources
 import os
 import socket
 import sys
@@ -21,6 +22,21 @@ from typing import Any, Optional
 
 
 _instance_handle: Any = None
+
+
+def _asset_path(name: str) -> Path:
+    """Resolve an asset in source, a frozen bundle, or an installed package."""
+    resource_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    bundled = resource_root / "assets" / name
+    if bundled.is_file():
+        return bundled
+    try:
+        traversable = resources.files("assets").joinpath(name)
+        if traversable.is_file():
+            return Path(traversable)
+    except (ModuleNotFoundError, FileNotFoundError, TypeError, AttributeError):
+        pass
+    return bundled
 
 
 def _ensure_stdio() -> None:
@@ -109,7 +125,7 @@ def _make_tray(window: Any, server: Any) -> Optional[Any]:
     except Exception:
         return None
 
-    icon_path = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "assets" / "shorts_studio_icon.ico"
+    icon_path = _asset_path("shorts_studio_icon.ico")
     try:
         source = Image.open(icon_path).convert("RGBA")
         resample = getattr(Image, "Resampling", Image).LANCZOS

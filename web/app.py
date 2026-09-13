@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import hashlib
 import io
+import logging
 import math
 import os
 import re
@@ -28,10 +29,13 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from fastapi import File, FastAPI, Header, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
+from fastapi import File, FastAPI, Header, HTTPException, Query, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).resolve().parent / "static"
@@ -54,8 +58,63 @@ from shorts_generator.config import (  # noqa: E402
     runtime_credentials,
 )
 
-app = FastAPI(title="Shorts Studio", version="0.9.2")
+app = FastAPI(
+    title="Shorts Studio",
+    version="0.9.3",
+    description="Local-first video highlight extraction, editing, and export workspace.",
+    contact={"name": "Shorts Studio", "url": "https://github.com/wiifhub/AI-Youtube-Shorts-Generator"},
+    license_info={"name": "MIT"},
+    openapi_tags=[
+        {"name": "system", "description": "Health, diagnostics, setup, and shutdown."},
+        {"name": "projects", "description": "Create, inspect, edit, and export projects."},
+        {"name": "logs", "description": "Browse bounded, credential-redacted project activity."},
+        {"name": "media", "description": "Upload and stream source or generated media."},
+        {"name": "updates", "description": "Check and apply releases from the wiifhub repository."},
+    ],
+)
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+
+_logger = logging.getLogger("shorts_studio")
+
+
+def _error_response(message: str, code: str, status_code: int, **extra: Any) -> JSONResponse:
+    """Build the single JSON error shape used by every API endpoint."""
+    payload: Dict[str, Any] = {"error": str(message), "code": str(code)}
+    payload.update(extra)
+    return JSONResponse(status_code=status_code, content=payload)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    """Normalize FastAPI and Starlette HTTP errors for the frontend and API clients."""
+    detail = exc.detail
+    if isinstance(detail, dict):
+        message = detail.get("error") or detail.get("message") or detail.get("detail") or "Request failed"
+        code = detail.get("code") or f"http_{exc.status_code}"
+        extra = {key: value for key, value in detail.items() if key not in {"error", "message", "detail", "code"}}
+    else:
+        message = str(detail or "Request failed")
+        code = f"http_{exc.status_code}"
+        extra = {}
+    return _error_response(message, code, exc.status_code, **extra)
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Return machine-readable validation details without Starlette's ``detail`` wrapper."""
+    return _error_response(
+        "Request validation failed",
+        "validation_error",
+        422,
+        details=jsonable_encoder(exc.errors()),
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Keep unexpected failures safe for users while retaining a server-side traceback."""
+    _logger.exception("Unhandled %s error on %s %s", type(exc).__name__, request.method, request.url.path)
+    return _error_response("Internal server error", "internal_error", 500)
 
 _jobs: Dict[str, Dict[str, Any]] = {}
 _lock = threading.Lock()
@@ -95,9 +154,10 @@ _allowed_upload_extensions = {
 }
 _max_upload_mb = _positive_int_env("SHORTS_MAX_UPLOAD_MB", 2048)
 _max_upload_bytes = _max_upload_mb * 1024 * 1024
+_max_json_bytes = _positive_int_env("SHORTS_MAX_JSON_MB", 2) * 1024 * 1024
 _auto_resume = os.getenv("SHORTS_AUTO_RESUME", "true").strip().lower() in {"1", "true", "yes", "on"}
 
-_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.9.2").strip().lstrip("v") or "0.9.2"
+_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.9.3").strip().lstrip("v") or "0.9.3"
 _GITHUB_REPO = "wiifhub/AI-Youtube-Shorts-Generator"
 _update_lock = threading.Lock()
 _update_state: Dict[str, Any] = {
@@ -120,6 +180,40 @@ def _nonnegative_float_env(name: str, default: float) -> float:
 
 
 _min_free_gb = _nonnegative_float_env("SHORTS_MIN_FREE_GB", 0.5)
+
+
+@app.middleware("http")
+async def request_limits(request: Request, call_next: Any):
+    """Reject oversized JSON before parsing while leaving streaming uploads to their own guard."""
+    raw_length = request.headers.get("content-length")
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type == "application/json" and not raw_length:
+        # Chunked JSON has no Content-Length header. Request.body() is cached
+        # by Starlette, so endpoint parsing still receives the same payload.
+        body = await request.body()
+        if len(body) > _max_json_bytes:
+            return _error_response(
+                f"JSON request is too large (maximum {_max_json_bytes // (1024 * 1024)} MB)",
+                "request_too_large",
+                413,
+            )
+    if raw_length:
+        try:
+            content_length = int(raw_length)
+        except (TypeError, ValueError):
+            return _error_response("Content-Length must be an integer", "invalid_content_length", 400)
+        if content_length < 0:
+            return _error_response("Content-Length cannot be negative", "invalid_content_length", 400)
+        if content_type == "application/json" and content_length > _max_json_bytes:
+            return _error_response(
+                f"JSON request is too large (maximum {_max_json_bytes // (1024 * 1024)} MB)",
+                "request_too_large",
+                413,
+            )
+        if content_type and content_type != "application/json" and not content_type.startswith("multipart/"):
+            if content_length > 8 * 1024 * 1024:
+                return _error_response("Request body is too large", "request_too_large", 413)
+    return await call_next(request)
 
 
 def _safe_transcript_duration(transcript: Any) -> float:
@@ -1471,7 +1565,7 @@ def get_waveform(job_id: str, bins: int = 240) -> Dict[str, Any]:
         source = job.get("raw_source_video_url")
         output_dir = Path(str(job.get("output_dir") or (_jobs_dir / job_id))).expanduser().resolve()
     if not source or not Path(str(source)).is_file():
-        return {"duration": 0.0, "peaks": [], "available": False}
+        return {"duration": 0.0, "peaks": [], "available": False, "error": "Source audio is unavailable", "code": "source_unavailable"}
     source_path = Path(str(source)).expanduser().resolve()
     cache_path = output_dir / "waveform.json"
     try:
@@ -1498,7 +1592,7 @@ def get_waveform(job_id: str, bins: int = 240) -> Dict[str, Any]:
         samples = array("h")
         samples.frombytes(raw[: len(raw) - (len(raw) % 2)])
         if not samples:
-            return {"duration": 0.0, "peaks": [], "available": False}
+            return {"duration": 0.0, "peaks": [], "available": False, "error": "No audio samples found", "code": "audio_unavailable"}
         step = max(1, len(samples) // bins)
         peaks = []
         for start in range(0, len(samples), step):
@@ -1512,7 +1606,7 @@ def get_waveform(job_id: str, bins: int = 240) -> Dict[str, Any]:
         cache_path.write_text(json.dumps({"signature": signature, "duration": duration, "peaks": peaks}), encoding="utf-8")
         return {"duration": duration, "peaks": peaks, "available": True, "cached": False}
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, TimeoutError) as exc:
-        return {"duration": 0.0, "peaks": [], "available": False, "error": str(exc)}
+        return {"duration": 0.0, "peaks": [], "available": False, "error": str(exc), "code": "waveform_unavailable"}
 
 
 @app.get("/api/jobs/{job_id}/export")
@@ -2217,7 +2311,14 @@ def update_check() -> Dict[str, Any]:
         return info
     except Exception as exc:
         _set_update_state(status="error", message="Update check failed", error=str(exc))
-        return {"available": False, "update_available": False, "current_version": _APP_VERSION, "error": str(exc), "state": dict(_update_state)}
+        return {
+            "available": False,
+            "update_available": False,
+            "current_version": _APP_VERSION,
+            "error": str(exc),
+            "code": "update_check_failed",
+            "state": dict(_update_state),
+        }
 
 
 @app.get("/api/update/status")
@@ -2245,7 +2346,13 @@ def update_apply() -> Dict[str, Any]:
         return {"status": "starting", "message": "Update started", **info}
     except Exception as exc:
         _set_update_state(status="error", message="Update failed", error=str(exc))
-        return {"status": "error", "message": "Update failed", "error": str(exc), "current_version": _APP_VERSION}
+        return {
+            "status": "error",
+            "message": "Update failed",
+            "error": str(exc),
+            "code": "update_failed",
+            "current_version": _APP_VERSION,
+        }
 
 
 def main() -> None:

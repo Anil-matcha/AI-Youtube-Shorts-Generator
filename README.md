@@ -7,7 +7,7 @@
 <p align="center"><strong>A local-first workspace for turning long videos into polished short-form clips.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.9.2">Latest release: v0.9.2</a>
+  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.9.3">Latest release: v0.9.3</a>
   &nbsp; | &nbsp;
   <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases">Downloads</a>
   &nbsp; | &nbsp;
@@ -18,7 +18,7 @@ Shorts Studio is an independent desktop and web workspace maintained by **wiifhu
 
 ## Docker deployment
 
-Release `v0.9.2` bundles the Windows desktop app and the reproducible Docker server image in one release. Docker supports Linux hosts, Docker Desktop, NAS machines, and home servers; the container serves the same FastAPI workspace over HTTP and does not need the Windows desktop shell or a separate Python installation on the host.
+Release `v0.9.3` bundles the Windows desktop app and the reproducible Docker server image in one release. Docker supports Linux hosts, Docker Desktop, NAS machines, and home servers; the container serves the same FastAPI workspace over HTTP and does not need the Windows desktop shell or a separate Python installation on the host.
 
 ### Quick start (CPU)
 
@@ -32,13 +32,13 @@ docker compose --env-file .env.docker up --build
 
 Then open <http://127.0.0.1:7860>. Projects, uploads, transcripts, Whisper models, and rendered clips live in the named `shorts_studio_data` volume and survive container restarts. `docker compose down` keeps that data; `docker compose down -v` removes it.
 
-The published CPU image is also available at `ghcr.io/wiifhub/shorts-studio:v0.9.2` (the `latest` tag tracks the newest release) and is built for `linux/amd64`:
+The published CPU image is also available at `ghcr.io/wiifhub/shorts-studio:v0.9.3` (the `latest` tag tracks the newest release) and is built for `linux/amd64`:
 
 ```bash
 docker run --rm -p 127.0.0.1:7860:7860 \
   -v shorts_studio_data:/data \
   --env-file .env.docker \
-  ghcr.io/wiifhub/shorts-studio:v0.9.2
+  ghcr.io/wiifhub/shorts-studio:v0.9.3
 ```
 
 ### NVIDIA GPU mode
@@ -54,6 +54,13 @@ The GPU workspace is available at <http://127.0.0.1:7861> and uses `LOCAL_WHISPE
 The Compose file binds to loopback for safety. If you intentionally serve it to another machine, put it behind your own authentication and TLS/reverse proxy; do not expose the unauthenticated FastAPI port directly to the public internet. API keys are passed at runtime and are never copied into the image.
 
 The Docker image intentionally omits `pywebview` and `pystray`: the browser is the container's desktop surface. The regular Windows package still provides the browser-free native window.
+
+CPU and GPU Compose profiles intentionally use the same `shorts_studio_data`
+volume. You can stop one profile and start the other without losing projects,
+uploads, transcripts, or downloaded Whisper models. The CPU and container
+dependency sets use different OpenCV wheels (`opencv-python` locally and
+`opencv-python-headless` in Docker); install only the set that matches the
+runtime rather than combining both wheels in one environment.
 
 ## Screenshots
 
@@ -88,11 +95,11 @@ The theme switch applies to the entire interface. The light Settings view is sho
 
 ## Windows installation
 
-The latest packaged Windows desktop binaries are v0.9.2, released alongside the Docker distribution above.
+The latest packaged Windows desktop binaries are v0.9.3, released alongside the Docker distribution above.
 
 ### Recommended: installer
 
-1. Download [ShortsStudio-Setup-v0.9.2.exe](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.9.2/ShortsStudio-Setup-v0.9.2.exe).
+1. Download [ShortsStudio-Setup-v0.9.3.exe](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.9.3/ShortsStudio-Setup-v0.9.3.exe).
 2. Run the installer and choose whether to create a desktop shortcut.
 3. Start **Shorts Studio** from the Start menu or desktop.
 
@@ -102,7 +109,7 @@ Windows may show SmartScreen for an unsigned build. Select **More info -> Run an
 
 ### Portable ZIP
 
-1. Download [ShortsStudio-v0.9.2-windows.zip](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.9.2/ShortsStudio-v0.9.2-windows.zip).
+1. Download [ShortsStudio-v0.9.3-windows.zip](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.9.3/ShortsStudio-v0.9.3-windows.zip).
 2. Extract the entire ZIP to a folder (do not run the EXE inside the archive).
 3. Run `unblock_and_start.bat`, or double-click `ShortsStudio.exe` after Windows has unblocked the files.
 
@@ -173,6 +180,8 @@ Copy `.env.example` to `.env` and edit only the settings you need. Never commit 
 | `OPENAI_API_KEY` / `GEMINI_API_KEY` | Optional persistent local ranking keys (Settings can supply session-only keys instead) | empty |
 | `LOCAL_WHISPER_MODEL` | `tiny`, `base`, `small`, `medium`, or `large-v3` | `base` |
 | `LOCAL_WHISPER_DEVICE` | `auto`, `cpu`, or `cuda` | `auto` |
+| `SHORTS_FACE_DETECTOR` | Face tracking mode: `auto`, `dnn`, `haar`, or `off` | `auto` |
+| `SHORTS_FACE_DNN_MODEL` / `SHORTS_FACE_DNN_CONFIG` | Optional OpenCV SSD model/config paths used by the DNN detector | empty (Haar fallback) |
 | `LOCAL_OUTPUT_DIR` | Source-mode project/output root | `output` |
 | `SHORTS_STUDIO_DATA_DIR` | Container/user data root for projects, caches, and update state | unset (Docker: `/data`) |
 | `LOCAL_BURN_CAPTIONS` | Burn captions into local MP4 files | `true` |
@@ -182,8 +191,20 @@ Copy `.env.example` to `.env` and edit only the settings you need. Never commit 
 | `SHORTS_AUTO_RESUME` | Recover interrupted projects on start | `true` |
 | `SHORTS_MIN_FREE_GB` | Free-space guard before a render | `0.5` |
 | `SHORTS_MAX_UPLOAD_MB` | Maximum uploaded source size | `2048` |
+| `SHORTS_MAX_JSON_MB` | Maximum JSON request body accepted by the API | `2` |
 
 Packaged builds keep the optional `.env` beside the executable but place writable project data under `%LOCALAPPDATA%\ShortsStudio`. A custom **Save folder** in the workspace creates named folders such as `20260910_214500_shorts_source_a1b2c3d4`.
+
+### Optional modern face detector
+
+`SHORTS_FACE_DETECTOR=auto` keeps the app self-contained: it uses the OpenCV
+SSD DNN detector when both model files are present, then falls back to the
+bundled Haar detector. Set `SHORTS_FACE_DETECTOR=off` to disable face tracking,
+`haar` to force the fallback, or `dnn` to require the modern detector. The DNN
+model is optional and is not downloaded automatically; point
+`SHORTS_FACE_DNN_MODEL` and `SHORTS_FACE_DNN_CONFIG` at the two OpenCV SSD files
+when you have them. Missing files in explicit `dnn` mode produce a clear
+configuration error instead of a silent misframe.
 
 ## Command line and Python API
 
@@ -212,6 +233,7 @@ The loopback FastAPI service powers the desktop shell and can be used by local t
 | `GET /api/jobs/{id}/logs` | Download one project's full activity log (legacy route) |
 | `POST /api/jobs/{id}/cancel` | Cancel a running project |
 | `POST /api/jobs/{id}/preview` | Render a lightweight draft |
+| `GET /api/jobs/{id}/timeline` / `GET /api/jobs/{id}/waveform` | Read transcript markers and cached audio peaks for the editor timeline |
 | `POST /api/jobs/{id}/clips/{index}` | Regenerate one clip with editor settings |
 | `GET /api/jobs/{id}/export` | Download a project ZIP |
 | `GET /api/update` | Check the latest wiifhub release |
@@ -226,6 +248,7 @@ All routes bind to `127.0.0.1` by default. Do not expose the service to a public
 shorts_generator/      Pipeline, ranking, transcription, and renderers
 web/                   FastAPI service and Shorts Studio interface
 assets/                Original icon and project artwork
+tests/                 Fast, network-free API and static-asset smoke tests
 installer/             Inno Setup definition
 launcher.py            Browser-free desktop launcher
 main.py                CLI entry point
@@ -236,10 +259,32 @@ Dockerfile             CPU server image
 Dockerfile.gpu         NVIDIA CUDA server image
 docker-compose.yml     CPU/GPU Compose profiles
 requirements-docker.txt Container server dependencies
+requirements-dev.txt  Pinned test, lint, type-check, and audit tools
+pyproject.toml        Project metadata and Ruff/mypy/pytest configuration
 output/                Local projects (ignored by Git)
 ```
 
 ## Building a release
+
+### Developer checks
+
+Install the pinned development tools before making changes, then run the same
+checks used by GitHub Actions:
+
+```powershell
+.\venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\venv\Scripts\python.exe -m ruff check shorts_generator web launcher.py main.py tests
+.\venv\Scripts\python.exe -m mypy
+.\venv\Scripts\python.exe -m pytest
+.\venv\Scripts\python.exe -m pip_audit -r requirements-dev.txt --progress-spinner off
+node --check web\static\app.js
+node --check web\static\theme-init.js
+```
+
+The CI workflow also validates the Docker Compose file. `pre-commit install`
+enables the Ruff and mypy hooks locally. The type-check configuration focuses
+on the optional face-detector boundary; the legacy rendering modules remain
+runtime-typed because they integrate dynamic OpenCV/FFmpeg APIs.
 
 Build from a clean Windows checkout with the local dependencies installed:
 
