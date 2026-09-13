@@ -54,7 +54,7 @@ from shorts_generator.config import (  # noqa: E402
     runtime_credentials,
 )
 
-app = FastAPI(title="Shorts Studio", version="0.8.3")
+app = FastAPI(title="Shorts Studio", version="0.8.4")
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
 _jobs: Dict[str, Dict[str, Any]] = {}
@@ -97,7 +97,7 @@ _max_upload_mb = _positive_int_env("SHORTS_MAX_UPLOAD_MB", 2048)
 _max_upload_bytes = _max_upload_mb * 1024 * 1024
 _auto_resume = os.getenv("SHORTS_AUTO_RESUME", "true").strip().lower() in {"1", "true", "yes", "on"}
 
-_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.8.3").strip().lstrip("v") or "0.8.3"
+_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.8.4").strip().lstrip("v") or "0.8.4"
 _GITHUB_REPO = "wiifhub/AI-Youtube-Shorts-Generator"
 _update_lock = threading.Lock()
 _update_state: Dict[str, Any] = {

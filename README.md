@@ -7,7 +7,7 @@
 <p align="center"><strong>A local-first workspace for turning long videos into polished short-form clips.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.8.3">Latest release: v0.8.3</a>
+  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.8.4">Latest release: v0.8.4</a>
   &nbsp; | &nbsp;
   <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases">Downloads</a>
   &nbsp; | &nbsp;
@@ -35,11 +35,13 @@ The theme switch applies to the entire interface. The light Settings view is sho
 - **Design captions** with Bold, Clean, Boxed, and Karaoke presets, custom font, size, color, safe position, word timing, SRT/VTT downloads, and optional filler-word cleanup.
 - **Clean and shape audio** with silence trimming, real silent-section jump cuts, loudness normalization, background-noise reduction, and optional music.
 - **Choose layouts** with a single frame or a two-panel speaker layout, plus watermark, intro, outro, and automatic thumbnails.
+- **Start quickly with project presets** for Podcast / interview, Educational, Reaction / gaming, Story / emotional, Kids / family, or fully custom settings. Presets are starting points and remain editable.
 - **Review before committing** with a low-resolution preview that uses the same crop, captions, layout, and timestamps as the final render.
 - **Manage projects** with persistent jobs, batch sources, cancellation, retry, resume-after-restart, rename, duplicate, archive, recoverable delete, and Undo last delete.
 - **Export creator assets** as a ZIP containing clips, thumbnails, caption files, `metadata.json`, publishing text, and a manifest.
 - **Use GPU controls** to choose Whisper model and Auto/CPU/CUDA device. CUDA is detected at runtime and safely falls back to CPU.
 - **Use dark or light mode** from the top-bar switch. Your choice is saved locally and applies to panels, forms, previews, captions, timelines, dialogs, status states, and the closed screen.
+- **Personalize the accent** from Settings with Ocean, Indigo, Sunset, Emerald, or Berry palettes. Accent choices update controls, focus states, timelines, captions, badges, and the preview without changing your Dark, Light, or System appearance choice.
 - **Update in place** from the Settings view. Packaged Windows builds can download the newest release from this repository and restart without a reinstall.
 - **Run without a browser** in the packaged desktop build through an embedded WebView2 window. A browser fallback remains available when WebView2 is unavailable.
 - **Use hosted providers safely** by entering MuAPI, OpenAI, or Gemini credentials in Settings. Session-entered keys are sent only with the relevant job and are never saved in project files.
@@ -48,7 +50,7 @@ The theme switch applies to the entire interface. The light Settings view is sho
 
 ### Recommended: installer
 
-1. Download [ShortsStudio-Setup-v0.8.3.exe](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.8.3/ShortsStudio-Setup-v0.8.3.exe).
+1. Download [ShortsStudio-Setup-v0.8.4.exe](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.8.4/ShortsStudio-Setup-v0.8.4.exe).
 2. Run the installer and choose whether to create a desktop shortcut.
 3. Start **Shorts Studio** from the Start menu or desktop.
 
@@ -58,7 +60,7 @@ Windows may show SmartScreen for an unsigned build. Select **More info -> Run an
 
 ### Portable ZIP
 
-1. Download [ShortsStudio-v0.8.3-windows.zip](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.8.3/ShortsStudio-v0.8.3-windows.zip).
+1. Download [ShortsStudio-v0.8.4-windows.zip](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.8.4/ShortsStudio-v0.8.4-windows.zip).
 2. Extract the entire ZIP to a folder (do not run the EXE inside the archive).
 3. Run `unblock_and_start.bat`, or double-click `ShortsStudio.exe` after Windows has unblocked the files.
 
@@ -70,7 +72,7 @@ Open **Settings** in the sidebar (or use the top-bar **Settings** button) and cl
 
 Settings also includes:
 
-- **Appearance:** Dark, Light, or system theme, plus a reduced-motion preference.
+- **Appearance:** Dark, Light, or system theme, five accent palettes, plus a reduced-motion preference.
 - **API credentials:** Enter a MuAPI key for API mode, or optional OpenAI/Gemini keys for local highlight ranking. The fields are masked, session-only, and excluded from saved jobs.
 - **Rendering defaults:** Local/API mode, output resolution, caption preset, aspect ratio, face framing, and a default save folder for new projects.
 - **Storage & privacy:** The active output path, free space, an **Open output folder** shortcut, and a local-first processing explanation.
