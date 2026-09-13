@@ -2000,12 +2000,13 @@ def _launch_update(asset: Dict[str, str], downloaded: Path) -> None:
 def _download_and_apply(asset: Dict[str, str], latest: str) -> None:
     import requests
 
-    target_dir = _update_dir()
-    target_dir.mkdir(parents=True, exist_ok=True)
-    filename = Path(asset["name"]).name
-    target = target_dir / filename
-    partial = target.with_name(target.name + ".part")
+    partial: Optional[Path] = None
     try:
+        target_dir = _update_dir()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        filename = Path(asset["name"]).name
+        target = target_dir / filename
+        partial = target.with_name(target.name + ".part")
         _set_update_state(status="downloading", latest_version=latest, asset_name=filename, progress=0, total=0, message=f"Downloading {filename}", error=None)
         with requests.get(
             asset["url"],
@@ -2029,10 +2030,11 @@ def _download_and_apply(asset: Dict[str, str], latest: str) -> None:
         _launch_update(asset, target)
         threading.Thread(target=lambda: (time.sleep(0.35), os._exit(0)), name="shorts-studio-update-exit", daemon=True).start()
     except Exception as exc:
-        try:
-            partial.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if partial is not None:
+            try:
+                partial.unlink(missing_ok=True)
+            except OSError:
+                pass
         _set_update_state(status="error", message="Update failed", error=str(exc))
 
 
