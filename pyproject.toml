@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shorts-studio"
-version = "0.9.4"
+version = "0.9.5"
 description = "Local-first workspace for turning long videos into polished short-form clips"
 readme = "README.md"
 requires-python = ">=3.10"

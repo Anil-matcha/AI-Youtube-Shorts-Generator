@@ -86,7 +86,7 @@
       if (persist) { try { localStorage.setItem(ACCENT_KEY, choice); } catch (_) {} }
       updateAccentControls(choice);
     }
-    const UI_APP_VERSION = '0.9.4';
+    const UI_APP_VERSION = '0.9.5';
     const state = { jobs: [], activeJobId: null, activeJob: null, result: null, selectedClip: 0, poll: null, pollBusy: false, pollFailures: 0, uploading: false, dragged: false, setup: null, showArchived: false, lastDeleted: null, update: null, updatePoll: null, updateBusy: false, logs: [], logsLoading: false, logsDebounce: null, settings: {}, credentials: {muapi:'',openai:'',gemini:''} };
     const DEFAULT_SETTINGS = { theme:'system', accent:'cyan', reducedMotion:false, autoUpdateCheck:false, mode:'local', outputHeight:'1920', captionStyle:'bold', aspect:'9:16', autoReframe:true, saveFolder:'', llmProvider:'openai' };
     function readSettings() { try { const raw=JSON.parse(localStorage.getItem(SETTINGS_KEY)||'null'); const value=raw && typeof raw==='object' ? {...DEFAULT_SETTINGS,...raw} : {...DEFAULT_SETTINGS}; delete value.credentials; if(!raw){const legacy=localStorage.getItem(THEME_KEY);if(legacy==='light'||legacy==='dark')value.theme=legacy;} const savedAccent=localStorage.getItem(ACCENT_KEY); value.accent=normalizeAccent(raw && raw.accent !== undefined ? value.accent : (savedAccent || value.accent)); return value; } catch (_) { return {...DEFAULT_SETTINGS}; } }

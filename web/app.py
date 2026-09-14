@@ -30,6 +30,7 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
+from contextlib import asynccontextmanager
 from fastapi import File, FastAPI, Header, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -59,9 +60,17 @@ from shorts_generator.config import (  # noqa: E402
     runtime_credentials,
 )
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    if _auto_resume:
+        threading.Thread(target=_resume_interrupted_jobs, name="shorts-studio-resume", daemon=True).start()
+    yield
+
+
 app = FastAPI(
     title="Shorts Studio",
-    version="0.9.4",
+    version="0.9.5",
     description="Local-first video highlight extraction, editing, and export workspace.",
     contact={"name": "Shorts Studio", "url": "https://github.com/wiifhub/AI-Youtube-Shorts-Generator"},
     license_info={"name": "MIT"},
@@ -72,6 +81,7 @@ app = FastAPI(
         {"name": "media", "description": "Upload and stream source or generated media."},
         {"name": "updates", "description": "Check and apply releases from the wiifhub repository."},
     ],
+    lifespan=lifespan,
 )
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
@@ -159,7 +169,7 @@ _max_upload_bytes = _max_upload_mb * 1024 * 1024
 _max_json_bytes = _positive_int_env("SHORTS_MAX_JSON_MB", 2) * 1024 * 1024
 _auto_resume = os.getenv("SHORTS_AUTO_RESUME", "true").strip().lower() in {"1", "true", "yes", "on"}
 
-_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.9.4").strip().lstrip("v") or "0.9.4"
+_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.9.5").strip().lstrip("v") or "0.9.5"
 _GITHUB_REPO = "wiifhub/AI-Youtube-Shorts-Generator"
 _update_lock = threading.Lock()
 _update_state: Dict[str, Any] = {
@@ -692,7 +702,7 @@ def _run_job(
     def progress(stage: str, message: str) -> None:
         with _lock:
             job = _jobs[job_id]
-            if _cancel_events.get(job_id, threading.Event()).is_set():
+            if _cancel_events.get(job_id) and _cancel_events[job_id].is_set():
                 raise RuntimeError("Job cancelled")
             job["stage"] = stage
             job["message"] = message
@@ -957,12 +967,6 @@ def _resume_interrupted_jobs() -> None:
             pending.append((job_id, req))
     for job_id, req in pending:
         _start_job_thread(job_id, req)
-
-
-@app.on_event("startup")
-async def resume_interrupted_jobs() -> None:
-    if _auto_resume:
-        threading.Thread(target=_resume_interrupted_jobs, name="shorts-studio-resume", daemon=True).start()
 
 
 @app.post("/api/jobs")
