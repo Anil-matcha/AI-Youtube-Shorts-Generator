@@ -48,6 +48,7 @@ Built for creators, agencies, and developers who don't want to pay $20–$300/mo
 - **🧩 Long-Video Aware**: Videos over 30 minutes are auto-chunked with overlap so nothing gets missed
 - **♻️ Smart Dedupe**: Overlapping highlights are collapsed by score so you never get two near-duplicate clips
 - **🎯 Smart Vertical Crop**: API mode uses MuAPI's auto-crop; local mode runs OpenCV face tracking with motion smoothing
+- **🎵 Optional Background Music (Sonilo)**: Pass `--music` and each rendered short gets an original soundtrack matched to the video — generated from the clip's pacing, motion, and emotion, mixed under the original audio at low volume so the speech stays intact. Tracks are licensed and safe for commercial use (terms apply)
 - **📱 Any Aspect Ratio**: 9:16 for TikTok/Reels/Shorts, 1:1 for square, anything else by flag
 - **🧰 CLI + Python Library**: Use it from the shell or import `generate_shorts(...)` into your own pipeline
 - **📦 JSON Output**: `--output-json` dumps the full result (transcript + every candidate highlight + final clip URLs/paths) for downstream automation
@@ -93,6 +94,10 @@ Don't want to self-host? The [AI Clipping API](https://muapi.ai/playground/ai-cl
    ```bash
    # API mode (default)
    MUAPI_API_KEY=your_muapi_key_here
+
+   # Background music (--music) — optional
+   SONILO_API_KEY=your_sonilo_key_here
+   SONILO_MUSIC_VOLUME=0.3           # optional, music level under the original audio
 
    # Local mode (--mode local)
    LLM_PROVIDER=openai         # openai or gemini
@@ -180,6 +185,8 @@ xargs -a urls.txt -I{} python main.py "{}"
 | `--aspect-ratio` | `9:16` | Any ratio; `9:16` for TikTok/Reels, `1:1` for square |
 | `--format` | `720` | Source download resolution: `360` / `480` / `720` / `1080` |
 | `--language` | auto | Force Whisper language code (e.g. `en`) |
+| `--music` | off | Give each short an original soundtrack matched to the video via [Sonilo](https://sonilo.com), mixed under the original audio (needs `SONILO_API_KEY`) |
+| `--music-prompt` | — | Optional style hint for `--music`, e.g. `"lofi hip hop, mellow"` |
 | `--output-json` | — | Dump the full result (transcript + all candidates) to a file |
 
 ### API mode vs Local mode
@@ -192,6 +199,42 @@ xargs -a urls.txt -I{} python main.py "{}"
 | Vertical crop | MuAPI `/autocrop` | `ffmpeg` + OpenCV face tracking |
 | Output | hosted URLs | local mp4 paths |
 | Required keys | `MUAPI_API_KEY` | `OPENAI_API_KEY` or `GEMINI_API_KEY` (+ `ffmpeg` on PATH) |
+
+### Background music (Sonilo)
+
+By default, shorts ship with their original audio only. Pass `--music` and each
+rendered short is sent to [Sonilo](https://sonilo.com)'s `/v1/video-to-music`
+endpoint, which analyzes the clip's pacing, motion, and emotion and returns an
+original soundtrack matched to the video. The track is then mixed under the
+clip's existing audio with `ffmpeg` at low volume (default `0.3`, tune with
+`SONILO_MUSIC_VOLUME`), so the speech stays fully intelligible. Generated
+tracks are licensed and safe for commercial use (terms apply).
+
+```bash
+# .env
+SONILO_API_KEY=your_sonilo_key   # https://platform.sonilo.com/dashboard/api-keys
+```
+
+```bash
+python main.py "https://www.youtube.com/watch?v=VIDEO_ID" --music
+python main.py "/Users/you/Videos/input.mp4" --mode local --music \
+    --music-prompt "lofi hip hop, mellow"
+```
+
+Details:
+
+- **Fully opt-in.** Without `--music`, nothing changes — no Sonilo calls, no
+  new dependencies (the client uses the `requests` package already required
+  for API mode).
+- **Works in both modes.** The mix runs locally with `ffmpeg` (already
+  required for `--mode local`). In API mode the finished clip is downloaded
+  first, so the short with music lands in `LOCAL_OUTPUT_DIR` as
+  `short_XX.mp4` (the original hosted URL is kept as `source_clip_url`).
+- **The track is saved too.** Each short gets a `short_XX.music.m4a` next to
+  it, so you can remix at a different volume without regenerating.
+- **Failures never break the run.** Any per-clip problem (API error, missing
+  `ffmpeg`, clip over the endpoint's 6-minute duration limit) is logged and
+  that short ships with its original audio.
 
 ## How It Works
 
@@ -277,6 +320,7 @@ AI-Youtube-Shorts-Generator/
     ├── transcriber.py            API mode: MuAPI /openai-whisper client
     ├── highlights.py             shared LLM virality ranking (pluggable backend)
     ├── clipper.py                API mode: MuAPI /autocrop
+    ├── soundtrack.py             optional Sonilo background music (--music)
     ├── pipeline.py               mode dispatcher (api ↔ local)
     └── local/                    --mode local backends (offline)
         ├── downloader.py         yt-dlp download
