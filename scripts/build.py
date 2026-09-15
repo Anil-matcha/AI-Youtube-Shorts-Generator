@@ -21,8 +21,25 @@ ROOT = Path(__file__).resolve().parent.parent
 # These imports are part of the desktop runtime, not optional build-time
 # conveniences.  PyInstaller can otherwise continue after silently dropping
 # modules that are unavailable in the interpreter used to run this script,
-# producing an EXE that fails immediately with ``No module named uvicorn``.
-_REQUIRED_BUILD_IMPORTS = ("PyInstaller", "fastapi", "uvicorn", "pydantic", "dotenv", "webview", "pystray", "PIL")
+# producing an EXE that launches but fails when a local render reaches a
+# dynamically imported dependency.
+_REQUIRED_BUILD_IMPORTS = (
+    "PyInstaller",
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "dotenv",
+    "webview",
+    "pystray",
+    "PIL",
+    # Local mode imports these packages dynamically when a render starts.
+    "faster_whisper",
+    "ctranslate2",
+    "yt_dlp",
+    "cv2",
+    "openai",
+    "google.genai",
+)
 
 # Running ``python scripts/build.py`` puts ``scripts/`` (not the repository
 # root) on ``sys.path``.  Add the checkout explicitly so the installer target
@@ -179,8 +196,8 @@ def _copy_windows_runtime_assets(bundle: Path, python: Path) -> None:
         shutil.copy2(cudnn, bundle / cudnn.name)
 
 
-def build_portable(*, dry_run: bool = False) -> None:
-    python = _build_python(dry_run=dry_run)
+def _portable_command(python: str) -> List[str]:
+    """Build the PyInstaller command for the self-contained desktop bundle."""
     command: List[str] = [
         python,
         "-m",
@@ -203,6 +220,18 @@ def build_portable(*, dry_run: bool = False) -> None:
             "--collect-submodules",
             "shorts_generator",
             "--collect-all",
+            "faster_whisper",
+            "--collect-all",
+            "ctranslate2",
+            "--collect-all",
+            "yt_dlp",
+            "--collect-all",
+            "cv2",
+            "--collect-all",
+            "openai",
+            "--collect-all",
+            "google.genai",
+            "--collect-all",
             "webview",
             "--collect-all",
             "pystray",
@@ -211,6 +240,12 @@ def build_portable(*, dry_run: bool = False) -> None:
             "launcher.py",
         ]
     )
+    return command
+
+
+def build_portable(*, dry_run: bool = False) -> None:
+    python = _build_python(dry_run=dry_run)
+    command = _portable_command(python)
     _run(command, dry_run=dry_run)
     if dry_run:
         return

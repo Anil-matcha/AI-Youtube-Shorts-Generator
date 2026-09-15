@@ -70,7 +70,7 @@
   });
 
   window.ShortsStudioState = {
-    UI_APP_VERSION: '0.11.2',
+    UI_APP_VERSION: '0.11.3',
     THEME_KEY: 'shorts-studio-theme',
     ACCENT_KEY: 'shorts-studio-accent',
     ACCENT_CHOICES: Object.freeze(['cyan', 'indigo', 'sunset', 'emerald', 'berry']),

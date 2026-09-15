@@ -1,12 +1,30 @@
 # Shorts Studio Upgrade Roadmap
 
-**Current local tag:** v0.11.2 (release candidate)
+**Current local tag:** v0.11.3 (release candidate; local gate passed)
 **Next implementation target:** v1.0.0 (production-ready API and migration work)
 **Last updated:** 2026-09-15
 
 The actionable implementation list now lives in [TODO.md](TODO.md). This
 roadmap tracks release milestones and verified state; it is not a second
 unordered TODO list.
+
+---
+
+## v0.11.3 — Windows Local Runtime Hardening
+
+The v0.11.3 follow-up contains the packaged Local runtime hardening and is
+ready for the release-gate evidence below.
+
+- [x] **T-034 Packaged Local runtime completeness** — Require and collect the
+      dynamically imported Whisper/CTranslate2, yt-dlp, OpenCV, and optional
+      local-ranking runtime packages; report CTranslate2 in setup diagnostics;
+      add a build regression test and a real packaged CPU render smoke.
+- [x] Fresh authenticated packaged-runtime smoke passes for both the portable
+      bundle and a fresh installer install, including CPU Local rendering.
+- [x] Record the certificate-backed signing decision: the owner certificate is
+      not configured, so this release is explicitly unsigned and hash-verified.
+- [x] Verify the source repository is clean before tagging and publishing.
+- [ ] Publish v0.11.3 after the final remote CI checks are green.
 
 ---
 

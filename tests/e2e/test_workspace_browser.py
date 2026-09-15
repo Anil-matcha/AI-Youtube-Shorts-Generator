@@ -208,7 +208,7 @@ def test_v0102_frontend_modules_progress_and_keyboard_tabs(browser_page: Page) -
     page = browser_page
     page.locator("#newProjectButton").click()
     page.locator("#workspaceView").wait_for(state="visible")
-    assert page.locator('meta[name="shorts-studio-version"]').get_attribute("content") == "0.10.2"
+    assert page.locator('meta[name="shorts-studio-version"]').get_attribute("content") == "0.11.3"
     resources = page.evaluate("""() => performance.getEntriesByType('resource').map(entry => entry.name)""")
     for module in ("state.js", "ui.js", "api.js", "editor.js", "timeline.js"):
         assert any(f"/static/modules/{module}" in resource for resource in resources)

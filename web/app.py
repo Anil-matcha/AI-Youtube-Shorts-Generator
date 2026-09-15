@@ -1713,7 +1713,14 @@ def _setup_report() -> Dict[str, Any]:
     ffmpeg = shutil.which("ffmpeg")
     ffprobe = shutil.which("ffprobe")
     gpu = gpu_status()
-    local_modules = {name: bool(importlib.util.find_spec(name)) for name in ("yt_dlp", "faster_whisper", "cv2")}
+    # ``faster_whisper`` imports CTranslate2 only when a model is loaded, so
+    # check both packages during setup.  This keeps a packaged build from
+    # reporting that Local mode is ready until its CPU Whisper runtime is
+    # actually present.
+    local_modules = {
+        name: bool(importlib.util.find_spec(name))
+        for name in ("yt_dlp", "faster_whisper", "ctranslate2", "cv2")
+    }
     provider = str(LLM_PROVIDER or "openai").strip().lower()
     provider_key = (
         bool(OPENAI_API_KEY)

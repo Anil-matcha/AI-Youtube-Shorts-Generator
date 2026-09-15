@@ -1,12 +1,21 @@
 # Shorts Studio TODO
 
-**Current local tag:** v0.11.2 (release candidate)
+**Current local tag:** v0.11.3 (release candidate; local gate passed)
 **Implementation target:** v1.0.0 (production-ready API and migration work)
 **Last reviewed:** 2026-09-15
 
 This is the canonical implementation backlog. Inline `TODO` comments should
 point to an item here; completed capabilities belong in `ROADMAP.md` rather
 than remaining as open TODOs.
+
+## v0.11.3 follow-up (release candidate)
+
+- [x] **T-034 Packaged Local runtime completeness** - Fixed PyInstaller
+  collection of dynamically imported `faster_whisper`, `ctranslate2`,
+  `yt_dlp`, OpenCV, and local-ranking SDKs; setup diagnostics now checks the
+  CPU Whisper runtime; packaging coverage and a real packaged CPU render smoke
+  pass. The fresh packaged smoke, certificate-backed signing decision, and
+  clean repository gate all pass; remote CI and publication remain next.
 
 ## v0.10.1 completion record
 

@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/wiifhub/shorts-studio
-  tag: "0.11.2"
+  tag: "0.11.3"
   pullPolicy: IfNotPresent
 
 replicaCount: 1
