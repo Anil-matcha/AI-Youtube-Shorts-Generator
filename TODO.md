@@ -1,7 +1,8 @@
 # Shorts Studio TODO
 
-**Current local tag:** v0.11.3 (published; local and remote gates passed)
-**Implementation target:** v1.0.0 (production-ready API and migration work)
+**Published baseline:** v0.11.3 (local and remote gates passed)
+**Current development branch:** `beta/v1.0.0` (production-readiness work)
+**Implementation target:** v1.0.0 Beta (production-ready API and migration work)
 **Last reviewed:** 2026-09-15
 
 This is the canonical implementation backlog. Inline `TODO` comments should

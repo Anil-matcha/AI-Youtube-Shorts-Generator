@@ -4,6 +4,11 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
 
 ## [Unreleased]
 
+### Development
+
+- Started the `beta/v1.0.0` branch for the production-ready API, migration,
+  documentation, and performance work tracked in the roadmap.
+
 ## [0.11.3] - 2026-09-15
 
 ### Fixed

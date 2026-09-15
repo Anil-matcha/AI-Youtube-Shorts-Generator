@@ -1,7 +1,8 @@
 # Shorts Studio Upgrade Roadmap
 
-**Current local tag:** v0.11.3 (published; local and remote gates passed)
-**Next implementation target:** v1.0.0 (production-ready API and migration work)
+**Published baseline:** v0.11.3 (local and remote gates passed)
+**Current development branch:** `beta/v1.0.0` (production-readiness work)
+**Next implementation target:** v1.0.0 Beta
 **Last updated:** 2026-09-15
 
 The actionable implementation list now lives in [TODO.md](TODO.md). This
