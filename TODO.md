@@ -71,7 +71,9 @@ asset upload remain intentionally out of scope.
 - [x] **T-030 Frontend modularization** - Split `web/static/app.js` into state,
   API, UI, editor, and timeline modules; fix response encoding at the server;
   add progress bars, skeletons, toasts, keyboard navigation, live status, and
-  batch-job monitoring with per-source cancellation.
+  batch-job monitoring with per-source cancellation. Added a reproducible SSE
+  fan-out probe; 1-250 connected clients stayed below the review thresholds,
+  so WebSocket/pub-sub is not justified for this single-process milestone.
 - [x] **T-031 Editing and export workflow** - Add durable project/media backup
   options, browser-local export presets, bounded multi-level undo/redo, and a
   clear multi-cut/merge workflow with removable ranges and merge guidance.

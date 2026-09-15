@@ -17,6 +17,8 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
   restore; metadata backups continue to omit local paths and provider secrets.
 - Declared UTF-8 for textual responses at the server boundary and added mobile-
   responsive batch rows plus reduced-motion styling.
+- Added a reproducible SSE fan-out scaling probe; the measured single-process
+  workload did not justify introducing WebSocket/pub-sub in this milestone.
 - Validation: 62 Python tests passed, 4 Playwright browser tests passed, plus
   compile, Ruff, mypy, JavaScript, package, pip-check, and pip-audit checks.
 

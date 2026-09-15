@@ -76,7 +76,9 @@ No push, GitHub release, or asset upload has been performed.
 - [x] Monitor every job in a batch instead of only the first job
 - [x] Add keyboard shortcuts and persistent error notifications
 - [x] Improve mobile layout and accessibility with automated checks
-- [ ] Evaluate WebSocket/pub-sub only if SSE scaling measurements justify it
+- [x] Evaluate WebSocket/pub-sub only if SSE scaling measurements justify it;
+      the v0.10.2 probe supports retaining SSE (see
+      `docs/performance/sse-scaling-v0.10.2.md`)
 
 ### Maintainability
 - [x] Fix UTF-8 response handling at the server level (remove DOM workaround)
