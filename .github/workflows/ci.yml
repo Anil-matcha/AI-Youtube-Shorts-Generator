@@ -12,6 +12,10 @@ jobs:
   quality:
     name: Lint, type-check, and test
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -19,7 +23,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
@@ -33,13 +37,59 @@ jobs:
         run: python -m mypy
 
       - name: Pytest
-        run: python -m pytest
+        # Keep a ratchetable floor while optional provider/GPU integrations
+        # remain covered through deterministic boundary tests.
+        run: python -m pytest --cov=shorts_generator --cov=web --cov-report=term-missing --cov-fail-under=35
 
       - name: JavaScript syntax
         run: node --check web/static/app.js && node --check web/static/theme-init.js
 
       - name: Dependency audit
-        run: python -m pip_audit -r requirements-dev.txt --progress-spinner off
+        run: |
+          python -m pip_audit -r requirements.txt --progress-spinner off
+          python -m pip_audit -r requirements-dev.txt --progress-spinner off
+          python -m pip_audit -r requirements-local.txt --progress-spinner off
+          python -m pip_audit -r requirements-gpu.txt --progress-spinner off
+          python -m pip_audit -r requirements-docker.txt --progress-spinner off
+
+  windows-smoke:
+    name: Windows packaged-runtime smoke
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install runtime and developer dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+          python -m pip install pyinstaller==6.22.2
+      - name: Build packaged executable
+        shell: pwsh
+        run: |
+          python -m pip install -r requirements-local.txt
+          python -m PyInstaller --noconfirm --clean --onedir --name ShortsStudio --windowed --icon assets\shorts_studio_icon.ico --add-data "web;web" --add-data "shorts_generator;shorts_generator" --add-data "assets;assets" --hidden-import web.app --collect-submodules shorts_generator --collect-all webview --collect-all pystray --collect-all PIL launcher.py
+      - name: API health smoke
+        shell: pwsh
+        run: |
+          $env:SHORTS_STUDIO_HEADLESS = "true"
+          $env:SHORTS_AUTO_RESUME = "false"
+          $env:SHORTS_STUDIO_BROWSER = "1"
+          $env:SHORTS_STUDIO_DATA_DIR = "$PWD\.ci-data"
+          $env:LOCAL_OUTPUT_DIR = "$PWD\.ci-data\output"
+          $process = Start-Process "$PWD\dist\ShortsStudio\ShortsStudio.exe" -ArgumentList '--browser','--port','18761' -PassThru -WindowStyle Hidden
+          try {
+            for ($i = 0; $i -lt 45; $i++) { try { Invoke-WebRequest http://127.0.0.1:18761/api/health -UseBasicParsing | Out-Null; break } catch { Start-Sleep -Seconds 1 } }
+            $response = Invoke-WebRequest http://127.0.0.1:18761/api/health -UseBasicParsing
+            if ($response.StatusCode -ne 200) { throw "Health check failed" }
+            Invoke-WebRequest http://127.0.0.1:18761/api/shutdown -Method Post -UseBasicParsing | Out-Null
+            $process.WaitForExit(10000)
+            if (-not $process.HasExited) { throw "Packaged process did not stop after shutdown" }
+          } finally { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
 
   compose:
     name: Validate Docker Compose
@@ -49,3 +99,42 @@ jobs:
         uses: actions/checkout@v4
       - name: Validate Compose file
         run: docker compose --env-file .env.docker.example config --quiet
+
+  browser-e2e:
+    name: Playwright creator flow and accessibility
+    runs-on: ubuntu-latest
+    env:
+      RUN_BROWSER_E2E: "1"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install browser test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements-dev.txt && python -m playwright install --with-deps chromium
+      - name: Run browser tests
+        run: python -m pytest -q tests/e2e
+
+  docker-runtime:
+    name: Docker runtime and non-root smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Build image
+        run: docker build --tag shorts-studio:ci .
+      - name: Start and verify runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --detach --rm --name shorts-studio-ci --publish 127.0.0.1:17860:7860 --env SHORTS_API_TOKEN=ci-token shorts-studio:ci
+          trap 'docker stop shorts-studio-ci >/dev/null 2>&1 || true' EXIT
+          for i in $(seq 1 45); do curl --fail --silent http://127.0.0.1:17860/api/health >/dev/null && break; sleep 2; done
+          curl --fail --silent http://127.0.0.1:17860/api/health >/dev/null
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:17860/api/system)" = "401"
+          curl --fail --silent -H 'Authorization: Bearer ci-token' http://127.0.0.1:17860/api/system >/dev/null
+          test "$(docker exec shorts-studio-ci id -u)" != "0"

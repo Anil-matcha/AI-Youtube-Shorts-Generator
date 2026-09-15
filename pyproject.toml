@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shorts-studio"
-version = "0.9.5"
+version = "0.10.0"
 description = "Local-first workspace for turning long videos into polished short-form clips"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,11 +33,13 @@ local = [
 gpu = ["torch==2.14.0"]
 dev = [
   "pytest==9.1.1",
+  "pytest-cov==7.0.0",
   "httpx==0.28.1",
   "ruff==0.16.7",
   "mypy==2.3.1",
   "pre-commit==4.6.2",
   "pip-audit==2.10.1",
+  "playwright==1.55.0",
 ]
 
 [tool.ruff]
@@ -54,14 +56,17 @@ ignore = ["E402", "E501", "F401", "F811"]
 
 [tool.mypy]
 python_version = "3.12"
-files = ["shorts_generator/local/face_detection.py"]
+files = ["shorts_generator", "web", "launcher.py", "main.py"]
 ignore_missing_imports = true
 follow_imports = "skip"
-check_untyped_defs = false
+check_untyped_defs = true
 disallow_untyped_defs = false
 warn_return_any = false
 warn_unused_ignores = false
 no_implicit_optional = false
+disallow_any_generics = false
+allow_untyped_globals = true
+disable_error_code = ["arg-type", "call-overload", "type-var", "assignment", "index", "union-attr", "attr-defined", "var-annotated", "func-returns-value"]
 exclude = "(^|/)(build|dist|release|venv|output)(/|$)"
 
 [tool.pytest.ini_options]

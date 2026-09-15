@@ -4,14 +4,18 @@ Reads a local media file and returns the same shape the highlight generator
 expects: {duration, segments[start, end, text]}.
 """
 
-import os
 import json
 import math
 import re
+import hashlib
+import threading
+from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
-from ..config import LOCAL_OUTPUT_DIR, LOCAL_WHISPER_DEVICE, LOCAL_WHISPER_MODEL
+from ..config import LOCAL_OUTPUT_DIR, LOCAL_WHISPER_DEVICE, LOCAL_WHISPER_MODEL, cancellation_requested
+
+_MODEL_LOCK = threading.Lock()
 
 
 def _cuda_ready() -> bool:
@@ -32,15 +36,58 @@ def _cuda_ready() -> bool:
         return False
 
 
-def _transcript_cache_path(media_path: str, cache_dir: Optional[str] = None) -> Path:
-    """Return the .srt cache path for a media file."""
+def _transcript_cache_path(
+    media_path: str,
+    cache_dir: Optional[str] = None,
+    *,
+    cache_key: Optional[str] = None,
+) -> Path:
+    """Return a collision-resistant .srt cache path for a media file.
+
+    ``cache_key`` is the content/settings signature used by normal
+    transcription.  Omitting it preserves the v0.9 stem-based helper for
+    callers that only need a predictable legacy path.
+    """
     target_dir = Path(cache_dir or LOCAL_OUTPUT_DIR)
     target_dir.mkdir(parents=True, exist_ok=True)
-    return target_dir / (Path(media_path).stem + ".srt")
+    stem = Path(media_path).stem
+    key = str(cache_key or "").strip()
+    if key and re.fullmatch(r"[A-Za-z0-9_-]{8,128}", key):
+        stem = f"transcript_{key}"
+    return target_dir / (stem + ".srt")
 
 
-def _word_cache_path(media_path: str, cache_dir: Optional[str] = None) -> Path:
-    return _transcript_cache_path(media_path, cache_dir=cache_dir).with_suffix(".words.json")
+def _word_cache_path(
+    media_path: str,
+    cache_dir: Optional[str] = None,
+    *,
+    cache_key: Optional[str] = None,
+) -> Path:
+    return _transcript_cache_path(media_path, cache_dir=cache_dir, cache_key=cache_key).with_suffix(".words.json")
+
+
+def _cache_metadata_path(
+    media_path: str,
+    cache_dir: Optional[str] = None,
+    *,
+    cache_key: Optional[str] = None,
+) -> Path:
+    return _transcript_cache_path(media_path, cache_dir=cache_dir, cache_key=cache_key).with_suffix(".meta.json")
+
+
+def _cache_signature(media_path: str, language: Optional[str], model_name: str, device: str) -> str:
+    """Fingerprint source bytes plus every input that changes Whisper output."""
+    source_hash = hashlib.sha256()
+    with Path(media_path).open("rb") as source:
+        while True:
+            if cancellation_requested():
+                raise RuntimeError("Job cancelled")
+            chunk = source.read(1024 * 1024)
+            if not chunk:
+                break
+            source_hash.update(chunk)
+    payload = f"{source_hash.hexdigest()}:{language or 'auto'}:{model_name}:{device}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _format_srt_timestamp(seconds: float) -> str:
@@ -70,8 +117,15 @@ def _parse_srt_timestamp(value: str) -> float:
     return hours * 3600 + minutes * 60 + seconds + (millis / 1000.0)
 
 
-def _write_srt_cache(media_path: str, transcript: Dict, cache_dir: Optional[str] = None) -> Path:
-    cache_path = _transcript_cache_path(media_path, cache_dir=cache_dir)
+def _write_srt_cache(
+    media_path: str,
+    transcript: Dict,
+    cache_dir: Optional[str] = None,
+    *,
+    signature: Optional[str] = None,
+    cache_key: Optional[str] = None,
+) -> Path:
+    cache_path = _transcript_cache_path(media_path, cache_dir=cache_dir, cache_key=cache_key)
     lines = []
     valid_segments = []
     raw_segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
@@ -101,9 +155,13 @@ def _write_srt_cache(media_path: str, transcript: Dict, cache_dir: Optional[str]
 
     cache_path.write_text("\n".join(lines), encoding="utf-8")
     words = [segment.get("words") for segment in valid_segments]
-    _word_cache_path(media_path, cache_dir=cache_dir).write_text(
+    _word_cache_path(media_path, cache_dir=cache_dir, cache_key=cache_key).write_text(
         json.dumps(words, ensure_ascii=False), encoding="utf-8"
     )
+    if signature:
+        _cache_metadata_path(media_path, cache_dir=cache_dir, cache_key=cache_key).write_text(
+            json.dumps({"signature": signature, "version": 1}, ensure_ascii=False), encoding="utf-8"
+        )
     return cache_path
 
 
@@ -153,28 +211,56 @@ def _resolve_device(requested: Optional[str] = None) -> str:
     return "cpu"
 
 
+@lru_cache(maxsize=3)
+def _load_whisper_model(model_name: str, device: str):
+    """Reuse loaded Whisper models across jobs in the same worker process."""
+    try:
+        from faster_whisper import WhisperModel  # type: ignore
+    except ImportError as e:
+        raise RuntimeError(
+            "faster-whisper is required for --mode local. Install it with:\n    pip install -r requirements-local.txt"
+        ) from e
+    compute_type = "float16" if device == "cuda" else "int8"
+    with _MODEL_LOCK:
+        return WhisperModel(model_name, device=device, compute_type=compute_type)
+
+
 def transcribe_local(
     media_path: str,
     language: Optional[str] = None,
     cache_dir: Optional[str] = None,
     model_name: Optional[str] = None,
     device: Optional[str] = None,
+    *,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> Dict:
     """Run faster-whisper on a local file path, caching the result as .srt."""
     media_path = str(media_path) if media_path is not None else ""
+    if cancel_check and cancel_check():
+        raise RuntimeError("Job cancelled")
     if not media_path or not Path(media_path).is_file():
         raise RuntimeError(f"Local media file does not exist: {media_path}")
-    cache_path = _transcript_cache_path(media_path, cache_dir=cache_dir)
+    selected_device = _resolve_device(device)
+    selected_model = model_name or LOCAL_WHISPER_MODEL
+    signature = _cache_signature(media_path, language, selected_model, selected_device)
+    cache_key = signature[:32]
+    cache_path = _transcript_cache_path(media_path, cache_dir=cache_dir, cache_key=cache_key)
     if cache_path.exists():
-        source_mtime = os.path.getmtime(media_path)
-        cache_mtime = cache_path.stat().st_mtime
-        if cache_mtime >= source_mtime:
+        cache_valid = False
+        try:
+            metadata = json.loads(
+                _cache_metadata_path(media_path, cache_dir=cache_dir, cache_key=cache_key).read_text(encoding="utf-8")
+            )
+            cache_valid = isinstance(metadata, dict) and metadata.get("signature") == signature
+        except (OSError, ValueError, TypeError):
+            cache_valid = False
+        if cache_valid:
             print(f"[transcribe/local] reusing cached transcript: {cache_path}", flush=True)
             try:
                 cached = _load_srt_cache(cache_path)
             except (OSError, ValueError, TypeError):
                 cached = {"duration": 0.0, "segments": []}
-            words_path = _word_cache_path(media_path, cache_dir=cache_dir)
+            words_path = _word_cache_path(media_path, cache_dir=cache_dir, cache_key=cache_key)
             if words_path.exists():
                 try:
                     cached_words = json.loads(words_path.read_text(encoding="utf-8"))
@@ -188,6 +274,7 @@ def transcribe_local(
             if not cached["segments"] or cached["duration"] <= 0.0:
                 print(f"[transcribe/local] cache is empty/invalid, deleting: {cache_path}", flush=True)
                 cache_path.unlink(missing_ok=True)
+                _cache_metadata_path(media_path, cache_dir=cache_dir, cache_key=cache_key).unlink(missing_ok=True)
             else:
                 print(
                     f"[transcribe/local] {len(cached['segments'])} cached segments, {cached['duration']:.0f}s of audio",
@@ -195,21 +282,13 @@ def transcribe_local(
                 )
                 return cached
 
-    try:
-        from faster_whisper import WhisperModel  # type: ignore
-    except ImportError as e:
-        raise RuntimeError(
-            "faster-whisper is required for --mode local. Install it with:\n    pip install -r requirements-local.txt"
-        ) from e
-
-    selected_device = _resolve_device(device)
-    selected_model = model_name or LOCAL_WHISPER_MODEL
-    compute_type = "float16" if selected_device == "cuda" else "int8"
     print(f"[transcribe/local] faster-whisper model={selected_model} device={selected_device}", flush=True)
 
     from ..config import LOCAL_WHISPER_VAD_FILTER, LOCAL_WHISPER_VAD_PARAMETERS
 
-    model = WhisperModel(selected_model, device=selected_device, compute_type=compute_type)
+    if cancellation_requested() or (cancel_check and cancel_check()):
+        raise RuntimeError("Job cancelled")
+    model = _load_whisper_model(selected_model, selected_device)
 
     transcribe_kwargs = {
         "audio": media_path,
@@ -232,6 +311,8 @@ def transcribe_local(
     except TypeError:
         segment_items = iter(())
     for s in segment_items:
+        if cancellation_requested() or (cancel_check and cancel_check()):
+            raise RuntimeError("Job cancelled")
         try:
             segment_start = float(s.start)
             segment_end = float(s.end)
@@ -279,6 +360,12 @@ def transcribe_local(
         duration = segments[-1]["end"] if segments else 0.0
     print(f"[transcribe/local] {len(segments)} segments, {duration:.0f}s of audio", flush=True)
     transcript = {"duration": duration, "segments": segments}
-    cache_path = _write_srt_cache(media_path, transcript, cache_dir=cache_dir)
+    cache_path = _write_srt_cache(
+        media_path,
+        transcript,
+        cache_dir=cache_dir,
+        signature=signature,
+        cache_key=cache_key,
+    )
     print(f"[transcribe/local] wrote cache: {cache_path}", flush=True)
     return transcript

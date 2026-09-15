@@ -8,17 +8,24 @@ Two modes:
 """
 
 from typing import Callable, Dict, List, Optional
+from urllib.parse import urlparse
 
 ProgressFn = Optional[Callable[[str, str], None]]
+CancelFn = Optional[Callable[[], bool]]
 
 from .clipper import crop_highlights
 from .config import (
     current_api_key,
+    current_llm_model,
     current_llm_provider,
+    current_llm_temperature,
     LOCAL_BURN_CAPTIONS,
     LOCAL_HEURISTIC_FALLBACK,
+    current_llm_usage,
     runtime_credentials,
+    runtime_llm_usage,
 )
+from .costs import estimate_cost, normalize_usage, rates_from_environment
 from .downloader import download_youtube
 from .highlights import call_muapi_llm, get_highlights
 from .transcriber import transcribe
@@ -28,6 +35,17 @@ def _emit(progress: ProgressFn, stage: str, message: str) -> None:
     print(f"[{stage}] {message}", flush=True)
     if progress:
         progress(stage, message)
+
+
+def _check_cancel(cancel_check: CancelFn) -> None:
+    if cancel_check:
+        try:
+            if cancel_check():
+                raise RuntimeError("Job cancelled")
+        except RuntimeError:
+            raise
+        except Exception:
+            return
 
 
 def _run_local(
@@ -62,6 +80,15 @@ def _run_local(
     whisper_device: Optional[str] = None,
     output_height: int = 1920,
     llm_provider: Optional[str] = None,
+    llm_model: Optional[str] = None,
+    llm_temperature: float = 0.2,
+    music_volume: float = 0.18,
+    music_fade_in: float = 0.0,
+    music_fade_out: float = 0.0,
+    cuts: Optional[List[Dict]] = None,
+    *,
+    cancel_check: CancelFn = None,
+    cost_rates: Optional[Dict[str, Dict[str, float]]] = None,
 ) -> Dict:
     from .local.clipper import crop_highlights_local
     from .local.downloader import download_youtube_local
@@ -70,6 +97,7 @@ def _run_local(
     from .local.transcriber import transcribe_local
     from .local.visual import analyze_video
 
+    _check_cancel(cancel_check)
     _emit(progress, "download", "Fetching source video...")
     source_path = download_youtube_local(
         youtube_url,
@@ -77,6 +105,7 @@ def _run_local(
         out_dir=output_dir,
     )
 
+    _check_cancel(cancel_check)
     _emit(progress, "analyze", "Scanning scenes, faces, and visual changes...")
     try:
         visual_events = analyze_video(source_path)
@@ -84,6 +113,7 @@ def _run_local(
         print(f"[visual/local] analysis skipped: {exc}", flush=True)
         visual_events = []
 
+    _check_cancel(cancel_check)
     _emit(progress, "transcribe", "Transcribing with Whisper...")
     transcript = transcribe_local(
         source_path,
@@ -91,11 +121,13 @@ def _run_local(
         cache_dir=output_dir,
         model_name=whisper_model,
         device=whisper_device,
+        cancel_check=cancel_check,
     )
     transcript["visual_events"] = visual_events
     if not transcript["segments"]:
         raise RuntimeError("Whisper produced no segments. The video may have no detectable speech.")
 
+    _check_cancel(cancel_check)
     _emit(progress, "rank", "Ranking viral highlights...")
     provider = str(llm_provider or current_llm_provider() or "openai").strip().lower()
     llm_configured = (provider == "openai" and bool(current_api_key("openai"))) or (
@@ -111,13 +143,18 @@ def _run_local(
     else:
         # Keep the dispatcher aligned with the explicit function argument even
         # when callers invoke ``generate_shorts`` outside the web worker.
-        with runtime_credentials(llm_provider=provider):
+        with runtime_credentials(
+            llm_provider=provider,
+            llm_model=llm_model,
+            llm_temperature=llm_temperature,
+        ):
             highlights_result = get_highlights(transcript, num_clips=num_clips, llm_fn=call_local_llm, focus=focus)
     all_highlights: List[Dict] = highlights_result.get("highlights", [])
     if not all_highlights:
         raise RuntimeError("Highlight generator returned zero clips.")
 
     top = sorted(all_highlights, key=lambda h: int(h.get("score", 0)), reverse=True)[:num_clips]
+    _check_cancel(cancel_check)
     _emit(progress, "crop", f"Cropping {len(top)} of {len(all_highlights)} candidates...")
 
     shorts = crop_highlights_local(
@@ -147,14 +184,29 @@ def _run_local(
         jump_cuts=jump_cuts,
         layout=layout,
         output_height=output_height,
+        music_volume=music_volume,
+        music_fade_in=music_fade_in,
+        music_fade_out=music_fade_out,
+        cuts=cuts,
+        cancel_check=cancel_check,
     )
 
+    usage_record = current_llm_usage().get(provider)
+    usage = normalize_usage(usage_record.get("usage") if isinstance(usage_record, dict) else None)
+    rates = cost_rates or rates_from_environment()
     return {
         "mode": "local",
         "source_video_url": source_path,
         "transcript": transcript,
         "highlights": all_highlights,
         "shorts": shorts,
+        "llm": {
+            "provider": provider,
+            "model": str(llm_model or current_llm_model(provider)),
+            "temperature": current_llm_temperature(llm_temperature),
+            "usage": usage,
+            "estimated_cost_usd": estimate_cost(provider, str(llm_model or current_llm_model(provider)), usage, rates),
+        },
     }
 
 
@@ -166,15 +218,23 @@ def _run_api(
     language: Optional[str],
     progress: ProgressFn = None,
     focus: str = "balanced",
+    llm_model: Optional[str] = None,
+    llm_temperature: float = 0.2,
+    *,
+    cancel_check: CancelFn = None,
+    cost_rates: Optional[Dict[str, Dict[str, float]]] = None,
 ) -> Dict:
+    _check_cancel(cancel_check)
     _emit(progress, "download", "Fetching source video via MuAPI...")
     source_url = download_youtube(youtube_url, fmt=download_format)
 
+    _check_cancel(cancel_check)
     _emit(progress, "transcribe", "Transcribing with Whisper...")
     transcript = transcribe(source_url, language=language)
     if not transcript["segments"]:
         raise RuntimeError("Whisper produced no segments. The video may have no detectable speech.")
 
+    _check_cancel(cancel_check)
     _emit(progress, "rank", "Ranking viral highlights...")
     highlights_result = get_highlights(transcript, num_clips=num_clips, llm_fn=call_muapi_llm, focus=focus)
     all_highlights: List[Dict] = highlights_result.get("highlights", [])
@@ -182,16 +242,27 @@ def _run_api(
         raise RuntimeError("Highlight generator returned zero clips.")
 
     top = sorted(all_highlights, key=lambda h: int(h.get("score", 0)), reverse=True)[:num_clips]
+    _check_cancel(cancel_check)
     _emit(progress, "crop", f"Cropping {len(top)} of {len(all_highlights)} candidates...")
 
     shorts = crop_highlights(source_url, top, aspect_ratio=aspect_ratio)
 
+    usage_record = current_llm_usage().get("muapi")
+    usage = normalize_usage(usage_record.get("usage") if isinstance(usage_record, dict) else None)
+    rates = cost_rates or rates_from_environment()
     return {
         "mode": "api",
         "source_video_url": source_url,
         "transcript": transcript,
         "highlights": all_highlights,
         "shorts": shorts,
+        "llm": {
+            "provider": "muapi",
+            "model": "gpt-5-mini",
+            "temperature": None,
+            "usage": usage,
+            "estimated_cost_usd": estimate_cost("muapi", "gpt-5-mini", usage, rates),
+        },
     }
 
 
@@ -228,6 +299,15 @@ def generate_shorts(
     whisper_device: Optional[str] = None,
     output_height: int = 1920,
     llm_provider: Optional[str] = None,
+    music_volume: float = 0.18,
+    music_fade_in: float = 0.0,
+    music_fade_out: float = 0.0,
+    cuts: Optional[List[Dict]] = None,
+    llm_model: Optional[str] = None,
+    llm_temperature: float = 0.2,
+    *,
+    cancel_check: CancelFn = None,
+    cost_rates: Optional[Dict[str, Dict[str, float]]] = None,
 ) -> Dict:
     """Run the full pipeline and return a structured result.
 
@@ -272,48 +352,65 @@ def generate_shorts(
         num_clips = 3
     num_clips = max(1, min(12, num_clips))
     mode = str(mode or "api").strip().lower()
-    if mode == "local":
-        return _run_local(
-            youtube_url,
-            num_clips,
-            aspect_ratio,
-            download_format,
-            language,
-            progress,
-            output_dir,
-            caption_style,
-            remove_silence,
-            normalize_audio,
-            denoise_audio,
-            remove_filler_words,
-            caption_position,
-            caption_font,
-            caption_size,
-            caption_color,
-            focus,
-            background_music,
-            watermark,
-            auto_reframe,
-            crop_position,
-            fit_mode,
-            zoom,
-            intro,
-            outro,
-            jump_cuts,
-            layout,
-            whisper_model,
-            whisper_device,
-            output_height,
-            llm_provider,
-        )
     if mode == "api":
-        return _run_api(
-            youtube_url,
-            num_clips,
-            aspect_ratio,
-            download_format,
-            language,
-            progress,
-            focus,
-        )
+        parsed_source = urlparse(str(youtube_url or "").strip())
+        if parsed_source.scheme.lower() not in {"http", "https"} or not parsed_source.netloc:
+            raise ValueError("API mode requires an http(s) video URL; choose Local mode for a file path.")
+    with runtime_llm_usage():
+        if mode == "local":
+            return _run_local(
+                youtube_url,
+                num_clips,
+                aspect_ratio,
+                download_format,
+                language,
+                progress,
+                output_dir,
+                caption_style,
+                remove_silence,
+                normalize_audio,
+                denoise_audio,
+                remove_filler_words,
+                caption_position,
+                caption_font,
+                caption_size,
+                caption_color,
+                focus,
+                background_music,
+                watermark,
+                auto_reframe,
+                crop_position,
+                fit_mode,
+                zoom,
+                intro,
+                outro,
+                jump_cuts,
+                layout,
+                whisper_model,
+                whisper_device,
+                output_height,
+                llm_provider,
+                llm_model,
+                llm_temperature,
+                music_volume,
+                music_fade_in,
+                music_fade_out,
+                cuts,
+                cancel_check=cancel_check,
+                cost_rates=cost_rates,
+            )
+        if mode == "api":
+            return _run_api(
+                youtube_url,
+                num_clips,
+                aspect_ratio,
+                download_format,
+                language,
+                progress,
+                focus,
+                llm_model,
+                llm_temperature,
+                cancel_check=cancel_check,
+                cost_rates=cost_rates,
+            )
     raise ValueError(f"Unknown mode: {mode!r}. Use 'api' or 'local'.")

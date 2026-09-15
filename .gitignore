@@ -4,6 +4,8 @@
 !.env.docker.example
 __pycache__/
 *.pyc
+.coverage
+htmlcov/
 .venv/
 venv/
 .agents/

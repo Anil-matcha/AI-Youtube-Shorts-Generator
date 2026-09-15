@@ -3,7 +3,7 @@ import math
 import os
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 
 from dotenv import load_dotenv
 
@@ -52,6 +52,55 @@ FACE_DNN_CONFIG = os.getenv("SHORTS_FACE_DNN_CONFIG", "").strip()
 # key accidentally.  A missing override falls back to the normal environment
 # variable, preserving CLI and .env behavior.
 _RUNTIME_CREDENTIALS: ContextVar[dict[str, str]] = ContextVar("shorts_studio_runtime_credentials", default={})
+_RUNTIME_LLM_OPTIONS: ContextVar[dict[str, str]] = ContextVar("shorts_studio_runtime_llm_options", default={})
+_RUNTIME_CANCEL_CHECK: ContextVar[Optional[Callable[[], bool]]] = ContextVar(
+    "shorts_studio_runtime_cancel_check", default=None
+)
+_RUNTIME_PROCESS_REGISTER: ContextVar[Optional[Callable[[Any], None]]] = ContextVar(
+    "shorts_studio_runtime_process_register", default=None
+)
+_RUNTIME_PROCESS_UNREGISTER: ContextVar[Optional[Callable[[Any], None]]] = ContextVar(
+    "shorts_studio_runtime_process_unregister", default=None
+)
+_RUNTIME_LLM_USAGE: ContextVar[dict[str, Any]] = ContextVar("shorts_studio_runtime_llm_usage", default={})
+
+
+def cancellation_requested() -> bool:
+    """Return whether the current render has received a cancellation request."""
+    callback = _RUNTIME_CANCEL_CHECK.get()
+    try:
+        return bool(callback and callback())
+    except Exception:
+        return False
+
+
+def register_runtime_process(process: Any) -> None:
+    """Register a child process with the owning job for cooperative shutdown."""
+    callback = _RUNTIME_PROCESS_REGISTER.get()
+    if callback:
+        callback(process)
+
+
+def unregister_runtime_process(process: Any) -> None:
+    """Remove a child process from the owning job's termination registry."""
+    callback = _RUNTIME_PROCESS_UNREGISTER.get()
+    if callback:
+        callback(process)
+
+
+def record_llm_usage(provider: str, model: str, usage: Any) -> None:
+    """Record normalized provider usage in the current job context."""
+    values = dict(_RUNTIME_LLM_USAGE.get())
+    values[str(provider or "unknown").strip().lower()] = {
+        "provider": str(provider or "unknown").strip().lower(),
+        "model": str(model or "").strip(),
+        "usage": usage,
+    }
+    _RUNTIME_LLM_USAGE.set(values)
+
+
+def current_llm_usage() -> dict[str, Any]:
+    return dict(_RUNTIME_LLM_USAGE.get())
 
 
 def current_api_key(name: str) -> str:
@@ -72,6 +121,26 @@ def current_llm_provider() -> str:
     return str(values.get("llm_provider", LLM_PROVIDER) or "openai").strip().lower()
 
 
+def current_llm_model(provider: Optional[str] = None) -> str:
+    """Return a per-job model override, falling back to the configured provider."""
+    selected = str(provider or current_llm_provider()).strip().lower()
+    values = _RUNTIME_LLM_OPTIONS.get()
+    override = str(values.get("llm_model", "") or "").strip()
+    if override:
+        return override
+    return OPENAI_MODEL if selected == "openai" else GEMINI_MODEL
+
+
+def current_llm_temperature(default: float = 0.2) -> float:
+    """Return a finite per-job temperature override."""
+    values = _RUNTIME_LLM_OPTIONS.get()
+    try:
+        value = float(values.get("llm_temperature", default))
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return value if math.isfinite(value) and 0.0 <= value <= 1.0 else default
+
+
 @contextmanager
 def runtime_credentials(
     *,
@@ -79,6 +148,8 @@ def runtime_credentials(
     openai_api_key: Optional[str] = None,
     gemini_api_key: Optional[str] = None,
     llm_provider: Optional[str] = None,
+    llm_model: Optional[str] = None,
+    llm_temperature: Optional[float] = None,
 ) -> Iterator[None]:
     """Temporarily apply credentials supplied by the local UI.
 
@@ -100,11 +171,51 @@ def runtime_credentials(
             values[name] = cleaned
         else:
             values.pop(name, None)
+    options = dict(_RUNTIME_LLM_OPTIONS.get())
+    if llm_model is not None:
+        cleaned_model = str(llm_model).strip()
+        if cleaned_model:
+            options["llm_model"] = cleaned_model
+        else:
+            options.pop("llm_model", None)
+    if llm_temperature is not None:
+        options["llm_temperature"] = str(llm_temperature)
     token = _RUNTIME_CREDENTIALS.set(values)
+    options_token = _RUNTIME_LLM_OPTIONS.set(options)
     try:
         yield
     finally:
+        _RUNTIME_LLM_OPTIONS.reset(options_token)
         _RUNTIME_CREDENTIALS.reset(token)
+
+
+@contextmanager
+def runtime_job_control(
+    *,
+    cancel_check: Optional[Callable[[], bool]] = None,
+    register_process: Optional[Callable[[Any], None]] = None,
+    unregister_process: Optional[Callable[[Any], None]] = None,
+) -> Iterator[None]:
+    """Bind cancellation and child-process callbacks to the current worker."""
+    cancel_token = _RUNTIME_CANCEL_CHECK.set(cancel_check)
+    register_token = _RUNTIME_PROCESS_REGISTER.set(register_process)
+    unregister_token = _RUNTIME_PROCESS_UNREGISTER.set(unregister_process)
+    try:
+        yield
+    finally:
+        _RUNTIME_PROCESS_UNREGISTER.reset(unregister_token)
+        _RUNTIME_PROCESS_REGISTER.reset(register_token)
+        _RUNTIME_CANCEL_CHECK.reset(cancel_token)
+
+
+@contextmanager
+def runtime_llm_usage() -> Iterator[None]:
+    """Reset usage for one pipeline invocation and restore the parent context."""
+    token = _RUNTIME_LLM_USAGE.set({})
+    try:
+        yield
+    finally:
+        _RUNTIME_LLM_USAGE.reset(token)
 
 
 def gpu_status() -> dict:

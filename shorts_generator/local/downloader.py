@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 from typing import Optional
 
-from ..config import LOCAL_OUTPUT_DIR
+from ..config import LOCAL_OUTPUT_DIR, cancellation_requested
 
 
 def _import_ytdlp():
@@ -111,6 +111,8 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
     if video_url is None:
         raise RuntimeError("A YouTube URL or local video path is required.")
     video_url = str(video_url).strip()
+    if cancellation_requested():
+        raise RuntimeError("Job cancelled")
     local_path = _resolve_local_path(video_url)
     if local_path:
         print(f"[download/local] using local file: {local_path}", flush=True)
@@ -150,9 +152,17 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         "extractor_args": {"youtube": {"player_client": ["web_embedded"]}},
     }
 
+    def cancellation_hook(_status: object) -> None:
+        if cancellation_requested():
+            raise RuntimeError("Job cancelled")
+
+    ydl_opts["progress_hooks"] = [cancellation_hook]
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
+            if cancellation_requested():
+                raise RuntimeError("Job cancelled")
             path = ydl.prepare_filename(info)
             # merge_output_format may rename the extension after merge
             if not os.path.exists(path):

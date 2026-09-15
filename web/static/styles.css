@@ -49,6 +49,12 @@
     .update-status { margin:10px 0 0; color:var(--muted); font-size:11px; white-space:pre-line; }
     #updateButton[aria-busy="true"] { opacity:.7; cursor:wait; }
     button:disabled { cursor:not-allowed; opacity:.58; transform:none!important; }
+    .three { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+    .editor-tools-panel { margin-top:15px; padding:15px; }
+    .cuts-editor { display:grid; gap:6px; margin:6px 0 8px; }
+    .cut-row { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:7px 9px; border:1px solid var(--line); border-radius:8px; background:var(--input-bg); color:var(--soft); font:11px ui-monospace,monospace; }
+    .cut-row button { padding:4px 7px; font-size:10px; }
+    @media(max-width:700px) { .three { grid-template-columns:1fr; } }
 
     /* Shared theme tokens: every editor surface consumes these values. */
     :root { color-scheme: dark; --bg-radial:#172653; --sidebar-bg:#0b101aee; --panel-bg:linear-gradient(145deg,#121a2a,#0f141f); --stat-bg:linear-gradient(145deg,#142039,#101622); --input-bg:#0d1421; --drop-bg:#121b2c; --frame-bg:#05070b; --timeline-bg:#111a2a; --timeline-grid:#152038; --card-bg:#0d1421; --waveform-bg:#0c1320; --setup-bg:linear-gradient(145deg,#16233d,#0f1523); --setup-row-bg:#0c1320; --modal-backdrop:#050810cc; --video-shadow:#0009; --modal-shadow:#000b; --caption-box-bg:#071019cc; --caption-shadow:#000; --caption-border:#ffffff44; --toast-bg:#101a2aef; --hover-shadow:#0005; --danger-bg:#291521; --danger-border:#713247; --danger-text:#ff9aad; --info-line:#3b567f; }

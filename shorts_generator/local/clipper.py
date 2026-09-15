@@ -16,9 +16,14 @@ import math
 from functools import lru_cache
 from pathlib import Path
 import textwrap
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from ..config import LOCAL_OUTPUT_DIR
+from ..config import (
+    LOCAL_OUTPUT_DIR,
+    cancellation_requested,
+    register_runtime_process,
+    unregister_runtime_process,
+)
 from .face_detection import create_face_detector
 
 
@@ -33,6 +38,72 @@ def _remove_with_retry(path: str, attempts: int = 8, delay: float = 0.5) -> None
             if i == attempts - 1:
                 raise
             time.sleep(delay)
+
+
+def _run_command(
+    args: List[str],
+    *,
+    check: bool = False,
+    capture_output: bool = False,
+    text: bool = False,
+    timeout: Optional[float] = None,
+    **kwargs: Any,
+) -> subprocess.CompletedProcess[Any]:
+    """Run FFmpeg with cooperative cancellation and job process tracking.
+
+    ``subprocess.run`` cannot be interrupted while FFmpeg is encoding.  A
+    short ``communicate`` polling loop lets the web worker terminate the child
+    as soon as its job cancellation event is set, while preserving the normal
+    ``CompletedProcess``/``CalledProcessError`` contract for callers.
+    """
+    if cancellation_requested():
+        raise RuntimeError("Job cancelled")
+    if capture_output:
+        kwargs.setdefault("stdout", subprocess.PIPE)
+        kwargs.setdefault("stderr", subprocess.PIPE)
+    process = subprocess.Popen(args, text=text, **kwargs)
+    register_runtime_process(process)
+    started = time.monotonic()
+    stdout: Any = None
+    stderr: Any = None
+
+    def stop_child() -> None:
+        try:
+            if process.poll() is None:
+                process.terminate()
+        except (OSError, ProcessLookupError):
+            return
+        try:
+            process.wait(timeout=1.0)
+        except (subprocess.TimeoutExpired, OSError, ProcessLookupError):
+            try:
+                process.kill()
+                process.wait(timeout=1.0)
+            except (OSError, ProcessLookupError, subprocess.TimeoutExpired):
+                pass
+
+    try:
+        while True:
+            try:
+                stdout, stderr = process.communicate(timeout=0.25)
+                break
+            except subprocess.TimeoutExpired:
+                if cancellation_requested():
+                    stop_child()
+                    try:
+                        process.communicate(timeout=1.0)
+                    except (subprocess.TimeoutExpired, OSError):
+                        pass
+                    raise RuntimeError("Job cancelled")
+                if timeout is not None and time.monotonic() - started >= timeout:
+                    stop_child()
+                    raise subprocess.TimeoutExpired(args, timeout, output=stdout, stderr=stderr)
+        result = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+        if check and result.returncode:
+            raise subprocess.CalledProcessError(result.returncode, args, output=stdout, stderr=stderr)
+        return result
+    finally:
+        unregister_runtime_process(process)
 
 
 @lru_cache(maxsize=1)
@@ -91,6 +162,18 @@ def _finite_float(value: object, default: float) -> float:
     return converted if math.isfinite(converted) else default
 
 
+def _split_canvas_dimensions(output_height: int, target_ratio: float) -> Tuple[int, int, int]:
+    """Return even (height, full width, panel width) dimensions for split layout."""
+    try:
+        height = int(output_height)
+    except (TypeError, ValueError, OverflowError):
+        height = 1920
+    height = max(240, min(4320, height or 1920))
+    full_width = max(2, int(round(height * target_ratio)))
+    panel_width = max(2, int(round(full_width / 2)) // 2 * 2)
+    return height, panel_width * 2, panel_width
+
+
 def _ass_timestamp(seconds: float) -> str:
     """Format seconds as an ASS timestamp (H:MM:SS.cc)."""
     total_cs = max(0, int(round(_finite_float(seconds, 0.0) * 100)))
@@ -122,7 +205,7 @@ def _escape_ass_text(value: object, remove_filler_words: bool = False) -> str:
 def _has_audio_stream(media_path: str) -> bool:
     """Return whether FFmpeg can see an audio stream in a media file."""
     ffmpeg = _find_ffmpeg()
-    probe = subprocess.run(
+    probe = _run_command(
         [ffmpeg, "-hide_banner", "-i", media_path],
         capture_output=True,
         text=True,
@@ -134,7 +217,7 @@ def _has_audio_stream(media_path: str) -> bool:
 def _has_video_stream(media_path: str) -> bool:
     """Return whether FFmpeg can see a video stream in a media file."""
     ffmpeg = _find_ffmpeg()
-    probe = subprocess.run(
+    probe = _run_command(
         [ffmpeg, "-hide_banner", "-i", media_path],
         capture_output=True,
         text=True,
@@ -146,7 +229,7 @@ def _has_video_stream(media_path: str) -> bool:
 def _add_silent_audio(media_path: str, out_path: str) -> str:
     """Add a silent AAC track to a video that has no audio stream."""
     ffmpeg = _find_ffmpeg()
-    subprocess.run(
+    _run_command(
         [
             ffmpeg,
             "-y",
@@ -403,7 +486,7 @@ def _burn_in_captions(
             "+faststart",
             out_path,
         ]
-        subprocess.run(cmd, check=True)
+        _run_command(cmd, check=True)
         return True
     finally:
         if os.path.exists(ass_path):
@@ -436,7 +519,202 @@ def _cut_subclip(source_path: str, start: float, end: float, out_path: str) -> s
         "128k",
         out_path,
     ]
-    subprocess.run(cmd, check=True)
+    _run_command(cmd, check=True)
+    return out_path
+
+
+def _normalise_cut_ranges(
+    start_time: float,
+    end_time: float,
+    cuts: Optional[List[Dict]] = None,
+) -> List[Tuple[float, float]]:
+    """Clamp, sort, and merge multi-cut ranges in source-time coordinates.
+
+    An empty ``cuts`` list deliberately means the original ``start_time`` /
+    ``end_time`` range.  Ranges outside the selected highlight are clipped so
+    a stale editor payload can never make FFmpeg read beyond the source.
+    """
+    start = _finite_float(start_time, -1.0)
+    end = _finite_float(end_time, -1.0)
+    if start < 0 or end <= start:
+        return []
+    raw = cuts if isinstance(cuts, (list, tuple)) and cuts else [{"start_time": start, "end_time": end}]
+    ranges: List[Tuple[float, float]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        left = max(start, _finite_float(item.get("start_time"), start))
+        right = min(end, _finite_float(item.get("end_time"), end))
+        if right > left + 0.1:
+            ranges.append((left, right))
+    if not ranges:
+        return [(start, end)]
+    ranges.sort(key=lambda value: (value[0], value[1]))
+    merged: List[Tuple[float, float]] = [ranges[0]]
+    for left, right in ranges[1:]:
+        previous_left, previous_right = merged[-1]
+        if left <= previous_right + 0.02:
+            merged[-1] = (previous_left, max(previous_right, right))
+        else:
+            merged.append((left, right))
+    return merged
+
+
+def _remap_caption_segments(
+    segments: Optional[List[Dict]],
+    ranges: List[Tuple[float, float]],
+) -> List[Dict]:
+    """Map absolute transcript timestamps onto a concatenated clip timeline."""
+    if not ranges:
+        return []
+    source_segments = segments if isinstance(segments, (list, tuple)) else []
+    mapped: List[Dict] = []
+    offset = 0.0
+    for range_start, range_end in ranges:
+        for raw in source_segments:
+            if not isinstance(raw, dict):
+                continue
+            seg_start = _finite_float(raw.get("start"), -1.0)
+            seg_end = _finite_float(raw.get("end"), -1.0)
+            left = max(seg_start, range_start)
+            right = min(seg_end, range_end)
+            if seg_start < 0 or seg_end <= seg_start or right <= left:
+                continue
+            item = dict(raw)
+            item["start"] = round(offset + left - range_start, 6)
+            item["end"] = round(offset + right - range_start, 6)
+            words = []
+            for word in raw.get("words") or []:
+                if not isinstance(word, dict):
+                    continue
+                word_start = _finite_float(word.get("start"), -1.0)
+                word_end = _finite_float(word.get("end"), -1.0)
+                word_left = max(word_start, range_start)
+                word_right = min(word_end, range_end)
+                if word_start >= 0 and word_end > word_start and word_right > word_left:
+                    mapped_word = dict(word)
+                    mapped_word["start"] = round(offset + word_left - range_start, 6)
+                    mapped_word["end"] = round(offset + word_right - range_start, 6)
+                    words.append(mapped_word)
+            if words:
+                item["words"] = words
+            mapped.append(item)
+        offset += range_end - range_start
+    mapped.sort(key=lambda value: (_finite_float(value.get("start"), 0.0), _finite_float(value.get("end"), 0.0)))
+    return mapped
+
+
+def _source_ranges_after_timeline_edit(
+    source_ranges: List[Tuple[float, float]],
+    kept_timeline_ranges: List[Tuple[float, float]],
+) -> List[Tuple[float, float]]:
+    """Translate kept intervals on a concatenated timeline back to source time."""
+    if not source_ranges or not kept_timeline_ranges:
+        return list(source_ranges)
+    translated: List[Tuple[float, float]] = []
+    timeline_offset = 0.0
+    for source_start, source_end in source_ranges:
+        span = source_end - source_start
+        timeline_end = timeline_offset + span
+        for kept_start, kept_end in kept_timeline_ranges:
+            left = max(timeline_offset, kept_start)
+            right = min(timeline_end, kept_end)
+            if right > left + 0.05:
+                translated.append(
+                    (
+                        source_start + left - timeline_offset,
+                        source_start + right - timeline_offset,
+                    )
+                )
+        timeline_offset = timeline_end
+    return translated or list(source_ranges)
+
+
+def _shift_caption_segments(segments: List[Dict], offset: float) -> List[Dict]:
+    """Shift caption and word timestamps when a branded intro is prepended."""
+    shift = _finite_float(offset, 0.0)
+    if abs(shift) < 0.000001:
+        return [dict(segment) for segment in segments if isinstance(segment, dict)]
+    shifted: List[Dict] = []
+    for raw in segments if isinstance(segments, (list, tuple)) else []:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        item["start"] = round(_finite_float(raw.get("start"), 0.0) + shift, 6)
+        item["end"] = round(_finite_float(raw.get("end"), 0.0) + shift, 6)
+        words = []
+        for raw_word in raw.get("words") or []:
+            if not isinstance(raw_word, dict):
+                continue
+            word = dict(raw_word)
+            word["start"] = round(_finite_float(raw_word.get("start"), 0.0) + shift, 6)
+            word["end"] = round(_finite_float(raw_word.get("end"), 0.0) + shift, 6)
+            words.append(word)
+        if words:
+            item["words"] = words
+        shifted.append(item)
+    return shifted
+
+
+def _cut_ranges(source_path: str, ranges: List[Tuple[float, float]], out_path: str) -> str:
+    """Cut one or more source intervals and concatenate them without reordering."""
+    if not ranges:
+        raise RuntimeError("at least one valid cut range is required")
+    if len(ranges) == 1:
+        return _cut_subclip(source_path, ranges[0][0], ranges[0][1], out_path)
+    ffmpeg = _find_ffmpeg()
+    # Filter-based concatenation keeps a single decode pass and avoids writing
+    # user-visible intermediate clips.  A silent audio stream is added only
+    # when necessary so the audio graph remains valid for screen recordings.
+    input_path = source_path
+    silent_path: Optional[str] = None
+    if not _has_audio_stream(source_path):
+        silent_path = out_path + ".silent-source.mp4"
+        _add_silent_audio(source_path, silent_path)
+        input_path = silent_path
+    filters: List[str] = []
+    labels: List[str] = []
+    for index, (left, right) in enumerate(ranges):
+        filters.append(f"[0:v]trim=start={left:.3f}:end={right:.3f},setpts=PTS-STARTPTS[v{index}]")
+        filters.append(f"[0:a]atrim=start={left:.3f}:end={right:.3f},asetpts=PTS-STARTPTS[a{index}]")
+        labels.append(f"[v{index}][a{index}]")
+    filters.append("".join(labels) + f"concat=n={len(ranges)}:v=1:a=1[v][a]")
+    try:
+        _run_command(
+            [
+                ffmpeg,
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                input_path,
+                "-filter_complex",
+                ";".join(filters),
+                "-map",
+                "[v]",
+                "-map",
+                "[a]",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "20",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-movflags",
+                "+faststart",
+                out_path,
+            ],
+            check=True,
+        )
+    finally:
+        if silent_path and os.path.exists(silent_path):
+            _remove_with_retry(silent_path)
     return out_path
 
 
@@ -468,11 +746,9 @@ def _reframe_vertical(
     layout_name = str(layout or "single").strip().lower()
     if layout_name == "split":
         ffmpeg = _find_ffmpeg()
-        out_h = render_height
-        out_w = max(2, int(round(out_h * target_ratio)) // 2 * 2)
-        half = max(2, out_w // 2)
+        out_h, out_w, half = _split_canvas_dimensions(render_height, target_ratio)
         split_filter = f"[0:v]crop=iw/2:ih:0:0,scale={half}:{out_h}:force_original_aspect_ratio=decrease,pad={half}:{out_h}:(ow-iw)/2:(oh-ih)/2[left];[0:v]crop=iw/2:ih:iw/2:0,scale={half}:{out_h}:force_original_aspect_ratio=decrease,pad={half}:{out_h}:(ow-iw)/2:(oh-ih)/2[right];[left][right]hstack=inputs=2[v]"
-        subprocess.run(
+        _run_command(
             [
                 ffmpeg,
                 "-y",
@@ -499,6 +775,8 @@ def _reframe_vertical(
                 "-b:a",
                 "128k",
                 "-shortest",
+                "-movflags",
+                "+faststart",
                 out_path,
             ],
             check=True,
@@ -515,7 +793,7 @@ def _reframe_vertical(
             f"[0:v]scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,scale=iw*{zoom:.3f}:ih*{zoom:.3f}[fg];"
             f"[bg][fg]overlay=(W-w)/2:(H-h)/2[v]"
         )
-        subprocess.run(
+        _run_command(
             [
                 ffmpeg,
                 "-y",
@@ -542,6 +820,8 @@ def _reframe_vertical(
                 "-b:a",
                 "128k",
                 "-shortest",
+                "-movflags",
+                "+faststart",
                 out_path,
             ],
             check=True,
@@ -599,41 +879,53 @@ def _reframe_vertical(
 
     last_center: Optional[Tuple[int, int]] = None
     smoothing = 0.15  # how aggressively to chase a new face position
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    frame_failed = False
+    try:
+        while True:
+            if cancellation_requested():
+                raise RuntimeError("Job cancelled")
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        faces = face_detector(frame) if face_detector is not None else []
-        if len(faces) > 0:
+            faces = face_detector(frame) if face_detector is not None else []
+            if len(faces) > 0:
             # Pick the largest face — usually the speaker.
-            x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-            cx = x + w // 2
-            cy = y + h // 2
+                x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+                cx = x + w // 2
+                cy = y + h // 2
+                if last_center is None:
+                    last_center = (cx, cy)
+                else:
+                    lx, ly = last_center
+                    last_center = (
+                        int(lx + (cx - lx) * smoothing),
+                        int(ly + (cy - ly) * smoothing),
+                    )
+            if last_center is None and not auto_reframe:
+                position = max(0.0, min(1.0, _finite_float(crop_position, 0.5)))
+                last_center = (int(crop_w / 2 + position * (src_w - crop_w)), src_h // 2)
             if last_center is None:
-                last_center = (cx, cy)
-            else:
-                lx, ly = last_center
-                last_center = (
-                    int(lx + (cx - lx) * smoothing),
-                    int(ly + (cy - ly) * smoothing),
-                )
-        if last_center is None and not auto_reframe:
-            position = max(0.0, min(1.0, _finite_float(crop_position, 0.5)))
-            last_center = (int(crop_w / 2 + position * (src_w - crop_w)), src_h // 2)
-        if last_center is None:
-            last_center = (src_w // 2, src_h // 2)
+                last_center = (src_w // 2, src_h // 2)
 
-        cx, cy = last_center
-        x0 = max(0, min(src_w - crop_w, cx - crop_w // 2))
-        y0 = max(0, min(src_h - crop_h, cy - crop_h // 2))
-        cropped = frame[y0 : y0 + crop_h, x0 : x0 + crop_w]
-        if cropped.shape[1] != output_crop_w or cropped.shape[0] != output_crop_h:
-            cropped = cv2.resize(cropped, (output_crop_w, output_crop_h), interpolation=cv2.INTER_AREA)
-        writer.write(cropped)
-
-    cap.release()
-    writer.release()
+            cx, cy = last_center
+            x0 = max(0, min(src_w - crop_w, cx - crop_w // 2))
+            y0 = max(0, min(src_h - crop_h, cy - crop_h // 2))
+            cropped = frame[y0 : y0 + crop_h, x0 : x0 + crop_w]
+            if cropped.shape[1] != output_crop_w or cropped.shape[0] != output_crop_h:
+                cropped = cv2.resize(cropped, (output_crop_w, output_crop_h), interpolation=cv2.INTER_AREA)
+            writer.write(cropped)
+    except Exception:
+        frame_failed = True
+        raise
+    finally:
+        cap.release()
+        writer.release()
+        if frame_failed and os.path.exists(silent_path):
+            try:
+                _remove_with_retry(silent_path)
+            except OSError:
+                pass
 
     # Mux audio from the cut clip back onto the silent reframed video.
     ffmpeg = _find_ffmpeg()
@@ -657,10 +949,12 @@ def _reframe_vertical(
         "-map",
         "1:a:0?",
         "-shortest",
+        "-movflags",
+        "+faststart",
         out_path,
     ]
     try:
-        subprocess.run(cmd, check=True)
+        _run_command(cmd, check=True)
     finally:
         if os.path.exists(silent_path):
             _remove_with_retry(silent_path)
@@ -695,9 +989,24 @@ def crop_clip_local(
     outro: Optional[str] = None,
     jump_cuts: bool = False,
     output_height: int = 1920,
+    cuts: Optional[List[Dict]] = None,
+    music_volume: float = 0.18,
+    music_fade_in: float = 0.0,
+    music_fade_out: float = 0.0,
+    *,
+    cancel_check: Optional[Callable[[], bool]] = None,
+    timeline_map: Optional[List[Tuple[float, float]]] = None,
 ) -> str:
-    """Cut + reframe one highlight, optionally burning Whisper captions."""
+    """Cut + reframe one highlight, optionally burning Whisper captions.
+
+    ``cuts`` are absolute source-time ranges.  They are concatenated before
+    reframing and caption rendering; transcript timestamps are remapped to the
+    resulting timeline so multi-cut edits never display captions from the
+    removed gaps.
+    """
     source_path = str(source_path) if source_path is not None else ""
+    if cancellation_requested() or (cancel_check and cancel_check()):
+        raise RuntimeError("Job cancelled")
     out_path = str(out_path) if out_path is not None else ""
     start_time = _finite_float(start_time, -1.0)
     end_time = _finite_float(end_time, -1.0)
@@ -718,12 +1027,30 @@ def crop_clip_local(
             raise RuntimeError(f"{label} file not found: {media}")
     if background_music and not _has_audio_stream(background_music):
         raise RuntimeError(f"background music file has no audio stream: {background_music}")
+    ranges = _normalise_cut_ranges(start_time, end_time, cuts)
     cut_path = out_path + ".cut.mp4"
+    timeline_path = cut_path
+    jump_path = out_path + ".jump.mp4"
     base_path = out_path + ".base.mp4"
+    captioned_path = out_path + ".captions.mp4"
+    mapped_segments = _remap_caption_segments(caption_segments, ranges)
+    final_source_ranges = list(ranges)
+    timeline_duration = sum(right - left for left, right in ranges)
     try:
-        _cut_subclip(source_path, start_time, end_time, cut_path)
+        if cancellation_requested() or (cancel_check and cancel_check()):
+            raise RuntimeError("Job cancelled")
+        _cut_ranges(source_path, ranges, cut_path)
+        if jump_cuts:
+            changed, keep = _remove_silent_video_with_map(cut_path, jump_path)
+            if changed:
+                timeline_path = jump_path
+                # Silence detection runs on the already-cut timeline, so map
+                # the captions a second time through the intervals it kept.
+                mapped_segments = _remap_caption_segments(mapped_segments, keep)
+                timeline_duration = sum(right - left for left, right in keep)
+                final_source_ranges = _source_ranges_after_timeline_edit(ranges, keep)
         _reframe_vertical(
-            cut_path,
+            timeline_path,
             base_path,
             aspect_ratio,
             auto_reframe=auto_reframe,
@@ -733,13 +1060,34 @@ def crop_clip_local(
             layout=layout,
             output_height=output_height,
         )
-        if burn_captions and caption_segments:
+        if cancellation_requested() or (cancel_check and cancel_check()):
+            raise RuntimeError("Job cancelled")
+        # Audio-only filters do not move video timestamps.  Applying them here
+        # ensures caption burn sees the same final video timeline.
+        _apply_audio_processing(base_path, remove_silence, normalize_audio, denoise_audio, False)
+        if cancellation_requested() or (cancel_check and cancel_check()):
+            raise RuntimeError("Job cancelled")
+        # Apply extras and branding before burning captions.  A prepended
+        # intro changes the final timeline, so shift captions by its duration
+        # to keep the sidecar/burned timings aligned with the finished video.
+        os.replace(base_path, out_path)
+        _apply_media_extras(
+            out_path,
+            background_music,
+            watermark,
+            music_volume=music_volume,
+            music_fade_in=music_fade_in,
+            music_fade_out=music_fade_out,
+        )
+        intro_offset = _media_duration(intro) if intro else 0.0
+        _apply_branding(out_path, aspect_ratio, output_height, intro, outro)
+        if burn_captions and mapped_segments:
             _burn_in_captions(
-                base_path,
-                clip_start=start_time,
-                clip_end=end_time,
-                segments=caption_segments,
-                out_path=out_path,
+                out_path,
+                clip_start=0.0,
+                clip_end=_media_duration(out_path) or (intro_offset + timeline_duration),
+                segments=_shift_caption_segments(mapped_segments, intro_offset),
+                out_path=captioned_path,
                 caption_style=caption_style,
                 remove_filler_words=remove_filler_words,
                 caption_position=caption_position,
@@ -747,16 +1095,20 @@ def crop_clip_local(
                 caption_size=caption_size,
                 caption_color=caption_color,
             )
-        else:
-            os.replace(base_path, out_path)
+            os.replace(captioned_path, out_path)
     finally:
         if os.path.exists(cut_path):
             _remove_with_retry(cut_path)
+        if os.path.exists(jump_path):
+            _remove_with_retry(jump_path)
         if os.path.exists(base_path):
             _remove_with_retry(base_path)
-    _apply_audio_processing(out_path, remove_silence, normalize_audio, denoise_audio, jump_cuts)
-    _apply_media_extras(out_path, background_music, watermark)
-    _apply_branding(out_path, aspect_ratio, output_height, intro, outro)
+        if os.path.exists(captioned_path):
+            _remove_with_retry(captioned_path)
+    if cancellation_requested() or (cancel_check and cancel_check()):
+        raise RuntimeError("Job cancelled")
+    if timeline_map is not None:
+        timeline_map[:] = final_source_ranges
     return out_path
 
 
@@ -770,7 +1122,11 @@ def _apply_audio_processing(
     """Apply optional audio filters and silent-section removal in sequence."""
     audio_filters: List[str] = []
     if remove_silence:
-        audio_filters.append("silenceremove=stop_periods=-1:stop_duration=0.35:stop_threshold=-40dB")
+        # Remove trailing silence only.  Removing interior audio samples after
+        # captions are timed against the video causes an audible/caption drift;
+        # jump-cuts handle intentional interior edits with an explicit timeline
+        # map before captions are burned.
+        audio_filters.append("silenceremove=stop_periods=1:stop_duration=0.35:stop_threshold=-40dB")
     if normalize_audio:
         audio_filters.append("loudnorm=I=-14:TP=-1.5:LRA=11")
     if denoise_audio:
@@ -779,7 +1135,7 @@ def _apply_audio_processing(
         processed_path = out_path + ".audio.mp4"
         try:
             ffmpeg = _find_ffmpeg()
-            subprocess.run(
+            _run_command(
                 [
                     ffmpeg,
                     "-y",
@@ -795,6 +1151,8 @@ def _apply_audio_processing(
                     "aac",
                     "-b:a",
                     "128k",
+                    "-movflags",
+                    "+faststart",
                     processed_path,
                 ],
                 check=True,
@@ -813,7 +1171,33 @@ def _apply_audio_processing(
                 _remove_with_retry(jump_path)
 
 
-def _apply_media_extras(out_path: str, background_music: Optional[str], watermark: Optional[str]) -> None:
+def _media_duration(path: str) -> float:
+    """Best-effort media duration used for a finite music fade-out."""
+    try:
+        ffmpeg = _find_ffmpeg()
+        probe = _run_command(
+            [ffmpeg, "-hide_banner", "-i", path, "-f", "null", "-"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", probe.stderr or "")
+        if match:
+            hours, minutes, seconds = match.groups()
+            return float(hours) * 3600 + float(minutes) * 60 + float(seconds)
+    except (OSError, ValueError, TypeError, RuntimeError, subprocess.SubprocessError):
+        pass
+    return 0.0
+
+
+def _apply_media_extras(
+    out_path: str,
+    background_music: Optional[str],
+    watermark: Optional[str],
+    music_volume: float = 0.18,
+    music_fade_in: float = 0.0,
+    music_fade_out: float = 0.0,
+) -> None:
     """Mix optional background music and/or watermark into a rendered clip."""
     if not background_music and not watermark:
         return
@@ -826,12 +1210,25 @@ def _apply_media_extras(out_path: str, background_music: Optional[str], watermar
         input_index = 1
         if background_music:
             inputs += ["-stream_loop", "-1", "-i", background_music]
+            volume = max(0.0, min(1.0, _finite_float(music_volume, 0.18)))
+            fade_in = max(0.0, _finite_float(music_fade_in, 0.0))
+            fade_out = max(0.0, _finite_float(music_fade_out, 0.0))
+            music_chain = f"[{input_index}:a]volume={volume:.3f}"
+            if fade_in > 0:
+                music_chain += f",afade=t=in:st=0:d={fade_in:.3f}"
+            if fade_out > 0:
+                duration = _media_duration(out_path)
+                if duration > 0.05:
+                    fade_start = max(0.0, duration - min(fade_out, duration))
+                    music_chain += f",afade=t=out:st={fade_start:.3f}:d={min(fade_out, duration):.3f}"
+            music_chain += "[music]"
+            filters.append(music_chain)
             if _has_audio_stream(out_path):
-                filters.append(f"[0:a][{input_index}:a]amix=inputs=2:duration=first:dropout_transition=2[a]")
+                filters.append("[0:a][music]amix=inputs=2:duration=first:dropout_transition=2[a]")
             else:
                 # Some screen recordings contain video only. In that case
                 # use the supplied music as the complete audio track.
-                filters.append(f"[{input_index}:a]anull[a]")
+                filters.append("[music]anull[a]")
             maps.append("[a]")
             input_index += 1
         if watermark:
@@ -863,9 +1260,11 @@ def _apply_media_extras(out_path: str, background_music: Optional[str], watermar
             "-b:a",
             "128k",
             "-shortest",
+            "-movflags",
+            "+faststart",
             extra_path,
         ]
-        subprocess.run(cmd, check=True)
+        _run_command(cmd, check=True)
         os.replace(extra_path, out_path)
     finally:
         if os.path.exists(extra_path):
@@ -938,7 +1337,7 @@ def _apply_branding(
             "128k",
             branded,
         ]
-        subprocess.run(args, check=True)
+        _run_command(args, check=True)
         os.replace(branded, out_path)
     finally:
         if os.path.exists(branded):
@@ -948,13 +1347,18 @@ def _apply_branding(
                 _remove_with_retry(silent_audio_path)
 
 
-def _remove_silent_video(in_path: str, out_path: str, threshold: str = "-40dB", min_silence: float = 0.35) -> bool:
-    """Remove silent intervals from both video and audio using FFmpeg concat."""
+def _remove_silent_video_with_map(
+    in_path: str,
+    out_path: str,
+    threshold: str = "-40dB",
+    min_silence: float = 0.35,
+) -> Tuple[bool, List[Tuple[float, float]]]:
+    """Remove silent intervals and return the source intervals that survived."""
     ffmpeg = _find_ffmpeg()
     if not _has_audio_stream(in_path):
         shutil.copyfile(in_path, out_path)
-        return False
-    detect = subprocess.run(
+        return False, []
+    detect = _run_command(
         [
             ffmpeg,
             "-hide_banner",
@@ -973,13 +1377,13 @@ def _remove_silent_video(in_path: str, out_path: str, threshold: str = "-40dB", 
     log = (detect.stdout or "") + "\n" + (detect.stderr or "")
     starts = [float(x) for x in re.findall(r"silence_start:\s*([0-9.]+)", log)]
     ends = [float(x) for x in re.findall(r"silence_end:\s*([0-9.]+)", log)]
-    probe = subprocess.run(
+    probe = _run_command(
         [ffmpeg, "-hide_banner", "-i", in_path, "-f", "null", "-"], capture_output=True, text=True, check=False
     )
     duration_matches = re.findall(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", probe.stderr or "")
     if not duration_matches:
         shutil.copyfile(in_path, out_path)
-        return False
+        return False, []
     h, m, s = duration_matches[0]
     duration = int(h) * 3600 + int(m) * 60 + float(s)
     silent = [
@@ -994,7 +1398,7 @@ def _remove_silent_video(in_path: str, out_path: str, threshold: str = "-40dB", 
         keep.append((cursor, duration))
     if len(keep) <= 1:
         shutil.copyfile(in_path, out_path)
-        return False
+        return False, keep
     filters, concat_inputs = [], []
     for index, (start, end) in enumerate(keep):
         filters += [
@@ -1003,7 +1407,7 @@ def _remove_silent_video(in_path: str, out_path: str, threshold: str = "-40dB", 
         ]
         concat_inputs.append(f"[v{index}][a{index}]")
     filters.append("".join(concat_inputs) + f"concat=n={len(keep)}:v=1:a=1[v][a]")
-    subprocess.run(
+    _run_command(
         [
             ffmpeg,
             "-y",
@@ -1027,11 +1431,19 @@ def _remove_silent_video(in_path: str, out_path: str, threshold: str = "-40dB", 
             "aac",
             "-b:a",
             "128k",
+            "-movflags",
+            "+faststart",
             out_path,
         ],
         check=True,
     )
-    return True
+    return True, keep
+
+
+def _remove_silent_video(in_path: str, out_path: str, threshold: str = "-40dB", min_silence: float = 0.35) -> bool:
+    """Backward-compatible boolean wrapper around the mapped silence cutter."""
+    changed, _ = _remove_silent_video_with_map(in_path, out_path, threshold, min_silence)
+    return changed
 
 
 def crop_highlights_local(
@@ -1061,12 +1473,21 @@ def crop_highlights_local(
     outro: Optional[str] = None,
     jump_cuts: bool = False,
     output_height: int = 1920,
+    cuts: Optional[List[Dict]] = None,
+    music_volume: float = 0.18,
+    music_fade_in: float = 0.0,
+    music_fade_out: float = 0.0,
+    *,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> List[Dict]:
     out_dir = out_dir or LOCAL_OUTPUT_DIR
     os.makedirs(out_dir, exist_ok=True)
     results: List[Dict] = []
     items = highlights if isinstance(highlights, (list, tuple)) else []
+    caption_offset = _media_duration(intro) if intro else 0.0
     for i, h in enumerate(items, 1):
+        if cancellation_requested() or (cancel_check and cancel_check()):
+            raise RuntimeError("Job cancelled")
         out_path = os.path.join(out_dir, f"short_{i:02d}.mp4")
         if not isinstance(h, dict):
             message = "highlight must be a JSON object"
@@ -1090,6 +1511,7 @@ def crop_highlights_local(
             continue
         captions_for_clip = burn_captions and _has_caption_window(start_time, end_time, caption_segments)
         try:
+            timeline_map: List[Tuple[float, float]] = []
             crop_clip_local(
                 source_path,
                 start_time,
@@ -1118,15 +1540,30 @@ def crop_highlights_local(
                 outro=outro,
                 jump_cuts=jump_cuts,
                 output_height=output_height,
+                cuts=(h.get("cuts") if isinstance(h.get("cuts"), list) else cuts),
+                music_volume=music_volume,
+                music_fade_in=music_fade_in,
+                music_fade_out=music_fade_out,
+                cancel_check=cancel_check,
+                timeline_map=timeline_map,
             )
             item = {**h, "clip_url": out_path}
+            if caption_offset > 0.0:
+                item["caption_offset"] = round(caption_offset, 6)
+            if timeline_map:
+                item["timeline_ranges"] = [
+                    {"start_time": round(left, 6), "end_time": round(right, 6)}
+                    for left, right in timeline_map
+                ]
             try:
                 from .visual import extract_thumbnail
 
                 thumbnail_path = os.path.join(out_dir, f"short_{i:02d}.jpg")
+                # Extract from the final render so the thumbnail reflects the
+                # selected framing, branding, and multi-cut timeline.
                 extract_thumbnail(
-                    source_path,
-                    (start_time + end_time) / 2.0,
+                    out_path,
+                    0.5,
                     thumbnail_path,
                     text=h.get("hook_sentence") or h.get("title") or "",
                 )
@@ -1136,6 +1573,16 @@ def crop_highlights_local(
             if captions_for_clip:
                 item["captions_burned"] = True
             results.append(item)
+        except RuntimeError as e:
+            if str(e) == "Job cancelled":
+                raise
+            print(f"[clip/local] {i} failed: {e}", flush=True)
+            if not preexisting_output and os.path.isfile(out_path):
+                try:
+                    _remove_with_retry(out_path)
+                except OSError:
+                    pass
+            results.append({**h, "clip_url": None, "error": str(e)})
         except Exception as e:
             print(f"[clip/local] {i} failed: {e}", flush=True)
             if not preexisting_output and os.path.isfile(out_path):

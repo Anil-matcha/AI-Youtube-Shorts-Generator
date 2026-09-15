@@ -31,7 +31,10 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install --no-cache-dir -r requirements-docker.txt
 
 COPY . .
-RUN mkdir -p /data/output /data/cache /data/models
+RUN mkdir -p /data/output /data/cache /data/models \
+    && useradd --create-home --uid 10001 --shell /usr/sbin/nologin shorts \
+    && chown -R shorts:shorts /app /data
+USER shorts
 
 EXPOSE 7860
 

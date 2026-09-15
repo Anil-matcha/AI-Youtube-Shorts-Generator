@@ -21,7 +21,7 @@ if not exist "release" mkdir release
 "%ISCC%" "installer\ShortsStudio.iss"
 if errorlevel 1 goto :failed
 echo.
-echo Installer created in release\ShortsStudio-Setup-v0.9.5.exe
+echo Installer created in release\ShortsStudio-Setup-v0.10.0.exe
 pause
 exit /b 0
 :failed

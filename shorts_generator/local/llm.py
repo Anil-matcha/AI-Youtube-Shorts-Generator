@@ -7,8 +7,11 @@ from ..config import (
     GEMINI_MODEL,
     OPENAI_MODEL,
     current_llm_provider,
+    current_llm_model,
+    current_llm_temperature,
     require_gemini_key,
     require_openai_key,
+    record_llm_usage,
 )
 
 # Free-tier Gemini often returns 429s; retry a few times with backoff.
@@ -30,7 +33,7 @@ def _is_rate_limit_error(error: Exception) -> bool:
     return "429" in text or "RESOURCE_EXHAUSTED" in text or "RATE" in text and "LIMIT" in text
 
 
-def call_openai_llm(prompt: str) -> str:
+def call_openai_llm(prompt: str, model: str | None = None, temperature: float | None = None) -> str:
     """OpenAI Chat Completions backend used by --mode local."""
     try:
         from openai import OpenAI  # type: ignore
@@ -44,10 +47,12 @@ def call_openai_llm(prompt: str) -> str:
     for attempt in range(1, _MAX_LLM_RETRIES + 1):
         try:
             response = client.chat.completions.create(
-                model=OPENAI_MODEL,
-                temperature=0.7,
+                model=model or current_llm_model("openai") or OPENAI_MODEL,
+                temperature=current_llm_temperature(0.7) if temperature is None else temperature,
                 messages=[{"role": "user", "content": prompt}],
             )
+            selected_model = model or current_llm_model("openai") or OPENAI_MODEL
+            record_llm_usage("openai", selected_model, getattr(response, "usage", None))
             return response.choices[0].message.content or ""
         except Exception as e:
             last_error = e
@@ -62,7 +67,7 @@ def call_openai_llm(prompt: str) -> str:
     raise RuntimeError(f"OpenAI call failed after retries: {last_error}")
 
 
-def call_gemini_llm(prompt: str) -> str:
+def call_gemini_llm(prompt: str, model: str | None = None, temperature: float | None = None) -> str:
     """Gemini backend used by --mode local when LLM_PROVIDER=gemini."""
     try:
         from google import genai  # type: ignore
@@ -78,15 +83,17 @@ def call_gemini_llm(prompt: str) -> str:
     for attempt in range(1, _MAX_LLM_RETRIES + 1):
         try:
             response = client.models.generate_content(
-                model=GEMINI_MODEL,
+                model=model or current_llm_model("gemini") or GEMINI_MODEL,
                 contents=prompt,
                 config={
-                    "temperature": 0.2,
+                    "temperature": current_llm_temperature(0.2) if temperature is None else temperature,
                     "response_mime_type": "application/json",
                     "max_output_tokens": 32768,
                 },
             )
 
+            selected_model = model or current_llm_model("gemini") or GEMINI_MODEL
+            record_llm_usage("gemini", selected_model, getattr(response, "usage_metadata", None))
             text = response.text or ""
             if not text.strip():
                 # Surface *why* it came back empty instead of a generic JSON error

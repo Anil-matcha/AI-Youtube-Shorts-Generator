@@ -17,6 +17,7 @@ import re
 from typing import Callable, Dict, List, Optional
 
 from . import muapi
+from .config import record_llm_usage
 
 
 LLMFn = Callable[[str], str]
@@ -79,6 +80,8 @@ def call_muapi_llm(prompt: str) -> str:
         label="gpt-5-mini",
         timeout=GPT_CALL_TIMEOUT_SECONDS,
     )
+    if isinstance(result, dict):
+        record_llm_usage("muapi", "gpt-5-mini", result.get("usage") or result.get("usage_metadata"))
 
     outputs = result.get("outputs")
     if isinstance(outputs, list) and outputs and isinstance(outputs[0], str) and outputs[0].strip():

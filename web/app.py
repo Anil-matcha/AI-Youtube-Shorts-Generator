@@ -7,20 +7,19 @@ python -m web.app
 from __future__ import annotations
 
 import json
-import hashlib
-import io
 import logging
 import math
 import os
 import re
 import shutil
 import subprocess
-from array import array
 import sys
 import threading
 import time
 import uuid
-import zipfile
+import importlib.util
+from urllib.parse import unquote, urlparse
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -31,12 +30,11 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from contextlib import asynccontextmanager
-from fastapi import File, FastAPI, Header, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -58,19 +56,45 @@ from shorts_generator.config import (  # noqa: E402
     OPENAI_API_KEY,
     gpu_status,
     runtime_credentials,
+    runtime_job_control,
 )
+from shorts_generator.costs import rates_from_environment  # noqa: E402
+from web.models import JobRequest, ProviderCostRates  # noqa: E402
+from web.security import (  # noqa: E402
+    SlidingWindowLimiter,
+    auth_enabled,
+    authorized,
+    client_key,
+    error_response,
+    rate_limit_response,
+    redact_structure,
+    redact_text,
+)
+from web.feature_routes import router as feature_router  # noqa: E402
+from web.editor_routes import router as editor_router  # noqa: E402
+from web.job_routes import router as job_router  # noqa: E402
+from web.system_routes import router as system_router  # noqa: E402
+from web.update_service import UpdateService  # noqa: E402
+from web.job_store import JobStore  # noqa: E402
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _ensure_job_executor()
     if _auto_resume:
-        threading.Thread(target=_resume_interrupted_jobs, name="shorts-studio-resume", daemon=True).start()
-    yield
+        # Recovery is a bounded metadata pass; enqueue recovered work before
+        # accepting requests so the SQLite queue is authoritative from the
+        # first client connection. Actual rendering runs in the worker pool.
+        _resume_interrupted_jobs()
+    try:
+        yield
+    finally:
+        _shutdown_job_executor()
 
 
 app = FastAPI(
     title="Shorts Studio",
-    version="0.9.5",
+    version="0.10.0",
     description="Local-first video highlight extraction, editing, and export workspace.",
     contact={"name": "Shorts Studio", "url": "https://github.com/wiifhub/AI-Youtube-Shorts-Generator"},
     license_info={"name": "MIT"},
@@ -84,15 +108,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+app.include_router(system_router)
+app.include_router(feature_router, prefix="/api")
+app.include_router(job_router)
+app.include_router(editor_router)
 
 _logger = logging.getLogger("shorts_studio")
-
-
-def _error_response(message: str, code: str, status_code: int, **extra: Any) -> JSONResponse:
-    """Build the single JSON error shape used by every API endpoint."""
-    payload: Dict[str, Any] = {"error": str(message), "code": str(code)}
-    payload.update(extra)
-    return JSONResponse(status_code=status_code, content=payload)
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -107,17 +128,17 @@ async def http_exception_handler(_request: Request, exc: StarletteHTTPException)
         message = str(detail or "Request failed")
         code = f"http_{exc.status_code}"
         extra = {}
-    return _error_response(message, code, exc.status_code, **extra)
+    return error_response(redact_text(message), code, exc.status_code, **redact_structure(extra))
 
 
 @app.exception_handler(RequestValidationError)
 async def request_validation_exception_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
     """Return machine-readable validation details without Starlette's ``detail`` wrapper."""
-    return _error_response(
+    return error_response(
         "Request validation failed",
         "validation_error",
         422,
-        details=jsonable_encoder(exc.errors()),
+        details=redact_structure(jsonable_encoder(exc.errors())),
     )
 
 
@@ -125,7 +146,7 @@ async def request_validation_exception_handler(_request: Request, exc: RequestVa
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Keep unexpected failures safe for users while retaining a server-side traceback."""
     _logger.exception("Unhandled %s error on %s %s", type(exc).__name__, request.method, request.url.path)
-    return _error_response("Internal server error", "internal_error", 500)
+    return error_response("Internal server error", "internal_error", 500)
 
 
 _jobs: Dict[str, Dict[str, Any]] = {}
@@ -151,9 +172,13 @@ _max_concurrent_jobs = _positive_int_env("SHORTS_MAX_CONCURRENT_JOBS", 2)
 _job_slots = threading.Semaphore(_max_concurrent_jobs)
 _output_root = Path(LOCAL_OUTPUT_DIR).expanduser().resolve()
 _jobs_dir = _output_root / "jobs"
+_jobs_db_path = _output_root / "jobs.sqlite3"
+_job_store = JobStore(_jobs_db_path)
 _uploads_dir = _output_root / "uploads"
 _trash_dir = _output_root / ".trash"
 _setup_state_path = _output_root / "studio_state.json"
+_brand_presets_path = _output_root / "brand_presets.json"
+_cost_rates_path = _output_root / "provider_costs.json"
 _allowed_upload_extensions = {
     ".avi",
     ".m4v",
@@ -168,9 +193,23 @@ _max_upload_mb = _positive_int_env("SHORTS_MAX_UPLOAD_MB", 2048)
 _max_upload_bytes = _max_upload_mb * 1024 * 1024
 _max_json_bytes = _positive_int_env("SHORTS_MAX_JSON_MB", 2) * 1024 * 1024
 _auto_resume = os.getenv("SHORTS_AUTO_RESUME", "true").strip().lower() in {"1", "true", "yes", "on"}
+_allow_external_paths = os.getenv("SHORTS_ALLOW_EXTERNAL_PATHS", "false").strip().lower() in {"1", "true", "yes", "on"}
+_rate_limit_per_minute = _positive_int_env("SHORTS_RATE_LIMIT_PER_MINUTE", 600)
+_upload_rate_limit_per_minute = _positive_int_env("SHORTS_UPLOAD_RATE_LIMIT_PER_MINUTE", 10)
+_job_rate_limit_per_minute = _positive_int_env("SHORTS_JOB_RATE_LIMIT_PER_MINUTE", 30)
+_rate_limiter = SlidingWindowLimiter(_rate_limit_per_minute)
+_upload_rate_limiter = SlidingWindowLimiter(_upload_rate_limit_per_minute)
+_job_rate_limiter = SlidingWindowLimiter(_job_rate_limit_per_minute)
+_job_executor: Optional[ThreadPoolExecutor] = None
+_job_futures: Dict[str, Future[Any]] = {}
+_process_lock = threading.RLock()
+_job_processes: Dict[str, Dict[int, Any]] = {}
+_JOB_SCHEMA_VERSION = 2
 
-_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.9.5").strip().lstrip("v") or "0.9.5"
+_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.10.0").strip().lstrip("v") or "0.10.0"
 _GITHUB_REPO = "wiifhub/AI-Youtube-Shorts-Generator"
+_require_signed_updates = os.getenv("SHORTS_REQUIRE_SIGNED_UPDATES", "true").strip().lower() in {"1", "true", "yes", "on"}
+_max_update_bytes = _positive_int_env("SHORTS_MAX_UPDATE_MB", 4096) * 1024 * 1024
 _update_lock = threading.Lock()
 _update_state: Dict[str, Any] = {
     "status": "idle",
@@ -181,6 +220,15 @@ _update_state: Dict[str, Any] = {
     "message": "",
     "error": None,
 }
+_update_service = UpdateService(
+    repo=_GITHUB_REPO,
+    current_version=_APP_VERSION,
+    data_root=Path(os.getenv("SHORTS_STUDIO_DATA_DIR") or _output_root.parent).expanduser(),
+    state_setter=lambda **values: _set_update_state(**values),
+    state_getter=lambda: dict(_update_state),
+    max_bytes=_max_update_bytes,
+    require_digest=_require_signed_updates,
+)
 
 
 def _nonnegative_float_env(name: str, default: float) -> float:
@@ -204,7 +252,7 @@ async def request_limits(request: Request, call_next: Any):
         # by Starlette, so endpoint parsing still receives the same payload.
         body = await request.body()
         if len(body) > _max_json_bytes:
-            return _error_response(
+            return error_response(
                 f"JSON request is too large (maximum {_max_json_bytes // (1024 * 1024)} MB)",
                 "request_too_large",
                 413,
@@ -213,18 +261,46 @@ async def request_limits(request: Request, call_next: Any):
         try:
             content_length = int(raw_length)
         except (TypeError, ValueError):
-            return _error_response("Content-Length must be an integer", "invalid_content_length", 400)
+            return error_response("Content-Length must be an integer", "invalid_content_length", 400)
         if content_length < 0:
-            return _error_response("Content-Length cannot be negative", "invalid_content_length", 400)
+            return error_response("Content-Length cannot be negative", "invalid_content_length", 400)
         if content_type == "application/json" and content_length > _max_json_bytes:
-            return _error_response(
+            return error_response(
                 f"JSON request is too large (maximum {_max_json_bytes // (1024 * 1024)} MB)",
                 "request_too_large",
                 413,
             )
         if content_type and content_type != "application/json" and not content_type.startswith("multipart/"):
             if content_length > 8 * 1024 * 1024:
-                return _error_response("Request body is too large", "request_too_large", 413)
+                return error_response("Request body is too large", "request_too_large", 413)
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def security_middleware(request: Request, call_next: Any):
+    """Protect remote deployments and throttle expensive local endpoints.
+
+    Authentication is opt-in through ``SHORTS_API_TOKEN`` so the packaged
+    loopback desktop experience remains one-click.  Once configured, every
+    API route except health/login/status requires a bearer header, token header,
+    or the secure session cookie issued by ``/api/auth/login``.
+    """
+    path = request.url.path
+    public = path in {"/api/health", "/api/auth/status", "/api/auth/login"} or not path.startswith("/api/")
+    if auth_enabled() and not public and not authorized(request):
+        return error_response("Authentication required", "auth_required", 401)
+    if path.startswith("/api/") and path not in {"/api/health", "/api/auth/status"}:
+        limiter = _rate_limiter
+        limit = None
+        if path == "/api/uploads":
+            limiter = _upload_rate_limiter
+            limit = _upload_rate_limit_per_minute
+        elif path in {"/api/jobs", "/api/jobs/batch"}:
+            limiter = _job_rate_limiter
+            limit = _job_rate_limit_per_minute
+        allowed, retry_after = limiter.allow(f"{client_key(request)}:{path}", limit)
+        if not allowed:
+            return rate_limit_response(retry_after)
     return await call_next(request)
 
 
@@ -277,11 +353,45 @@ def _job_media_path(job: Dict[str, Any], value: Any) -> Optional[Path]:
         return None
     try:
         candidate = Path(str(value)).expanduser().resolve()
-        output_dir = Path(str(job.get("output_dir") or (_jobs_dir / str(job.get("id") or "")))).expanduser().resolve()
+        output_dir = _job_output_dir(job)
         candidate.relative_to(output_dir)
     except (OSError, RuntimeError, ValueError, TypeError):
         return None
     return candidate
+
+
+def _job_output_dir(job: Dict[str, Any]) -> Path:
+    """Return a job output directory inside the configured trust boundary."""
+    job_id = str(job.get("id") or "")
+    # Job records can be restored from a user-supplied backup.  Keep the
+    # fallback itself inside ``jobs`` even if a malformed record somehow
+    # reaches this helper before normal ID validation runs.
+    safe_job_id = job_id if _job_id_pattern.fullmatch(job_id) else "invalid-job"
+    fallback = (_jobs_dir / safe_job_id).expanduser().resolve()
+    raw = job.get("output_dir")
+    if not raw:
+        return fallback
+    try:
+        candidate = Path(str(raw)).expanduser().resolve()
+        if _allow_external_paths:
+            return candidate
+        candidate.relative_to(_output_root.resolve())
+        return candidate
+    except (OSError, RuntimeError, ValueError, TypeError):
+        return fallback
+
+
+def _job_source_path(job: Dict[str, Any], value: Any) -> Optional[Path]:
+    """Resolve a local source only when it remains inside the output root."""
+    if not value or str(value).startswith(("http://", "https://")):
+        return None
+    try:
+        candidate = Path(str(value)).expanduser().resolve()
+        if not _allow_external_paths:
+            candidate.relative_to(_output_root.resolve())
+        return candidate if candidate.is_file() else None
+    except (OSError, RuntimeError, ValueError, TypeError):
+        return None
 
 
 def _job_path(job_id: str) -> Path:
@@ -292,9 +402,15 @@ def _job_path(job_id: str) -> Path:
 
 
 def _persist_job_locked(job: Dict[str, Any]) -> None:
-    """Atomically persist one job; callers must hold ``_lock``."""
+    """Persist one job atomically to SQLite and a portable JSON mirror.
+
+    SQLite is the durable queue/state source.  JSON remains intentionally
+    available for human inspection and the metadata backup format.
+    """
     _jobs_dir.mkdir(parents=True, exist_ok=True)
+    job["schema_version"] = _JOB_SCHEMA_VERSION
     job["updated_at"] = time.time()
+    _job_store.save(job)
     path = _job_path(str(job["id"]))
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(
@@ -305,8 +421,26 @@ def _persist_job_locked(job: Dict[str, Any]) -> None:
 
 
 def _load_persisted_jobs() -> None:
-    """Restore recent jobs and mark in-flight work interrupted by a restart."""
+    """Restore jobs from SQLite (with legacy JSON migration) after a restart."""
     _jobs_dir.mkdir(parents=True, exist_ok=True)
+    records: Dict[str, tuple[float, Dict[str, Any]]] = {}
+    # SQLite is the primary source.  Loading the whole payload keeps recovery
+    # compatible with older records while indexed status/updated columns make
+    # future maintenance queries cheap.
+    for raw in _job_store.load_all():
+        if not isinstance(raw, dict) or not raw.get("id"):
+            continue
+        job_id = str(raw.get("id"))
+        if not _job_id_pattern.fullmatch(job_id):
+            continue
+        try:
+            updated = float(raw.get("updated_at") or raw.get("created_at") or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            updated = 0.0
+        records[job_id] = (updated, raw)
+
+    # Read legacy/mutable JSON mirrors too.  This makes an upgrade from v0.9
+    # lossless and lets a manually restored JSON file be picked up once.
     files = []
     for path in _jobs_dir.glob("*.json"):
         try:
@@ -323,11 +457,44 @@ def _load_persisted_jobs() -> None:
         job_id = str(job["id"])
         if not _job_id_pattern.fullmatch(job_id):
             continue
+        try:
+            updated = float(job.get("updated_at") or job.get("created_at") or path.stat().st_mtime)
+        except (OSError, TypeError, ValueError, OverflowError):
+            updated = 0.0
+        existing = records.get(job_id)
+        if existing and existing[0] > updated:
+            continue
+        records[job_id] = (updated, job)
+
+    for _, job in sorted(records.values(), key=lambda item: item[0], reverse=True):
+        job_id = str(job["id"])
         job["id"] = job_id
+        # A JSON/SQLite record is user-editable state, not an authorization
+        # boundary. Normalize directories and local sources before any media
+        # endpoint or recovery worker can use them.
+        job["output_dir"] = str(_job_output_dir(job))
+        persisted_source = job.get("raw_source_video_url")
+        if persisted_source and not str(persisted_source).startswith(("http://", "https://")):
+            safe_source = _job_source_path(job, persisted_source)
+            job["raw_source_video_url"] = str(safe_source) if safe_source else None
+        # Persisted records from pre-queue releases did not carry a schema
+        # marker.  Upgrade them in memory with safe defaults before serving.
+        job["schema_version"] = _JOB_SCHEMA_VERSION
+        job.setdefault("progress", 0)
+        job.setdefault("elapsed_seconds", None)
+        job.setdefault("eta_seconds", None)
+        job.setdefault(
+            "checkpoint",
+            {
+                "stage": str(job.get("stage") or "unknown"),
+                "progress": job.get("progress", 0),
+                "message": str(job.get("message") or "Recovered project")[:400],
+            },
+        )
         if not isinstance(job.get("logs"), list):
             job["logs"] = []
         try:
-            created_at = float(job.get("created_at") or path.stat().st_mtime)
+            created_at = float(job.get("created_at") or job.get("updated_at") or time.time())
             if not math.isfinite(created_at):
                 raise ValueError("created_at must be finite")
             job["created_at"] = created_at
@@ -340,7 +507,7 @@ def _load_persisted_jobs() -> None:
         job.setdefault("name", str(persisted_request.get("url") or job_id))
         job.setdefault("archived", False)
         job.setdefault("updated_at", job.get("created_at"))
-        if job.get("status") == "running":
+        if job.get("status") in {"running", "queued"}:
             message = "Interrupted when Shorts Studio stopped; it can be resumed."
             job["status"] = "interrupted"
             job["stage"] = "interrupted"
@@ -349,80 +516,17 @@ def _load_persisted_jobs() -> None:
             job["logs"] = list(job["logs"])[-79:]
             job["logs"].append({"t": time.time(), "stage": "interrupted", "message": message})
         _jobs[job_id] = job
+        # Migrate legacy JSON records and persist the interrupted checkpoint in
+        # both stores so the next restart has exactly the same state.
+        try:
+            _persist_job_locked(job)
+        except (OSError, ValueError, TypeError):
+            _logger.exception("Could not migrate persisted job %s", job_id)
 
 
 _load_persisted_jobs()
 
 
-class JobRequest(BaseModel):
-    model_config = {"allow_inf_nan": False}
-    url: str = Field(..., min_length=3)
-    mode: str = "local"
-    num_clips: int = Field(3, ge=1, le=12)
-    aspect_ratio: str = "9:16"
-    download_format: str = "720"
-    language: Optional[str] = None
-    caption_style: str = "bold"
-    remove_silence: bool = False
-    normalize_audio: bool = False
-    denoise_audio: bool = False
-    remove_filler_words: bool = False
-    caption_position: str = "bottom"
-    caption_font: str = "Arial"
-    caption_size: int = Field(0, ge=0, le=120)
-    caption_color: Optional[str] = None
-    focus: str = "balanced"
-    background_music: Optional[str] = None
-    watermark: Optional[str] = None
-    auto_reframe: bool = True
-    crop_position: float = Field(0.5, ge=0.0, le=1.0)
-    fit_mode: str = "crop"
-    zoom: float = Field(1.0, ge=0.5, le=1.5)
-    intro: Optional[str] = None
-    outro: Optional[str] = None
-    jump_cuts: bool = False
-    layout: str = "single"
-    whisper_model: Optional[str] = None
-    whisper_device: Optional[str] = None
-    output_height: int = Field(1920, ge=0, le=4320)
-    save_folder: Optional[str] = None
-    llm_provider: Optional[str] = None
-
-
-class BatchRequest(JobRequest):
-    url: str = ""
-    urls: List[str] = Field(..., min_length=1, max_length=50)
-
-
-class ClipUpdate(BaseModel):
-    model_config = {"allow_inf_nan": False}
-    start_time: float = Field(..., ge=0)
-    end_time: float = Field(..., gt=0)
-    caption_style: Optional[str] = None
-    caption_position: str = "bottom"
-    caption_font: str = "Arial"
-    caption_size: int = Field(0, ge=0, le=120)
-    caption_color: Optional[str] = None
-    crop_position: float = Field(0.5, ge=0.0, le=1.0)
-    zoom: float = Field(1.0, ge=0.5, le=1.5)
-    fit_mode: str = "crop"
-    layout: str = "single"
-    output_height: int = Field(1920, ge=0, le=4320)
-
-
-class ProjectUpdate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=80)
-
-
-class OpenFolderRequest(BaseModel):
-    job_id: Optional[str] = None
-
-
-class SetupStateUpdate(BaseModel):
-    dismissed: bool = True
-
-
-_log_secret_pattern = re.compile(r"(?i)\b(?:sk-[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{8,}|mu_[A-Za-z0-9_-]{8,})\b")
 _log_level_stages = {
     "error": {"error"},
     "warn": {"warning", "warn"},
@@ -446,14 +550,13 @@ _log_level_stages = {
 
 def _redact_log_text(value: Any, job_id: Optional[str] = None) -> str:
     """Keep credentials out of the log API even if a dependency echoes one."""
-    text = str(value or "")
-    text = _log_secret_pattern.sub("[redacted]", text)
-    if job_id:
-        credentials = _job_credentials.get(job_id) or {}
-        for secret in credentials.values():
-            if isinstance(secret, str) and len(secret) >= 4:
-                text = text.replace(secret, "[redacted]")
-    return text[:4000]
+    supplied = _job_credentials.get(job_id or "") if job_id else None
+    credentials = (
+        {key: secret for key, secret in supplied.items() if key != "llm_provider"}
+        if supplied
+        else None
+    )
+    return redact_text(value, credentials, max_length=4000)
 
 
 def _normalise_log_entry(job_id: str, project: str, entry: Any, index: int) -> Optional[Dict[str, Any]]:
@@ -472,7 +575,7 @@ def _normalise_log_entry(job_id: str, project: str, entry: Any, index: int) -> O
     return {
         "id": f"{job_id}:{index}:{timestamp:.6f}",
         "job_id": job_id,
-        "project": str(project or "Untitled project")[:160],
+        "project": _redact_log_text(str(project or "Untitled project"))[:160],
         "t": timestamp,
         "timestamp": stamp,
         "stage": stage,
@@ -525,16 +628,30 @@ def _filter_log_entries_locked(
 def _job_snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
     status = str(job.get("status") or "unknown")
     request = job.get("request") if isinstance(job.get("request"), dict) else {}
+    safe_request = redact_structure(request)
+    try:
+        progress = max(0, min(100, int(float(job.get("progress") or 0))))
+    except (TypeError, ValueError, OverflowError):
+        progress = 0
+    try:
+        schema_version = int(job.get("schema_version") or _JOB_SCHEMA_VERSION)
+    except (TypeError, ValueError, OverflowError):
+        schema_version = _JOB_SCHEMA_VERSION
     return {
         "id": str(job.get("id") or ""),
         "status": status,
         "stage": str(job.get("stage") or "unknown"),
-        "message": str(job.get("message") or ""),
+        "message": _redact_log_text(job.get("message"), str(job.get("id") or "")),
+        "progress": progress,
+        "elapsed_seconds": job.get("elapsed_seconds"),
+        "eta_seconds": job.get("eta_seconds"),
+        "checkpoint": redact_structure(job.get("checkpoint")),
+        "schema_version": schema_version,
         "logs": [
             safe
             for safe in (
                 {
-                    **entry,
+                    **redact_structure(entry),
                     "stage": str(entry.get("stage") or "info")[:32],
                     "message": _redact_log_text(entry.get("message"), str(job.get("id") or "")),
                 }
@@ -542,14 +659,14 @@ def _job_snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
                 if isinstance(entry, dict)
             )
         ],
-        "error": job.get("error"),
-        "result": job.get("result"),
+        "error": _redact_log_text(job.get("error"), str(job.get("id") or "")) if job.get("error") else None,
+        "result": redact_structure(job.get("result")),
         "created_at": job.get("created_at"),
         "updated_at": job.get("updated_at", job.get("created_at")),
-        "name": str(job.get("name") or request.get("url") or job.get("id") or "Untitled project"),
+        "name": _redact_log_text(job.get("name") or request.get("url") or job.get("id") or "Untitled project"),
         "archived": bool(job.get("archived", False)),
         "can_retry": status in {"error", "cancelled", "interrupted", "draft"} and bool(request.get("url")),
-        "request": request,
+        "request": safe_request,
         "output_dir": job.get("output_dir"),
     }
 
@@ -611,11 +728,8 @@ def _public_shorts(shorts: List[Dict], job_id: str) -> List[Dict]:
 
 def _cleanup_job_temporary_files(job: Dict[str, Any]) -> None:
     """Remove only renderer scratch files, never completed/user media."""
-    output_dir = job.get("output_dir")
-    if not output_dir:
-        return
     try:
-        root = Path(str(output_dir)).expanduser().resolve()
+        root = _job_output_dir(job)
         if not root.is_dir():
             return
         scratch_suffixes = (
@@ -679,17 +793,198 @@ def _runtime_credentials_from_headers(
     return values
 
 
+def _validate_mode_capabilities(req: JobRequest) -> None:
+    """Reject settings that a hosted MuAPI render cannot honor silently."""
+    if req.mode != "api":
+        return
+    parsed = urlparse(req.url.strip())
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(400, "API mode requires an http(s) video URL; choose Local mode for a file path.")
+    unsupported = []
+    if req.caption_style != "bold":
+        unsupported.append("caption_style")
+    if req.caption_position != "bottom":
+        unsupported.append("caption_position")
+    if req.caption_font != "Arial":
+        unsupported.append("caption_font")
+    if req.caption_size:
+        unsupported.append("caption_size")
+    if req.caption_color:
+        unsupported.append("caption_color")
+    if req.remove_silence:
+        unsupported.append("remove_silence")
+    if req.normalize_audio:
+        unsupported.append("normalize_audio")
+    if req.denoise_audio:
+        unsupported.append("denoise_audio")
+    if req.remove_filler_words:
+        unsupported.append("remove_filler_words")
+    if req.background_music:
+        unsupported.append("background_music")
+    if req.music_volume != 0.18:
+        unsupported.append("music_volume")
+    if req.music_fade_in:
+        unsupported.append("music_fade_in")
+    if req.music_fade_out:
+        unsupported.append("music_fade_out")
+    if req.watermark:
+        unsupported.append("watermark")
+    if req.intro:
+        unsupported.append("intro")
+    if req.outro:
+        unsupported.append("outro")
+    if req.jump_cuts:
+        unsupported.append("jump_cuts")
+    if req.layout != "single":
+        unsupported.append("layout")
+    if req.fit_mode != "crop":
+        unsupported.append("fit_mode")
+    if req.zoom != 1.0:
+        unsupported.append("zoom")
+    if req.auto_reframe is not True:
+        unsupported.append("auto_reframe")
+    if req.crop_position != 0.5:
+        unsupported.append("crop_position")
+    if req.output_height not in {0, 1920}:
+        unsupported.append("output_height")
+    if req.save_folder:
+        unsupported.append("save_folder")
+    if req.whisper_model:
+        unsupported.append("whisper_model")
+    if req.whisper_device:
+        unsupported.append("whisper_device")
+    if req.cuts:
+        unsupported.append("cuts")
+    if req.llm_provider or req.llm_model is not None or req.llm_temperature != 0.2:
+        unsupported.append("local_llm_options")
+    if unsupported:
+        names = ", ".join(unsupported)
+        raise HTTPException(400, f"API mode does not support {names}; switch to Local mode for these controls.")
+
+
+def _validate_local_paths(req: JobRequest) -> None:
+    """Keep a remotely reachable worker from reading arbitrary host paths."""
+    if req.mode != "local" or _allow_external_paths:
+        return
+    allowed_root = _output_root.resolve()
+
+    def check(value: Optional[str], label: str, *, must_exist: bool) -> None:
+        if not value:
+            return
+        try:
+            candidate = Path(str(value)).expanduser().resolve()
+            candidate.relative_to(allowed_root)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(
+                400,
+                f"{label} must be inside the configured output folder; set SHORTS_ALLOW_EXTERNAL_PATHS=true only for a trusted local desktop session.",
+            ) from exc
+        if must_exist and not candidate.is_file():
+            raise HTTPException(400, f"{label} does not exist: {value}")
+
+    source = str(req.url or "").strip()
+    parsed = urlparse(source)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        local_source = source
+        if parsed.scheme.lower() == "file":
+            local_source = unquote(parsed.path)
+            if os.name == "nt" and re.match(r"^/[A-Za-z]:", local_source):
+                local_source = local_source[1:]
+        check(local_source, "source path", must_exist=True)
+    check(req.save_folder, "save_folder", must_exist=False)
+    check(req.background_music, "background_music", must_exist=True)
+    check(req.watermark, "watermark", must_exist=True)
+    check(req.intro, "intro", must_exist=True)
+    check(req.outro, "outro", must_exist=True)
+
+
+def _ensure_job_executor() -> ThreadPoolExecutor:
+    """Create the bounded worker pool lazily so TestClient and restarts recover."""
+    global _job_executor
+    if _job_executor is None:
+        _job_executor = ThreadPoolExecutor(max_workers=_max_concurrent_jobs, thread_name_prefix="shorts-studio-job")
+    return _job_executor
+
+
+def _shutdown_job_executor() -> None:
+    global _job_executor
+    with _process_lock:
+        active_job_ids = list(_job_processes)
+    for job_id in active_job_ids:
+        _terminate_job_processes(job_id)
+    executor = _job_executor
+    _job_executor = None
+    if executor is not None:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _register_job_process(job_id: str, process: Any) -> None:
+    """Track a render child so cancellation can terminate FFmpeg promptly."""
+    try:
+        pid = int(getattr(process, "pid"))
+    except (AttributeError, TypeError, ValueError):
+        return
+    with _process_lock:
+        _job_processes.setdefault(job_id, {})[pid] = process
+
+
+def _unregister_job_process(job_id: str, process: Any) -> None:
+    try:
+        pid = int(getattr(process, "pid"))
+    except (AttributeError, TypeError, ValueError):
+        return
+    with _process_lock:
+        processes = _job_processes.get(job_id)
+        if not processes:
+            return
+        processes.pop(pid, None)
+        if not processes:
+            _job_processes.pop(job_id, None)
+
+
+def _terminate_job_processes(job_id: str) -> int:
+    """Terminate all child processes belonging to a job and return a count."""
+    with _process_lock:
+        processes = list((_job_processes.get(job_id) or {}).values())
+    terminated = 0
+    for process in processes:
+        try:
+            if process.poll() is None:
+                process.terminate()
+                terminated += 1
+        except (AttributeError, OSError, ProcessLookupError):
+            continue
+    deadline = time.monotonic() + 2.0
+    for process in processes:
+        try:
+            remaining = max(0.0, deadline - time.monotonic())
+            process.wait(timeout=remaining)
+        except (AttributeError, OSError, subprocess.TimeoutExpired):
+            try:
+                process.kill()
+                process.wait(timeout=1.0)
+            except (AttributeError, OSError, ProcessLookupError, subprocess.TimeoutExpired):
+                pass
+    with _process_lock:
+        _job_processes.pop(job_id, None)
+    return terminated
+
+
 def _start_job_thread(
     job_id: str,
     req: JobRequest,
     credentials: Optional[Dict[str, str]] = None,
 ) -> None:
-    thread = threading.Thread(
-        target=_run_job,
-        args=(job_id, req, dict(credentials or {})),
-        daemon=True,
-    )
-    thread.start()
+    future = _ensure_job_executor().submit(_run_job, job_id, req, dict(credentials or {}))
+    with _lock:
+        _job_futures[job_id] = future
+
+    def clear_finished(_future: Future[Any]) -> None:
+        with _lock:
+            if _job_futures.get(job_id) is _future:
+                _job_futures.pop(job_id, None)
+
+    future.add_done_callback(clear_finished)
 
 
 def _run_job(
@@ -698,6 +993,19 @@ def _run_job(
     credentials: Optional[Dict[str, str]] = None,
 ) -> None:
     slot_acquired = False
+    with _lock:
+        cancel_event = _cancel_events.setdefault(job_id, threading.Event())
+    stage_weights = {
+        "queued": 0,
+        "download": 15,
+        "analyze": 25,
+        "transcribe": 45,
+        "rank": 60,
+        "crop": 85,
+        "metadata": 95,
+        "done": 100,
+    }
+    started_at = time.time()
 
     def progress(stage: str, message: str) -> None:
         with _lock:
@@ -706,12 +1014,31 @@ def _run_job(
                 raise RuntimeError("Job cancelled")
             job["stage"] = stage
             job["message"] = message
+            job["progress"] = stage_weights.get(str(stage).lower(), job.get("progress", 0))
+            elapsed = max(0.0, time.time() - started_at)
+            job["elapsed_seconds"] = round(elapsed, 1)
+            current_progress = float(job.get("progress") or 0)
+            if current_progress > 0 and current_progress < 100:
+                job["eta_seconds"] = round(max(0.0, elapsed * (100.0 - current_progress) / current_progress), 1)
+            else:
+                job["eta_seconds"] = None
             _append_job_log(job, stage, message)
+            job["checkpoint"] = {
+                "stage": str(stage),
+                "progress": job["progress"],
+                "message": str(message)[:400],
+                "updated_at": time.time(),
+            }
             _persist_job_locked(job)
 
     try:
         _job_slots.acquire()
         slot_acquired = True
+        with _lock:
+            if job_id in _jobs and _jobs[job_id].get("status") != "cancelled":
+                _jobs[job_id]["status"] = "running"
+                _jobs[job_id]["progress"] = 0
+                _jobs[job_id]["eta_seconds"] = None
         progress("queued", "Starting pipeline...")
         if req.save_folder:
             base = Path(req.save_folder).expanduser().resolve()
@@ -725,46 +1052,59 @@ def _run_job(
             _jobs[job_id]["output_dir"] = str(job_output_dir)
             _persist_job_locked(_jobs[job_id])
         supplied = dict(credentials or {})
-        with runtime_credentials(
-            muapi_api_key=supplied.get("muapi"),
-            openai_api_key=supplied.get("openai"),
-            gemini_api_key=supplied.get("gemini"),
-            llm_provider=supplied.get("llm_provider") or req.llm_provider,
+        with runtime_job_control(
+            cancel_check=cancel_event.is_set,
+            register_process=lambda process: _register_job_process(job_id, process),
+            unregister_process=lambda process: _unregister_job_process(job_id, process),
         ):
-            result = generate_shorts(
-                youtube_url=req.url.strip(),
-                num_clips=req.num_clips,
-                aspect_ratio=req.aspect_ratio,
-                download_format=req.download_format,
-                language=req.language or None,
-                mode=req.mode,
-                progress=progress,
-                output_dir=str(job_output_dir) if req.mode == "local" else None,
-                caption_style=req.caption_style,
-                remove_silence=req.remove_silence,
-                normalize_audio=req.normalize_audio,
-                denoise_audio=req.denoise_audio,
-                remove_filler_words=req.remove_filler_words,
-                caption_position=req.caption_position,
-                caption_font=req.caption_font,
-                caption_size=req.caption_size,
-                caption_color=req.caption_color,
-                focus=req.focus,
-                background_music=req.background_music,
-                watermark=req.watermark,
-                auto_reframe=req.auto_reframe,
-                crop_position=req.crop_position,
-                fit_mode=req.fit_mode,
-                zoom=req.zoom,
-                intro=req.intro,
-                outro=req.outro,
-                jump_cuts=req.jump_cuts,
-                layout=req.layout,
-                whisper_model=req.whisper_model,
-                whisper_device=req.whisper_device,
-                output_height=req.output_height,
-                llm_provider=req.llm_provider,
-            )
+            with runtime_credentials(
+                muapi_api_key=supplied.get("muapi"),
+                openai_api_key=supplied.get("openai"),
+                gemini_api_key=supplied.get("gemini"),
+                llm_provider=supplied.get("llm_provider") or req.llm_provider,
+            ):
+                result = generate_shorts(
+                    youtube_url=req.url.strip(),
+                    num_clips=req.num_clips,
+                    aspect_ratio=req.aspect_ratio,
+                    download_format=req.download_format,
+                    language=req.language or None,
+                    mode=req.mode,
+                    progress=progress,
+                    output_dir=str(job_output_dir) if req.mode == "local" else None,
+                    caption_style=req.caption_style,
+                    remove_silence=req.remove_silence,
+                    normalize_audio=req.normalize_audio,
+                    denoise_audio=req.denoise_audio,
+                    remove_filler_words=req.remove_filler_words,
+                    caption_position=req.caption_position,
+                    caption_font=req.caption_font,
+                    caption_size=req.caption_size,
+                    caption_color=req.caption_color,
+                    focus=req.focus,
+                    background_music=req.background_music,
+                    watermark=req.watermark,
+                    auto_reframe=req.auto_reframe,
+                    crop_position=req.crop_position,
+                    fit_mode=req.fit_mode,
+                    zoom=req.zoom,
+                    intro=req.intro,
+                    outro=req.outro,
+                    jump_cuts=req.jump_cuts,
+                    layout=req.layout,
+                    whisper_model=req.whisper_model,
+                    whisper_device=req.whisper_device,
+                    output_height=req.output_height,
+                    llm_provider=req.llm_provider,
+                    llm_model=req.llm_model,
+                    llm_temperature=req.llm_temperature,
+                    music_volume=req.music_volume,
+                    music_fade_in=req.music_fade_in,
+                    music_fade_out=req.music_fade_out,
+                    cuts=[cut.model_dump() for cut in req.cuts],
+                    cancel_check=cancel_event.is_set,
+                    cost_rates=_load_cost_rates(),
+                )
         if not isinstance(result, dict):
             raise RuntimeError("pipeline returned an invalid result object")
         transcript = _dict_value(result.get("transcript"))
@@ -777,6 +1117,7 @@ def _run_job(
             "shorts": _public_shorts(raw_shorts, job_id),
             "transcript_duration": _safe_transcript_duration(transcript),
             "segment_count": len(_dict_items(transcript.get("segments"))),
+            "llm": _dict_value(result.get("llm")),
         }
         # Keep a portable manifest beside the rendered media, including when
         # the user selected a custom Save folder instead of output/jobs.
@@ -821,24 +1162,22 @@ def _run_job(
             if job.get("status") == "cancelled":
                 _cleanup_job_temporary_files(job)
                 return
+            safe_error = _redact_log_text(str(exc), job_id)
             job["status"] = "error"
             job["stage"] = "error"
-            job["message"] = str(exc)
-            job["error"] = str(exc)
-            _append_job_log(job, "error", str(exc))
+            job["message"] = safe_error
+            job["error"] = safe_error
+            _append_job_log(job, "error", safe_error)
             _persist_job_locked(job)
             _cleanup_job_temporary_files(job)
     finally:
+        _terminate_job_processes(job_id)
         if slot_acquired:
             _job_slots.release()
         with _lock:
             _cancel_events.pop(job_id, None)
             _job_credentials.pop(job_id, None)
-
-
-@app.get("/", response_class=HTMLResponse)
-def index() -> FileResponse:
-    return FileResponse(STATIC / "index.html")
+            _job_futures.pop(job_id, None)
 
 
 def _enqueue_job(
@@ -849,6 +1188,8 @@ def _enqueue_job(
         raise HTTPException(400, "mode must be api or local")
     if not req.url or not req.url.strip():
         raise HTTPException(400, "url/path cannot be blank")
+    _validate_mode_capabilities(req)
+    _validate_local_paths(req)
     if req.llm_provider is not None:
         provider = str(req.llm_provider).strip().lower()
         if provider not in {"openai", "gemini"}:
@@ -883,10 +1224,15 @@ def _enqueue_job(
     with _lock:
         _jobs[job_id] = {
             "id": job_id,
+            "schema_version": _JOB_SCHEMA_VERSION,
             "name": default_name,
-            "status": "running",
+            "status": "queued",
             "stage": "queued",
             "message": "Queued",
+            "progress": 0,
+            "elapsed_seconds": None,
+            "eta_seconds": None,
+            "checkpoint": {"stage": "queued", "progress": 0, "message": "Queued"},
             "logs": [],
             "error": None,
             "result": None,
@@ -928,6 +1274,12 @@ def _enqueue_job(
                 "output_height": req.output_height,
                 "save_folder": req.save_folder,
                 "llm_provider": req.llm_provider,
+                "llm_model": req.llm_model,
+                "llm_temperature": req.llm_temperature,
+                "music_volume": req.music_volume,
+                "music_fade_in": req.music_fade_in,
+                "music_fade_out": req.music_fade_out,
+                "cuts": [cut.model_dump() for cut in req.cuts],
             },
         }
         _cancel_events[job_id] = threading.Event()
@@ -956,6 +1308,17 @@ def _resume_interrupted_jobs() -> None:
                 _append_job_log(job, "error", job["message"])
                 _persist_job_locked(job)
                 continue
+            try:
+                _validate_mode_capabilities(req)
+                _validate_local_paths(req)
+            except Exception as exc:
+                job["status"] = "error"
+                job["stage"] = "error"
+                job["message"] = f"Saved project settings are not supported: {exc}"
+                job["error"] = job["message"]
+                _append_job_log(job, "error", job["message"])
+                _persist_job_locked(job)
+                continue
             job["status"] = "running"
             job["stage"] = "queued"
             job["message"] = "Resuming after the previous Shorts Studio session."
@@ -969,1057 +1332,157 @@ def _resume_interrupted_jobs() -> None:
         _start_job_thread(job_id, req)
 
 
-@app.post("/api/jobs")
-def create_job(
-    req: JobRequest,
-    x_muapi_key: Optional[str] = Header(default=None, alias="X-MuAPI-Key"),
-    x_openai_key: Optional[str] = Header(default=None, alias="X-OpenAI-Key"),
-    x_gemini_key: Optional[str] = Header(default=None, alias="X-Gemini-Key"),
-    x_llm_provider: Optional[str] = Header(default=None, alias="X-LLM-Provider"),
-) -> Dict[str, Any]:
-    credentials = _runtime_credentials_from_headers(x_muapi_key, x_openai_key, x_gemini_key, x_llm_provider)
-    return _enqueue_job(req, credentials)
 
 
-@app.post("/api/jobs/batch")
-def create_batch_jobs(
-    req: BatchRequest,
-    x_muapi_key: Optional[str] = Header(default=None, alias="X-MuAPI-Key"),
-    x_openai_key: Optional[str] = Header(default=None, alias="X-OpenAI-Key"),
-    x_gemini_key: Optional[str] = Header(default=None, alias="X-Gemini-Key"),
-    x_llm_provider: Optional[str] = Header(default=None, alias="X-LLM-Provider"),
-) -> Dict[str, Any]:
-    credentials = _runtime_credentials_from_headers(x_muapi_key, x_openai_key, x_gemini_key, x_llm_provider)
-    jobs = []
-    for url in req.urls:
-        clean_url = url.strip()
-        if len(clean_url) < 3:
-            continue
-        item = JobRequest(
-            url=clean_url,
-            mode=req.mode,
-            num_clips=req.num_clips,
-            aspect_ratio=req.aspect_ratio,
-            download_format=req.download_format,
-            language=req.language,
-            caption_style=req.caption_style,
-            remove_silence=req.remove_silence,
-            normalize_audio=req.normalize_audio,
-            denoise_audio=req.denoise_audio,
-            remove_filler_words=req.remove_filler_words,
-            caption_position=req.caption_position,
-            caption_font=req.caption_font,
-            caption_size=req.caption_size,
-            caption_color=req.caption_color,
-            focus=req.focus,
-            background_music=req.background_music,
-            watermark=req.watermark,
-            auto_reframe=req.auto_reframe,
-            crop_position=req.crop_position,
-            fit_mode=req.fit_mode,
-            zoom=req.zoom,
-            intro=req.intro,
-            outro=req.outro,
-            jump_cuts=req.jump_cuts,
-            layout=req.layout,
-            whisper_model=req.whisper_model,
-            whisper_device=req.whisper_device,
-            output_height=req.output_height,
-            save_folder=req.save_folder,
-            llm_provider=req.llm_provider,
-        )
-        jobs.append(_enqueue_job(item, credentials))
-    if not jobs:
-        raise HTTPException(400, "batch did not contain any usable URLs or file paths")
-    return {"jobs": jobs}
-
-
-@app.post("/api/jobs/{job_id}/cancel")
-def cancel_job(job_id: str) -> Dict[str, Any]:
-    with _lock:
-        job = _jobs.get(job_id)
-        if not job:
-            raise HTTPException(404, "job not found")
-        if job.get("status") == "running":
-            job["status"] = "cancelled"
-            job["stage"] = "cancelled"
-            job["message"] = "Cancellation requested"
-            job["error"] = "Cancelled by user"
-            _append_job_log(job, "cancelled", job["message"])
-            _cancel_events.setdefault(job_id, threading.Event()).set()
-            _persist_job_locked(job)
-        return _job_snapshot(job)
-
-
-@app.get("/api/jobs")
-def list_jobs(include_archived: bool = False) -> Dict[str, Any]:
-    def created_at_value(job: Dict[str, Any]) -> float:
-        try:
-            value = float(job.get("created_at") or 0.0)
-        except (TypeError, ValueError, OverflowError):
-            return 0.0
-        return value if math.isfinite(value) else 0.0
-
-    with _lock:
-        jobs = [
-            _job_snapshot(j)
-            for j in sorted(
-                (j for j in _jobs.values() if include_archived or not j.get("archived", False)),
-                key=created_at_value,
-                reverse=True,
-            )
-        ]
-    return {"jobs": jobs[:20]}
-
-
-@app.patch("/api/jobs/{job_id}")
-def rename_job(job_id: str, update: ProjectUpdate) -> Dict[str, Any]:
-    name = " ".join(update.name.split())
-    if not name:
-        raise HTTPException(400, "project name cannot be blank")
-    with _lock:
-        job = _jobs.get(job_id)
-        if not job:
-            raise HTTPException(404, "job not found")
-        job["name"] = name
-        _persist_job_locked(job)
-        return _job_snapshot(job)
-
-
-@app.post("/api/jobs/{job_id}/archive")
-def archive_job(job_id: str) -> Dict[str, Any]:
-    """Toggle archive state without touching rendered media."""
-    with _lock:
-        job = _jobs.get(job_id)
-        if not job:
-            raise HTTPException(404, "job not found")
-        job["archived"] = not bool(job.get("archived", False))
-        _append_job_log(job, "project", "Archived" if job["archived"] else "Restored to library")
-        _persist_job_locked(job)
-        return _job_snapshot(job)
-
-
-@app.post("/api/jobs/{job_id}/duplicate")
-def duplicate_job(job_id: str) -> Dict[str, Any]:
-    """Create a clean draft with the source settings of an existing project."""
-    with _lock:
-        source = _jobs.get(job_id)
-        if not source:
-            raise HTTPException(404, "job not found")
-        request = _dict_value(source.get("request"))
+def _json_file_size(path: Path) -> int:
     try:
-        copied_request = JobRequest.model_validate(request)
-    except Exception as exc:
-        raise HTTPException(400, f"project settings are invalid: {exc}") from exc
-    new_id = uuid.uuid4().hex[:12]
-    name = f"{source.get('name') or 'Untitled project'} copy"
-    clone = {
-        "id": new_id,
-        "name": name[:80],
-        "status": "draft",
-        "stage": "draft",
-        "message": "Duplicated project ready to run",
-        "error": None,
-        "result": None,
-        "raw_shorts": [],
-        "raw_transcript": {},
-        "raw_source_video_url": None,
-        "created_at": time.time(),
-        "updated_at": time.time(),
-        "archived": False,
-        "logs": [{"t": time.time(), "stage": "project", "message": "Duplicated from project " + job_id}],
-        "request": copied_request.model_dump(),
-    }
-    with _lock:
-        _jobs[new_id] = clone
-        _cancel_events.pop(new_id, None)
-        _persist_job_locked(clone)
-        return _job_snapshot(clone)
-
-
-def _trash_path(job_id: str) -> Path:
-    if not _job_id_pattern.fullmatch(str(job_id)):
-        raise ValueError("invalid job id")
-    return _trash_dir / f"{job_id}.json"
-
-
-@app.delete("/api/jobs/{job_id}")
-def delete_job(job_id: str) -> Dict[str, Any]:
-    """Soft-delete a project record; media remains recoverable on disk."""
-    with _lock:
-        job = _jobs.get(job_id)
-        if not job:
-            raise HTTPException(404, "job not found")
-        if job.get("status") == "running":
-            raise HTTPException(409, "cancel the running job before deleting it")
-        _trash_dir.mkdir(parents=True, exist_ok=True)
-        source = _job_path(job_id)
-        target = _trash_path(job_id)
-        if source.is_file():
-            os.replace(source, target)
-        else:
-            target.write_text(json.dumps(job, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-        _jobs.pop(job_id, None)
-        _cancel_events.pop(job_id, None)
-    return {"status": "deleted", "job_id": job_id, "recoverable": True, "media_preserved": True}
-
-
-@app.post("/api/jobs/{job_id}/restore")
-def restore_job(job_id: str) -> Dict[str, Any]:
-    with _lock:
-        if job_id in _jobs:
-            raise HTTPException(409, "project is already in the library")
-        path = _trash_path(job_id)
-        if not path.is_file():
-            raise HTTPException(404, "deleted project not found")
-        try:
-            job = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError) as exc:
-            raise HTTPException(500, f"could not restore project: {exc}") from exc
-        if not isinstance(job, dict) or str(job.get("id")) != job_id:
-            raise HTTPException(400, "deleted project record is invalid")
-        _jobs[job_id] = job
-        _persist_job_locked(job)
-        try:
-            path.unlink()
-        except OSError:
-            pass
-        return _job_snapshot(job)
-
-
-@app.post("/api/jobs/{job_id}/retry")
-def retry_job(
-    job_id: str,
-    x_muapi_key: Optional[str] = Header(default=None, alias="X-MuAPI-Key"),
-    x_openai_key: Optional[str] = Header(default=None, alias="X-OpenAI-Key"),
-    x_gemini_key: Optional[str] = Header(default=None, alias="X-Gemini-Key"),
-    x_llm_provider: Optional[str] = Header(default=None, alias="X-LLM-Provider"),
-) -> Dict[str, Any]:
-    """Restart a failed/interrupted/draft project with its saved settings."""
-    with _lock:
-        job = _jobs.get(job_id)
-        if not job:
-            raise HTTPException(404, "job not found")
-        status = str(job.get("status") or "unknown")
-        if status == "running":
-            raise HTTPException(409, "project is already running")
-        if status not in {"error", "cancelled", "interrupted", "draft"}:
-            raise HTTPException(409, "only failed, cancelled, interrupted, or draft projects can be retried")
-        request = _dict_value(job.get("request"))
-    try:
-        req = JobRequest.model_validate(request)
-    except Exception as exc:
-        raise HTTPException(400, f"saved project settings are invalid: {exc}") from exc
-    credentials = _runtime_credentials_from_headers(x_muapi_key, x_openai_key, x_gemini_key, x_llm_provider)
-    if req.llm_provider:
-        credentials["llm_provider"] = req.llm_provider
-    elif credentials.get("llm_provider"):
-        req.llm_provider = credentials["llm_provider"]
-    if req.mode == "api" and not (credentials.get("muapi") or MUAPI_API_KEY):
-        raise HTTPException(
-            400,
-            "API mode needs a MuAPI API key. Enter it in Settings before retrying.",
-        )
-    with _lock:
-        job = _jobs.get(job_id)
-        if not job:
-            raise HTTPException(404, "job not found")
-        job["status"] = "running"
-        job["stage"] = "queued"
-        job["message"] = "Queued for retry"
-        job["error"] = None
-        job["result"] = None
-        job["raw_shorts"] = []
-        job["raw_transcript"] = {}
-        job["raw_source_video_url"] = None
-        job["logs"] = list(job.get("logs") or [])[-79:]
-        _append_job_log(job, "queued", job["message"])
-        _cancel_events[job_id] = threading.Event()
-        if credentials:
-            _job_credentials[job_id] = credentials
-        _persist_job_locked(job)
-        snapshot = _job_snapshot(job)
-    _start_job_thread(job_id, req, credentials)
-    return snapshot
-
-
-def _validate_log_filters(job_id: Optional[str], level: Optional[str], stage: Optional[str]) -> None:
-    if job_id and not _job_id_pattern.fullmatch(job_id):
-        raise HTTPException(400, "invalid job id")
-    if level and level.strip().lower() not in {"error", "warn", "running", "done", "project"}:
-        raise HTTPException(400, "invalid log level")
-    if stage and (len(stage) > 32 or not re.fullmatch(r"[A-Za-z0-9_.-]+", stage.strip())):
-        raise HTTPException(400, "invalid log stage")
-
-
-@app.get("/api/logs")
-def list_logs(
-    job_id: Optional[str] = Query(default=None, max_length=64),
-    level: Optional[str] = Query(default=None, max_length=20),
-    stage: Optional[str] = Query(default=None, max_length=32),
-    q: Optional[str] = Query(default=None, max_length=300),
-    limit: int = Query(default=250, ge=1, le=1000),
-) -> Dict[str, Any]:
-    """Return recent project activity without exposing credentials or raw records."""
-    _validate_log_filters(job_id, level, stage)
-    with _lock:
-        if job_id and job_id not in _jobs:
-            raise HTTPException(404, "job not found")
-        entries = _filter_log_entries_locked(job_id, level, stage, q)
-    total = len(entries)
-    return {
-        "logs": entries[:limit],
-        "count": min(total, limit),
-        "total": total,
-        "current_version": _APP_VERSION,
-    }
-
-
-@app.get("/api/logs/download")
-def download_logs(
-    job_id: Optional[str] = Query(default=None, max_length=64),
-    level: Optional[str] = Query(default=None, max_length=20),
-    stage: Optional[str] = Query(default=None, max_length=32),
-    q: Optional[str] = Query(default=None, max_length=300),
-) -> PlainTextResponse:
-    """Download the currently filtered activity log as plain text."""
-    _validate_log_filters(job_id, level, stage)
-    with _lock:
-        if job_id and job_id not in _jobs:
-            raise HTTPException(404, "job not found")
-        entries = list(reversed(_filter_log_entries_locked(job_id, level, stage, q)))
-    lines = [f"{entry['timestamp']} [{entry['project']}] [{entry['stage']}] {entry['message']}" for entry in entries]
-    filename = f"shorts_{job_id}.log" if job_id else "shorts_studio.log"
-    return PlainTextResponse(
-        "\n".join(lines) + ("\n" if lines else ""),
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
-@app.get("/api/jobs/{job_id}/logs")
-def download_job_logs(job_id: str):
-    """Backwards-compatible per-project log download."""
-    if not _job_id_pattern.fullmatch(job_id):
-        raise HTTPException(400, "invalid job id")
-    with _lock:
-        if job_id not in _jobs:
-            raise HTTPException(404, "job not found")
-        entries = list(reversed(_log_entries_locked(job_id)))
-    lines = [f"{entry['timestamp']} [{entry['stage']}] {entry['message']}" for entry in entries]
-    return PlainTextResponse(
-        "\n".join(lines) + ("\n" if lines else ""),
-        headers={"Content-Disposition": f'attachment; filename="shorts_{job_id}.log"'},
-    )
-
-
-@app.post("/api/open-folder")
-def open_folder(request: OpenFolderRequest) -> Dict[str, Any]:
-    """Open a safe local output folder on desktop builds."""
-    if request.job_id:
-        with _lock:
-            job = _jobs.get(request.job_id)
-            if not job:
-                raise HTTPException(404, "job not found")
-            folder = Path(str(job.get("output_dir") or _output_root))
-    else:
-        folder = _output_root
-    try:
-        folder = folder.expanduser().resolve()
-        folder.mkdir(parents=True, exist_ok=True)
-    except (OSError, RuntimeError) as exc:
-        raise HTTPException(400, f"output folder is unavailable: {exc}") from exc
-    opened = False
-    headless = os.getenv("SHORTS_STUDIO_HEADLESS", "false").strip().lower() in {"1", "true", "yes", "on"}
-    if not headless:
-        try:
-            if os.name == "nt":
-                os.startfile(str(folder))  # type: ignore[attr-defined]
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", str(folder)])
-            else:
-                subprocess.Popen(["xdg-open", str(folder)])
-            opened = True
-        except FileNotFoundError:
-            # A server/container may not have a desktop opener. Returning the
-            # path is still useful and avoids turning a successful export into
-            # a misleading 500 response.
-            opened = False
-        except OSError as exc:
-            raise HTTPException(500, f"could not open folder: {exc}") from exc
-    return {"status": "opened" if opened else "available", "opened": opened, "path": str(folder)}
-
-
-@app.post("/api/jobs/{job_id}/clips/{index}")
-def update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
-    """Regenerate one clip after a manual timestamp/style adjustment."""
-    with _lock:
-        job = _jobs.get(job_id)
-        if not job:
-            raise HTTPException(404, "job not found")
-        raw_shorts = _dict_items(job.get("raw_shorts"))
-        if index < 0 or index >= len(raw_shorts):
-            raise HTTPException(404, "clip not found")
-        request = _dict_value(job.get("request"))
-        transcript = job.get("raw_transcript")
-        transcript = dict(transcript) if isinstance(transcript, dict) else {}
-        source = job.get("raw_source_video_url")
-        mode = str(_dict_value(job.get("result")).get("mode") or request.get("mode") or "local")
-
-    duration = _safe_transcript_duration(transcript)
-    if duration and update.start_time >= duration:
-        raise HTTPException(400, f"start_time must be before the {duration:.1f}s source")
-    if duration and update.end_time > duration + 0.25:
-        raise HTTPException(400, f"end_time must be within the {duration:.1f}s source")
-    if update.end_time <= update.start_time + 0.1:
-        raise HTTPException(400, "end_time must be at least 0.1s after start_time")
-    style = (update.caption_style or request.get("caption_style") or "bold").strip().lower()
-    if style not in {"clean", "bold", "boxed", "karaoke"}:
-        raise HTTPException(400, "caption_style must be clean, bold, boxed, or karaoke")
-    if not source:
-        raise HTTPException(400, "source video is unavailable for this job")
-
-    old = dict(raw_shorts[index])
-    try:
-        if mode == "local":
-            from shorts_generator.local.clipper import crop_clip_local
-
-            old_path = str(old.get("clip_url") or "")
-            safe_old_path = _job_media_path(job, old_path)
-            if safe_old_path and safe_old_path.is_file():
-                out_path = str(safe_old_path)
-            else:
-                job_output_dir = str(job.get("output_dir") or (_jobs_dir / job_id))
-                out_path = str(Path(job_output_dir).expanduser().resolve() / f"short_{index + 1:02d}.mp4")
-            undo_path = out_path + ".undo.mp4"
-            render_path = out_path + ".regenerate.mp4"
-            Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-            crop_clip_local(
-                str(source),
-                update.start_time,
-                update.end_time,
-                str(request.get("aspect_ratio") or "9:16"),
-                render_path,
-                caption_segments=_dict_items(transcript.get("segments")),
-                burn_captions=LOCAL_BURN_CAPTIONS,
-                caption_style=style,
-                remove_silence=bool(request.get("remove_silence")),
-                normalize_audio=bool(request.get("normalize_audio")),
-                denoise_audio=bool(request.get("denoise_audio")),
-                remove_filler_words=bool(request.get("remove_filler_words")),
-                caption_position=update.caption_position,
-                caption_font=update.caption_font,
-                caption_size=update.caption_size,
-                caption_color=update.caption_color,
-                background_music=request.get("background_music") or None,
-                watermark=request.get("watermark") or None,
-                auto_reframe=bool(request.get("auto_reframe", True)),
-                crop_position=update.crop_position,
-                fit_mode=update.fit_mode,
-                zoom=update.zoom,
-                layout=update.layout,
-                output_height=update.output_height,
-                intro=request.get("intro") or None,
-                outro=request.get("outro") or None,
-                jump_cuts=bool(request.get("jump_cuts")),
-            )
-            if not os.path.isfile(render_path):
-                raise RuntimeError("clip renderer did not produce an output file")
-            # Keep the current clip and its previous undo snapshot untouched
-            # until the replacement render has completed successfully.
-            if os.path.isfile(out_path):
-                shutil.copyfile(out_path, undo_path)
-            os.replace(render_path, out_path)
-            replacement = {
-                **old,
-                "start_time": update.start_time,
-                "end_time": update.end_time,
-                "clip_url": out_path,
-                "captions_burned": bool(LOCAL_BURN_CAPTIONS and transcript.get("segments")),
-                "fit_mode": update.fit_mode,
-                "zoom": update.zoom,
-                "crop_position": update.crop_position,
-                "caption_style": style,
-                "caption_position": update.caption_position,
-                "caption_font": update.caption_font,
-                "caption_size": update.caption_size,
-                "caption_color": update.caption_color,
-                "layout": update.layout,
-                "output_height": update.output_height,
-            }
-            replacement["undo_path"] = undo_path if os.path.isfile(undo_path) else None
-            replacement["undo_metadata"] = {
-                key: value for key, value in old.items() if key not in {"undo_path", "undo_metadata"}
-            }
-            try:
-                from shorts_generator.local.visual import extract_thumbnail
-
-                thumb = str(Path(out_path).with_suffix(".jpg"))
-                extract_thumbnail(str(source), (update.start_time + update.end_time) / 2.0, thumb)
-                replacement["thumbnail_path"] = thumb
-            except Exception:
-                pass
-        elif mode == "api":
-            from shorts_generator.clipper import crop_clip
-
-            replacement = {
-                **old,
-                "start_time": update.start_time,
-                "end_time": update.end_time,
-                "fit_mode": update.fit_mode,
-                "zoom": update.zoom,
-                "crop_position": update.crop_position,
-                "caption_style": style,
-                "caption_position": update.caption_position,
-                "caption_font": update.caption_font,
-                "caption_size": update.caption_size,
-                "caption_color": update.caption_color,
-                "layout": update.layout,
-                "output_height": update.output_height,
-                "clip_url": crop_clip(
-                    str(source),
-                    update.start_time,
-                    update.end_time,
-                    aspect_ratio=str(request.get("aspect_ratio") or "9:16"),
-                ),
-            }
-        else:
-            raise HTTPException(400, f"unsupported job mode: {mode}")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        if mode == "local":
-            render_path = locals().get("render_path")
-            if render_path and os.path.isfile(render_path):
-                try:
-                    os.remove(render_path)
-                except OSError:
-                    pass
-        raise HTTPException(500, f"could not regenerate clip: {exc}") from exc
-
-    with _lock:
-        job = _jobs[job_id]
-        current = _dict_items(job.get("raw_shorts"))
-        if index >= len(current):
-            raise HTTPException(409, "job clips changed while regenerating")
-        current[index] = replacement
-        job["raw_shorts"] = current
-        result = _dict_value(job.get("result"))
-        result["shorts"] = _public_shorts(current, job_id)
-        job["result"] = result
-        job["message"] = f"Regenerated clip {index + 1}"
-        _append_job_log(job, "edit", job["message"])
-        _persist_job_locked(job)
-        return _job_snapshot(job)
-
-
-@app.post("/api/jobs/{job_id}/clips/{index}/undo")
-def undo_clip(job_id: str, index: int) -> Dict[str, Any]:
-    with _lock:
-        job = _jobs.get(job_id)
-        if not job:
-            raise HTTPException(404, "job not found")
-        shorts = _dict_items(job.get("raw_shorts"))
-        if index < 0 or index >= len(shorts):
-            raise HTTPException(404, "clip not found")
-        item = dict(shorts[index])
-        undo_path = _job_media_path(job, item.get("undo_path"))
-        clip_path = _job_media_path(job, item.get("clip_url"))
-        if not undo_path or not undo_path.is_file() or not clip_path:
-            raise HTTPException(400, "no previous clip version is available")
-        shutil.copyfile(undo_path, clip_path)
-        restored = _dict_value(item.get("undo_metadata")) or dict(item)
-        restored["clip_url"] = str(clip_path)
-        restored.pop("undo_path", None)
-        restored.pop("undo_metadata", None)
-        shorts[index] = restored
-        job["raw_shorts"] = shorts
-        result = _dict_value(job.get("result"))
-        if result:
-            result["shorts"] = _public_shorts(shorts, job_id)
-            job["result"] = result
-        _persist_job_locked(job)
-        return _job_snapshot(job)
-
-
-@app.get("/api/jobs/{job_id}/timeline")
-def get_timeline(job_id: str) -> Dict[str, Any]:
-    with _lock:
-        job = _jobs.get(job_id)
-        if not job:
-            raise HTTPException(404, "job not found")
-        transcript = job.get("raw_transcript")
-        if not isinstance(transcript, dict):
-            transcript = {}
-        return {
-            "duration": _safe_transcript_duration(transcript),
-            "segments": _dict_items(transcript.get("segments")),
-            "visual_events": _dict_items(transcript.get("visual_events")),
-        }
-
-
-@app.get("/api/jobs/{job_id}/waveform")
-def get_waveform(job_id: str, bins: int = 240) -> Dict[str, Any]:
-    """Return cached audio peaks for a lightweight timeline waveform."""
-    bins = max(32, min(600, int(bins or 240)))
-    with _lock:
-        job = _jobs.get(job_id)
-        if not job:
-            raise HTTPException(404, "job not found")
-        source = job.get("raw_source_video_url")
-        output_dir = Path(str(job.get("output_dir") or (_jobs_dir / job_id))).expanduser().resolve()
-    if not source or not Path(str(source)).is_file():
-        return {
-            "duration": 0.0,
-            "peaks": [],
-            "available": False,
-            "error": "Source audio is unavailable",
-            "code": "source_unavailable",
-        }
-    source_path = Path(str(source)).expanduser().resolve()
-    cache_path = output_dir / "waveform.json"
-    try:
-        signature = [source_path.stat().st_size, source_path.stat().st_mtime_ns, bins]
+        return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
     except OSError:
-        signature = []
-    try:
-        cached = json.loads(cache_path.read_text(encoding="utf-8"))
-        if isinstance(cached, dict) and cached.get("signature") == signature and isinstance(cached.get("peaks"), list):
-            return {
-                "duration": float(cached.get("duration") or 0.0),
-                "peaks": cached["peaks"],
-                "available": True,
-                "cached": True,
-            }
-    except (OSError, ValueError, TypeError):
-        pass
-    try:
-        from shorts_generator.local.clipper import _find_ffmpeg
-
-        ffmpeg = _find_ffmpeg()
-        probe = subprocess.run(
-            [
-                ffmpeg,
-                "-hide_banner",
-                "-i",
-                str(source_path),
-                "-f",
-                "s16le",
-                "-ac",
-                "1",
-                "-ar",
-                "2000",
-                "-v",
-                "error",
-                "-",
-            ],
-            capture_output=True,
-            timeout=90,
-            check=False,
-        )
-        raw = probe.stdout or b""
-        samples = array("h")
-        samples.frombytes(raw[: len(raw) - (len(raw) % 2)])
-        if not samples:
-            return {
-                "duration": 0.0,
-                "peaks": [],
-                "available": False,
-                "error": "No audio samples found",
-                "code": "audio_unavailable",
-            }
-        step = max(1, len(samples) // bins)
-        peaks = []
-        for start in range(0, len(samples), step):
-            window = samples[start : start + step]
-            peak = max((abs(value) for value in window), default=0) / 32768.0
-            peaks.append(round(min(1.0, peak), 4))
-            if len(peaks) >= bins:
-                break
-        duration = len(samples) / 2000.0
-        output_dir.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(
-            json.dumps({"signature": signature, "duration": duration, "peaks": peaks}), encoding="utf-8"
-        )
-        return {"duration": duration, "peaks": peaks, "available": True, "cached": False}
-    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, TimeoutError) as exc:
-        return {"duration": 0.0, "peaks": [], "available": False, "error": str(exc), "code": "waveform_unavailable"}
+        return 0
 
 
-@app.get("/api/jobs/{job_id}/export")
-def export_job(job_id: str):
-    """Download a ZIP containing local clips and creator metadata."""
-    with _lock:
-        job = _jobs.get(job_id)
-        if not job:
-            raise HTTPException(404, "job not found")
-        result = _dict_value(job.get("result"))
-        raw_shorts = _dict_items(job.get("raw_shorts"))
-        request = _dict_value(job.get("request"))
-
-    manifest = {
-        "job_id": job_id,
-        "request": request,
-        "mode": result.get("mode"),
-        "source_video_url": result.get("source_video_url"),
-        "shorts": [
-            {
-                **{key: value for key, value in short.items() if key != "clip_url"},
-                "creator_metadata": _creator_metadata(short),
-            }
-            for short in raw_shorts
-        ],
-    }
-    archive = io.BytesIO()
-    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-        bundle.writestr("metadata.json", json.dumps(manifest, ensure_ascii=False, indent=2))
-        bundle.writestr(
-            "publishing/youtube_shorts.json",
-            json.dumps(
-                {"platform": "youtube_shorts", "items": [s["creator_metadata"] for s in manifest["shorts"]]},
-                ensure_ascii=False,
-                indent=2,
-            ),
-        )
-        bundle.writestr(
-            "publishing/tiktok.json",
-            json.dumps(
-                {"platform": "tiktok", "items": [s["creator_metadata"] for s in manifest["shorts"]]},
-                ensure_ascii=False,
-                indent=2,
-            ),
-        )
-        bundle.writestr(
-            "publishing/instagram_reels.json",
-            json.dumps(
-                {"platform": "instagram_reels", "items": [s["creator_metadata"] for s in manifest["shorts"]]},
-                ensure_ascii=False,
-                indent=2,
-            ),
-        )
-        for index, short in enumerate(raw_shorts, 1):
-            path = _job_media_path(job, short.get("clip_url"))
-            if path and path.is_file():
-                bundle.write(path, arcname=f"clips/short_{index:02d}.mp4")
-            thumbnail = _job_media_path(job, short.get("thumbnail_path"))
-            if thumbnail and thumbnail.is_file():
-                bundle.write(thumbnail, arcname=f"thumbnails/short_{index:02d}.jpg")
-            for caption_format in ("srt", "vtt"):
-                caption_text = _captions_for_short(short, job.get("raw_transcript"), caption_format)
-                if caption_text:
-                    bundle.writestr(f"captions/short_{index:02d}.{caption_format}", caption_text)
-    archive.seek(0)
-    return StreamingResponse(
-        archive,
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="shorts_{job_id}.zip"'},
-    )
-
-
-def _subtitle_timestamp(seconds: object, vtt: bool = False) -> str:
-    try:
-        value = float(seconds)
-        if not math.isfinite(value) or value < 0:
-            value = 0.0
-    except (TypeError, ValueError, OverflowError):
-        value = 0.0
-    milliseconds = max(0, int(round(value * 1000)))
-    hours, remainder = divmod(milliseconds, 3_600_000)
-    minutes, remainder = divmod(remainder, 60_000)
-    seconds_int, millis = divmod(remainder, 1000)
-    separator = "." if vtt else ","
-    return f"{hours:02d}:{minutes:02d}:{seconds_int:02d}{separator}{millis:03d}"
-
-
-def _captions_for_short(short: Dict[str, Any], transcript: Any, format_name: str = "srt") -> str:
-    if not isinstance(short, dict) or not isinstance(transcript, dict):
-        return ""
-    try:
-        clip_start = float(short.get("start_time"))
-        clip_end = float(short.get("end_time"))
-        if not math.isfinite(clip_start) or not math.isfinite(clip_end) or clip_end <= clip_start:
-            return ""
-    except (TypeError, ValueError, OverflowError):
-        return ""
-    vtt = str(format_name).lower() == "vtt"
-    lines = ["WEBVTT", ""] if vtt else []
-    count = 0
-    for segment in _dict_items(transcript.get("segments")):
-        try:
-            start = float(segment.get("start"))
-            end = float(segment.get("end"))
-            if not math.isfinite(start) or not math.isfinite(end) or end <= start:
-                continue
-        except (TypeError, ValueError, OverflowError):
+def _transcript_cache_files() -> List[Path]:
+    """Find renderer-owned transcript sidecars under the configured output."""
+    files: List[Path] = []
+    if not _output_root.is_dir():
+        return files
+    for item in _output_root.rglob("*"):
+        if not item.is_file():
             continue
-        left = max(start, clip_start)
-        right = min(end, clip_end)
-        text = " ".join(str(segment.get("text") or "").split())
-        if right <= left or not text:
-            continue
-        count += 1
-        lines.append(f"{count}" if not vtt else "")
-        lines.append(
-            f"{_subtitle_timestamp(left - clip_start, vtt)} --> {_subtitle_timestamp(right - clip_start, vtt)}"
-        )
-        lines.append(text)
-        lines.append("")
-    return "\n".join(lines) if count else ""
+        name = item.name.lower()
+        # Normal cache names are content-addressed and start with
+        # ``transcript_``. Do not classify arbitrary creator subtitle files in
+        # the output folder as disposable cache data.
+        if name.startswith("transcript_") and name.endswith(".srt"):
+            files.append(item)
+        elif name.startswith("transcript_") and name.endswith((".words.json", ".meta.json")):
+            files.append(item)
+    return files
 
 
-@app.get("/api/jobs/{job_id}/clip/{index}/captions")
-def download_clip_captions(job_id: str, index: int, format: str = "srt"):
-    format_name = str(format or "srt").strip().lower()
-    if format_name not in {"srt", "vtt"}:
-        raise HTTPException(400, "format must be srt or vtt")
-    with _lock:
-        job = _jobs.get(job_id)
-        if not job:
-            raise HTTPException(404, "job not found")
-        shorts = _dict_items(job.get("raw_shorts"))
-        transcript = job.get("raw_transcript")
-    if index < 0 or index >= len(shorts):
-        raise HTTPException(404, "clip not found")
-    text = _captions_for_short(shorts[index], transcript, format_name)
-    if not text:
-        raise HTTPException(404, "no captions available for this clip")
-    return PlainTextResponse(
-        text,
-        media_type="text/vtt" if format_name == "vtt" else "application/x-subrip",
-        headers={"Content-Disposition": f'attachment; filename="short_{index + 1:02d}.{format_name}"'},
-    )
-
-
-@app.get("/api/jobs/{job_id}")
-def get_job(job_id: str) -> Dict[str, Any]:
-    with _lock:
-        job = _jobs.get(job_id)
-        if not job:
-            raise HTTPException(404, "job not found")
-        return _job_snapshot(job)
-
-
-@app.get("/api/jobs/{job_id}/clip/{index}")
-def get_clip(job_id: str, index: int):
-    with _lock:
-        job = _jobs.get(job_id)
-        if not job:
-            raise HTTPException(404, "job not found")
-        shorts = _dict_items(job.get("raw_shorts"))
-    if index < 0 or index >= len(shorts):
-        raise HTTPException(404, "clip not found")
-    path = shorts[index].get("clip_url")
-    if not path or str(path).startswith("http"):
-        raise HTTPException(400, "clip is not a local file")
-    p = _job_media_path(job, path)
-    if not p or not p.is_file():
-        raise HTTPException(404, f"file missing: {path}")
-    return FileResponse(p, media_type="video/mp4", filename=p.name)
-
-
-@app.post("/api/jobs/{job_id}/preview")
-def preview_clip(job_id: str, update: ClipUpdate) -> Dict[str, Any]:
-    """Render a lightweight preview using the exact crop settings requested."""
-    with _lock:
-        job = _jobs.get(job_id)
-        if not job:
-            raise HTTPException(404, "job not found")
-        request = _dict_value(job.get("request"))
-        source = job.get("raw_source_video_url")
-        transcript = job.get("raw_transcript")
-        transcript = dict(transcript) if isinstance(transcript, dict) else {}
-        output_dir = str(job.get("output_dir") or (_jobs_dir / job_id))
-    if not source or not Path(str(source)).is_file():
-        raise HTTPException(400, "a completed local job is required for preview")
-    duration = _safe_transcript_duration(transcript)
-    if duration and update.start_time >= duration:
-        raise HTTPException(400, f"start_time must be before the {duration:.1f}s source")
-    if duration and update.end_time > duration + 0.25:
-        raise HTTPException(400, f"end_time must be within the {duration:.1f}s source")
-    if update.end_time <= update.start_time + 0.1:
-        raise HTTPException(400, "end_time must be at least 0.1s after start_time")
-    style = (update.caption_style or str(request.get("caption_style") or "bold")).strip().lower()
-    if style not in {"clean", "bold", "boxed", "karaoke"}:
-        raise HTTPException(400, "caption_style must be clean, bold, boxed, or karaoke")
-    from shorts_generator.local.clipper import crop_clip_local
-
-    preview_dir = Path(output_dir) / "previews"
-    preview_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        source_stat = Path(str(source)).stat()
-        source_stamp = [source_stat.st_size, source_stat.st_mtime_ns]
-    except OSError:
-        source_stamp = []
-    preview_payload = {
-        "source": source_stamp,
-        "start": update.start_time,
-        "end": update.end_time,
-        "caption_style": style,
-        "caption_position": update.caption_position,
-        "caption_font": update.caption_font,
-        "caption_size": update.caption_size,
-        "caption_color": update.caption_color,
-        "crop_position": update.crop_position,
-        "zoom": update.zoom,
-        "fit_mode": update.fit_mode,
-        "layout": update.layout,
-        "output_height": min(960, update.output_height or 1920),
-    }
-    preview_key = hashlib.sha256(json.dumps(preview_payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[
-        :20
+def _model_cache_roots() -> List[Path]:
+    """Return only known faster-whisper/Hugging Face cache roots."""
+    candidates = [
+        Path.home() / ".cache" / "huggingface" / "hub",
     ]
-    cached = preview_dir / f"preview_{preview_key}.mp4"
-    preview = Path(output_dir) / "preview.mp4"
-    if cached.is_file():
-        shutil.copyfile(cached, preview)
-        return {
-            "preview_url": f"/api/jobs/{job_id}/preview.mp4?key={preview_key}",
-            "path": str(preview),
-            "cached": True,
-        }
-    render_path = preview_dir / f"preview_{preview_key}.render.mp4"
+    local_appdata = os.getenv("LOCALAPPDATA", "").strip()
+    if local_appdata:
+        candidates.append(Path(local_appdata) / "huggingface" / "hub")
+    for env_name in ("HF_HOME", "HUGGINGFACE_HUB_CACHE"):
+        configured = os.getenv(env_name, "").strip()
+        if configured:
+            base = Path(configured).expanduser()
+            candidates.extend((base, base / "hub"))
+    unique: List[Path] = []
+    seen = set()
+    for path in candidates:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        key = str(resolved).casefold()
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(resolved)
+    return unique
+
+
+def _safe_tree_size(root: Path) -> int:
+    return _json_file_size(root) if root.is_dir() else 0
+
+
+def _storage_report() -> Dict[str, Any]:
+    roots = {
+        "jobs": _jobs_dir,
+        "uploads": _uploads_dir,
+        "trash": _trash_dir,
+        "previews": _output_root,
+    }
+    sizes: Dict[str, int] = {}
+    for name, root in roots.items():
+        if name == "previews":
+            sizes[name] = sum(
+                item.stat().st_size
+                for item in root.rglob("*")
+                if item.is_file() and ("previews" in item.parts or item.name == "waveform.json")
+            )
+        else:
+            sizes[name] = _json_file_size(root) if root.is_dir() else 0
+    sizes["transcript_cache"] = sum(
+        item.stat().st_size for item in _transcript_cache_files() if item.exists()
+    )
+    sizes["job_database"] = _jobs_db_path.stat().st_size if _jobs_db_path.is_file() else 0
+    sizes["model_cache"] = sum(_safe_tree_size(root) for root in _model_cache_roots())
     try:
-        crop_clip_local(
-            str(source),
-            update.start_time,
-            update.end_time,
-            str(request.get("aspect_ratio") or "9:16"),
-            str(render_path),
-            caption_segments=_dict_items(transcript.get("segments")),
-            burn_captions=LOCAL_BURN_CAPTIONS,
-            caption_style=style,
-            caption_position=update.caption_position,
-            caption_font=update.caption_font,
-            caption_size=update.caption_size,
-            caption_color=update.caption_color,
-            remove_silence=bool(request.get("remove_silence")),
-            normalize_audio=bool(request.get("normalize_audio")),
-            denoise_audio=bool(request.get("denoise_audio")),
-            remove_filler_words=bool(request.get("remove_filler_words")),
-            background_music=request.get("background_music") or None,
-            watermark=request.get("watermark") or None,
-            auto_reframe=bool(request.get("auto_reframe", True)),
-            crop_position=update.crop_position,
-            fit_mode=update.fit_mode,
-            zoom=update.zoom,
-            layout=update.layout,
-            output_height=min(960, update.output_height or 1920),
-            intro=request.get("intro") or None,
-            outro=request.get("outro") or None,
-            jump_cuts=bool(request.get("jump_cuts")),
-        )
-        if not render_path.is_file():
-            raise RuntimeError("preview renderer did not produce an output file")
-        os.replace(render_path, cached)
-        shutil.copyfile(cached, preview)
-    finally:
-        if render_path.is_file():
-            try:
-                render_path.unlink()
-            except OSError:
-                pass
-    return {"preview_url": f"/api/jobs/{job_id}/preview.mp4?key={preview_key}", "path": str(preview), "cached": False}
-
-
-@app.get("/api/jobs/{job_id}/preview.mp4")
-def get_preview(job_id: str):
-    with _lock:
-        job = _jobs.get(job_id)
-        if not job:
-            raise HTTPException(404, "job not found")
-        output_dir = Path(str(job.get("output_dir") or (_jobs_dir / job_id)))
-        path = _job_media_path(job, output_dir / "preview.mp4")
-    if not path or not path.is_file():
-        raise HTTPException(404, "preview not found")
-    return FileResponse(path, media_type="video/mp4", filename=path.name)
-
-
-@app.get("/api/jobs/{job_id}/thumbnail/{index}")
-def get_thumbnail(job_id: str, index: int):
-    with _lock:
-        job = _jobs.get(job_id)
-        if not job:
-            raise HTTPException(404, "job not found")
-        shorts = _dict_items(job.get("raw_shorts"))
-    if index < 0 or index >= len(shorts):
-        raise HTTPException(404, "thumbnail not found")
-    path = shorts[index].get("thumbnail_path")
-    safe_path = _job_media_path(job, path)
-    if not safe_path or not safe_path.is_file():
-        raise HTTPException(404, "thumbnail not found")
-    return FileResponse(safe_path, media_type="image/jpeg", filename=safe_path.name)
-
-
-@app.post("/api/uploads")
-async def upload_video(file: UploadFile = File(...)) -> Dict[str, Any]:
-    """Store a browser-uploaded source in the local output area."""
-    original_name = Path(file.filename or "video.mp4").name
-    suffix = Path(original_name).suffix.lower()
-    if suffix not in _allowed_upload_extensions:
-        allowed = ", ".join(sorted(_allowed_upload_extensions))
-        raise HTTPException(400, f"unsupported video type; use one of: {allowed}")
-
-    safe_stem = Path(original_name).stem.strip() or "video"
-    safe_stem = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in safe_stem)
-    # Keep the final path comfortably below Windows MAX_PATH even when a
-    # browser supplies an unusually long filename.
-    safe_stem = safe_stem[:120] or "video"
-    target = _uploads_dir / f"upload_{uuid.uuid4().hex[:12]}_{safe_stem}{suffix}"
-    temporary = target.with_suffix(target.suffix + ".part")
-    size = 0
-    try:
-        _uploads_dir.mkdir(parents=True, exist_ok=True)
-        with temporary.open("wb") as output:
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-                size += len(chunk)
-                if size > _max_upload_bytes:
-                    raise HTTPException(
-                        413,
-                        f"file is larger than the {_max_upload_bytes // (1024 * 1024)} MB upload limit",
-                    )
-                output.write(chunk)
-        os.replace(temporary, target)
-    except HTTPException:
-        if temporary.exists():
-            temporary.unlink(missing_ok=True)
-        raise
-    except OSError as exc:
-        if temporary.exists():
-            temporary.unlink(missing_ok=True)
-        raise HTTPException(500, f"could not save upload: {exc}") from exc
-    except Exception as exc:
-        if temporary.exists():
-            temporary.unlink(missing_ok=True)
-        raise HTTPException(500, f"could not save upload: {exc}") from exc
-    finally:
-        await file.close()
-
+        free = shutil.disk_usage(_output_root).free
+    except OSError:
+        free = 0
     return {
-        "name": original_name,
-        "path": str(target.resolve()),
-        "url": f"/api/uploads/{target.name}",
-        "size": size,
+        "root": str(_output_root),
+        "free_bytes": free,
+        "free_gb": round(free / (1024**3), 2),
+        "items": {name: {"bytes": value, "gb": round(value / (1024**3), 3)} for name, value in sizes.items()},
+        "retention": "Generated previews, waveforms, transcript caches, and deleted project records can be cleaned by age; source media and model caches are preserved unless explicitly selected.",
+        "database": str(_jobs_db_path),
+        "model_cache_roots": [str(root) for root in _model_cache_roots() if root.is_dir()],
     }
 
 
-@app.get("/api/uploads/{filename}")
-def get_upload(filename: str):
-    """Serve an uploaded source for an optional browser preview."""
-    safe_name = Path(filename).name
-    if safe_name != filename:
-        raise HTTPException(404, "upload not found")
-    path = _uploads_dir / safe_name
-    if not path.is_file():
-        raise HTTPException(404, "upload not found")
-    return FileResponse(path, filename=path.name)
+def _load_cost_rates() -> Dict[str, Dict[str, float]]:
+    """Load creator-entered rates, falling back to environment values."""
+    defaults = rates_from_environment()
+    try:
+        raw = json.loads(_cost_rates_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    for provider in defaults:
+        for direction in ("input", "output"):
+            key = f"{provider}_{direction}_usd_per_million"
+            if key in raw:
+                try:
+                    value = float(raw[key])
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if math.isfinite(value) and value >= 0:
+                    defaults[provider][f"{direction}_usd_per_million"] = value
+    return defaults
 
 
-@app.get("/api/health")
-def health() -> Dict[str, str]:
-    return {"status": "ok", "output": str(Path(LOCAL_OUTPUT_DIR).resolve())}
+def _cost_rates_public() -> Dict[str, float]:
+    nested = _load_cost_rates()
+    return {
+        f"{provider}_{direction}_usd_per_million": nested[provider][f"{direction}_usd_per_million"]
+        for provider in nested
+        for direction in ("input", "output")
+    }
 
+
+def _save_cost_rates(model: ProviderCostRates) -> Dict[str, float]:
+    values = model.model_dump()
+    _output_root.mkdir(parents=True, exist_ok=True)
+    temporary = _cost_rates_path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(values, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporary, _cost_rates_path)
+    return {str(key): float(value) for key, value in values.items()}
+
+
+def _load_brand_presets() -> Dict[str, Dict[str, Any]]:
+    try:
+        raw = json.loads(_brand_presets_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(name): value for name, value in raw.items() if isinstance(value, dict)}
+
+
+def _save_brand_presets(presets: Dict[str, Dict[str, Any]]) -> None:
+    _output_root.mkdir(parents=True, exist_ok=True)
+    temporary = _brand_presets_path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(presets, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporary, _brand_presets_path)
 
 def _setup_state() -> Dict[str, Any]:
     try:
@@ -2040,10 +1503,10 @@ def _whisper_model_cached(model_name: str) -> bool:
     model = str(model_name or "").strip()
     if not model:
         return False
-    roots = [
-        Path.home() / ".cache" / "huggingface" / "hub",
-        Path(os.getenv("LOCALAPPDATA", "")) / "huggingface" / "hub",
-    ]
+    roots = [Path.home() / ".cache" / "huggingface" / "hub"]
+    local_appdata = os.getenv("LOCALAPPDATA", "").strip()
+    if local_appdata:
+        roots.append(Path(local_appdata) / "huggingface" / "hub")
     for env_name in ("HF_HOME", "HUGGINGFACE_HUB_CACHE"):
         configured = os.getenv(env_name, "").strip()
         if configured:
@@ -2063,6 +1526,7 @@ def _setup_report() -> Dict[str, Any]:
     ffmpeg = shutil.which("ffmpeg")
     ffprobe = shutil.which("ffprobe")
     gpu = gpu_status()
+    local_modules = {name: bool(importlib.util.find_spec(name)) for name in ("yt_dlp", "faster_whisper", "cv2")}
     provider = str(LLM_PROVIDER or "openai").strip().lower()
     provider_key = (
         bool(OPENAI_API_KEY) if provider == "openai" else bool(GEMINI_API_KEY) if provider == "gemini" else False
@@ -2072,6 +1536,9 @@ def _setup_report() -> Dict[str, Any]:
         warnings.append("FFmpeg is not available; local rendering cannot start until it is installed or bundled.")
     if not ffprobe:
         warnings.append("FFprobe is not available; media diagnostics will be limited.")
+    missing_local = [name for name, ready in local_modules.items() if not ready]
+    if missing_local:
+        warnings.append("Local dependencies missing: " + ", ".join(missing_local) + ". Install requirements-local.txt before rendering.")
     if free_gb < _min_free_gb:
         warnings.append(f"Only {free_gb:.2f} GB of free disk space is available.")
     if provider not in {"openai", "gemini"}:
@@ -2086,6 +1553,7 @@ def _setup_report() -> Dict[str, Any]:
             "model": LOCAL_WHISPER_MODEL,
             "device": LOCAL_WHISPER_DEVICE,
             "model_cached": _whisper_model_cached(LOCAL_WHISPER_MODEL),
+            "dependencies": local_modules,
         },
         "keys": {
             "muapi_configured": bool(MUAPI_API_KEY),
@@ -2095,377 +1563,54 @@ def _setup_report() -> Dict[str, Any]:
             "selected_provider_configured": provider_key,
             "offline_fallback": bool(LOCAL_HEURISTIC_FALLBACK),
         },
-        "storage": {"output_root": str(_output_root), "free_disk_gb": free_gb, "minimum_free_gb": _min_free_gb},
+        "storage": {
+            "output_root": str(_output_root),
+            "database": str(_jobs_db_path),
+            "free_disk_gb": free_gb,
+            "minimum_free_gb": _min_free_gb,
+            "items": _storage_report().get("items", {}),
+        },
         "warnings": warnings,
-        "ready_for_local": bool(ffmpeg) and free_gb >= _min_free_gb,
-    }
-
-
-@app.get("/api/setup")
-def setup_report() -> Dict[str, Any]:
-    return _setup_report()
-
-
-@app.post("/api/setup/prepare")
-def prepare_setup(update: Optional[SetupStateUpdate] = None) -> Dict[str, Any]:
-    update = update or SetupStateUpdate()
-    try:
-        _output_root.mkdir(parents=True, exist_ok=True)
-        _jobs_dir.mkdir(parents=True, exist_ok=True)
-        _uploads_dir.mkdir(parents=True, exist_ok=True)
-        state = _setup_state()
-        state["setup_dismissed"] = bool(update.dismissed)
-        state["last_checked_at"] = time.time()
-        _write_setup_state(state)
-    except OSError as exc:
-        raise HTTPException(500, f"could not prepare local folders: {exc}") from exc
-    return _setup_report()
-
-
-@app.post("/api/setup/dismiss")
-def dismiss_setup(update: Optional[SetupStateUpdate] = None) -> Dict[str, Any]:
-    return prepare_setup(update)
-
-
-@app.post("/api/shutdown")
-def shutdown() -> Dict[str, str]:
-    """Stop this local-only server (used by the portable launcher Quit button)."""
-    threading.Timer(0.25, lambda: os._exit(0)).start()
-    return {"status": "shutting_down"}
-
-
-@app.get("/api/system")
-def system_status() -> Dict[str, Any]:
-    usage = shutil.disk_usage(_output_root)
-    return {
-        "ffmpeg": bool(shutil.which("ffmpeg")),
-        "whisper_model": LOCAL_WHISPER_MODEL,
-        "whisper_device": LOCAL_WHISPER_DEVICE,
-        "gpu": gpu_status(),
-        "whisper_models": ["tiny", "base", "small", "medium", "large-v3"],
-        "whisper_devices": ["auto", "cpu", "cuda"],
-        "captions_enabled": LOCAL_BURN_CAPTIONS,
-        "free_disk_gb": round(usage.free / (1024**3), 2),
-        "max_concurrent_jobs": _max_concurrent_jobs,
-        "setup": _setup_report(),
-    }
-
-
-@app.get("/api/diagnostics")
-def diagnostics() -> Dict[str, Any]:
-    ffmpeg = shutil.which("ffmpeg")
-    with _lock:
-        counts = {}
-        for job in _jobs.values():
-            counts[job.get("status", "unknown")] = counts.get(job.get("status", "unknown"), 0) + 1
-    return {
-        "python": sys.version,
-        "ffmpeg_path": ffmpeg,
-        "ffmpeg_ready": bool(ffmpeg),
-        "output_root": str(_output_root),
-        "free_disk_gb": round(shutil.disk_usage(_output_root).free / (1024**3), 2),
-        "job_counts": counts,
-        "captions_enabled": LOCAL_BURN_CAPTIONS,
-        "setup": _setup_report(),
+        "ready_for_local": bool(ffmpeg) and free_gb >= _min_free_gb and all(local_modules.values()),
     }
 
 
 def _version_tuple(value: Any) -> tuple[int, int, int]:
-    match = re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", str(value or ""))
-    if not match:
-        return (0, 0, 0)
-    return tuple(int(part or 0) for part in match.groups())  # type: ignore[return-value]
+    return _update_service.version_tuple(value)
 
 
 def _github_release() -> Dict[str, Any]:
-    import requests
-
-    response = requests.get(
-        f"https://api.github.com/repos/{_GITHUB_REPO}/releases/latest",
-        headers={"Accept": "application/vnd.github+json", "User-Agent": "ShortsStudio-Updater"},
-        timeout=(8, 30),
-    )
-    response.raise_for_status()
-    release = response.json()
-    if not isinstance(release, dict):
-        raise RuntimeError("GitHub returned an invalid release response")
-    return release
+    return _update_service.github_release()
 
 
 def _package_root() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return ROOT
+    return _update_service.package_root()
 
 
 def _package_root_writable() -> bool:
-    if not getattr(sys, "frozen", False):
-        return False
-    root = _package_root()
-    probe = root / f".shorts-studio-update-{uuid.uuid4().hex}.tmp"
-    try:
-        probe.write_text("ok", encoding="ascii")
-        probe.unlink(missing_ok=True)
-        return True
-    except OSError:
-        try:
-            probe.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return False
+    return _update_service.package_root_writable()
 
 
 def _update_dir() -> Path:
-    data_root = Path(os.getenv("SHORTS_STUDIO_DATA_DIR") or _output_root.parent).expanduser()
-    return data_root / "updates"
+    return _update_service.update_dir()
 
 
 def _select_release_asset(release: Dict[str, Any]) -> Optional[Dict[str, str]]:
-    raw_assets = release.get("assets")
-    assets = raw_assets if isinstance(raw_assets, list) else []
-    candidates: list[Dict[str, str]] = []
-    for raw in assets:
-        if not isinstance(raw, dict):
-            continue
-        name = Path(str(raw.get("name") or "")).name
-        url = str(raw.get("browser_download_url") or "").strip()
-        if not name or not url:
-            continue
-        lower = name.lower()
-        if lower.endswith(".zip") and "window" in lower:
-            candidates.append({"name": name, "url": url, "kind": "zip"})
-        elif lower.endswith(".exe") and ("setup" in lower or "installer" in lower):
-            candidates.append({"name": name, "url": url, "kind": "installer"})
-    if not candidates:
-        return None
-    if _package_root_writable():
-        return next((asset for asset in candidates if asset["kind"] == "zip"), candidates[0])
-    if getattr(sys, "frozen", False):
-        return next((asset for asset in candidates if asset["kind"] == "installer"), candidates[0])
-    return None
+    return _update_service.select_release_asset(release)
 
 
 def _release_info(release: Dict[str, Any]) -> Dict[str, Any]:
-    tag = str(release.get("tag_name") or "").strip()
-    if not tag or _version_tuple(tag) == (0, 0, 0):
-        raise RuntimeError("GitHub release did not include a usable version tag")
-    latest = tag.lstrip("vV")
-    current_version = _APP_VERSION
-    asset = _select_release_asset(release)
-    return {
-        "available": True,
-        "update_available": _version_tuple(latest) > _version_tuple(current_version),
-        "current_version": current_version,
-        "latest_version": latest,
-        "tag": tag,
-        "url": str(release.get("html_url") or f"https://github.com/{_GITHUB_REPO}/releases/tag/{tag}"),
-        "name": str(release.get("name") or f"Shorts Studio {tag}"),
-        "published_at": release.get("published_at"),
-        "asset": asset,
-        "can_install": bool(asset and _version_tuple(latest) > _version_tuple(current_version)),
-        "frozen": bool(getattr(sys, "frozen", False)),
-    }
+    return _update_service.release_info(release)
 
 
 def _set_update_state(**values: Any) -> Dict[str, Any]:
     with _update_lock:
-        _update_state.update(values)
+        safe_values = dict(values)
+        for key in ("message", "error"):
+            if key in safe_values and safe_values[key] is not None:
+                safe_values[key] = redact_text(safe_values[key])
+        _update_state.update(safe_values)
         return dict(_update_state)
-
-
-def _ps_quote(value: Any) -> str:
-    return "'" + str(value).replace("'", "''") + "'"
-
-
-def _write_zip_updater(zip_path: Path, install_root: Path) -> Path:
-    update_root = zip_path.parent
-    script = update_root / f"apply-{uuid.uuid4().hex}.ps1"
-    pid = os.getpid()
-    script_text = f"""$ErrorActionPreference = 'Stop'
-$pidToWait = {pid}
-$zip = {_ps_quote(zip_path)}
-$install = {_ps_quote(install_root)}
-$stage = Join-Path ([IO.Path]::GetTempPath()) ('ShortsStudio-update-' + [guid]::NewGuid().ToString('N'))
-try {{
-  while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 500 }}
-  New-Item -ItemType Directory -Path $stage -Force | Out-Null
-  Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
-  $payload = Join-Path $stage 'ShortsStudio'
-  if (-not (Test-Path -LiteralPath $payload)) {{ throw 'The downloaded update did not contain a ShortsStudio folder.' }}
-  & robocopy $payload $install /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS | Out-Null
-  if ($LASTEXITCODE -gt 7) {{ throw "Update copy failed with robocopy exit code $LASTEXITCODE." }}
-  Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
-  Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
-  Start-Process -FilePath (Join-Path $install 'ShortsStudio.exe') -WorkingDirectory $install
-}} catch {{
-  Add-Content -LiteralPath (Join-Path $stage 'update-error.txt') -Value $_.Exception.Message -ErrorAction SilentlyContinue
-}} finally {{
-  Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
-}}
-"""
-    script.write_text(script_text, encoding="utf-8")
-    return script
-
-
-def _launch_update(asset: Dict[str, str], downloaded: Path) -> None:
-    if asset.get("kind") == "zip":
-        script = _write_zip_updater(downloaded, _package_root())
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        subprocess.Popen(
-            [
-                "powershell.exe",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-WindowStyle",
-                "Hidden",
-                "-File",
-                str(script),
-            ],
-            cwd=str(downloaded.parent),
-            creationflags=flags,
-        )
-    else:
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        subprocess.Popen(
-            [str(downloaded), "/SILENT", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"],
-            cwd=str(downloaded.parent),
-            creationflags=flags,
-        )
-
-
-def _download_and_apply(asset: Dict[str, str], latest: str) -> None:
-    import requests
-
-    partial: Optional[Path] = None
-    try:
-        target_dir = _update_dir()
-        target_dir.mkdir(parents=True, exist_ok=True)
-        filename = Path(asset["name"]).name
-        target = target_dir / filename
-        partial = target.with_name(target.name + ".part")
-        _set_update_state(
-            status="downloading",
-            latest_version=latest,
-            asset_name=filename,
-            progress=0,
-            total=0,
-            message=f"Downloading {filename}",
-            error=None,
-        )
-        with requests.get(
-            asset["url"],
-            headers={"Accept": "application/octet-stream", "User-Agent": "ShortsStudio-Updater"},
-            stream=True,
-            timeout=(15, 120),
-        ) as response:
-            response.raise_for_status()
-            total = int(response.headers.get("content-length") or 0)
-            downloaded_bytes = 0
-            _set_update_state(total=total)
-            with partial.open("wb") as output:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    if not chunk:
-                        continue
-                    output.write(chunk)
-                    downloaded_bytes += len(chunk)
-                    _set_update_state(progress=downloaded_bytes, total=total)
-        os.replace(partial, target)
-        _set_update_state(
-            status="restarting",
-            progress=target.stat().st_size,
-            total=target.stat().st_size,
-            path=str(target),
-            message="Update downloaded. Restarting Shorts Studio…",
-            error=None,
-        )
-        _launch_update(asset, target)
-        threading.Thread(
-            target=lambda: (time.sleep(0.35), os._exit(0)), name="shorts-studio-update-exit", daemon=True
-        ).start()
-    except Exception as exc:
-        if partial is not None:
-            try:
-                partial.unlink(missing_ok=True)
-            except OSError:
-                pass
-        _set_update_state(status="error", message="Update failed", error=str(exc))
-
-
-@app.get("/api/update")
-def update_check() -> Dict[str, Any]:
-    """Check the wiifhub release and describe the in-app update path."""
-    try:
-        info = _release_info(_github_release())
-        _set_update_state(
-            status="available" if info["update_available"] else "current",
-            current_version=info["current_version"],
-            latest_version=info["latest_version"],
-            progress=0,
-            total=0,
-            message="Update available" if info["update_available"] else "Shorts Studio is up to date",
-            error=None,
-        )
-        info["state"] = dict(_update_state)
-        return info
-    except Exception as exc:
-        _set_update_state(status="error", message="Update check failed", error=str(exc))
-        return {
-            "available": False,
-            "update_available": False,
-            "current_version": _APP_VERSION,
-            "error": str(exc),
-            "code": "update_check_failed",
-            "state": dict(_update_state),
-        }
-
-
-@app.get("/api/update/status")
-def update_status() -> Dict[str, Any]:
-    with _update_lock:
-        return dict(_update_state)
-
-
-@app.post("/api/update/apply")
-def update_apply() -> Dict[str, Any]:
-    """Download and apply the newest packaged release, then restart the app."""
-    with _update_lock:
-        if _update_state.get("status") in {"checking", "starting", "downloading", "restarting"}:
-            return dict(_update_state)
-    try:
-        release = _github_release()
-        info = _release_info(release)
-        if not info["update_available"]:
-            return {"status": "current", "message": "Shorts Studio is already up to date", **info}
-        asset = info.get("asset")
-        if not asset or not info.get("can_install"):
-            return {
-                "status": "manual",
-                "message": "This source install needs a manual update from the GitHub release page.",
-                **info,
-            }
-        _set_update_state(
-            status="starting",
-            current_version=info["current_version"],
-            latest_version=info["latest_version"],
-            progress=0,
-            total=0,
-            message="Starting update…",
-            error=None,
-        )
-        threading.Thread(
-            target=_download_and_apply, args=(asset, info["latest_version"]), name="shorts-studio-update", daemon=True
-        ).start()
-        return {"status": "starting", "message": "Update started", **info}
-    except Exception as exc:
-        _set_update_state(status="error", message="Update failed", error=str(exc))
-        return {
-            "status": "error",
-            "message": "Update failed",
-            "error": str(exc),
-            "code": "update_failed",
-            "current_version": _APP_VERSION,
-        }
 
 
 def main() -> None:
