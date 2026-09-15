@@ -1,7 +1,7 @@
 # Shorts Studio TODO
 
-**Current local tag:** v0.10.2 (not pushed or publicly released)
-**Implementation target:** v0.10.3 (security and production hardening)
+**Current local tag:** v0.11.2 (release candidate)
+**Implementation target:** v1.0.0 (production-ready API and migration work)
 **Last reviewed:** 2026-09-15
 
 This is the canonical implementation backlog. Inline `TODO` comments should
@@ -77,21 +77,25 @@ asset upload remain intentionally out of scope.
 - [x] **T-031 Editing and export workflow** - Add durable project/media backup
   options, browser-local export presets, bounded multi-level undo/redo, and a
   clear multi-cut/merge workflow with removable ranges and merge guidance.
-- [ ] **T-032 Deployment targets** - Add multi-architecture Docker support only
-  after dependency feasibility is proven, then consider GPU CI and Helm
-  packaging for a documented deployment target. Deferred until an arm64
-  dependency proof and target host are available; no unverified platform claim
-  is included in v0.10.2.
+- [x] **T-032 Deployment targets** - Added a SQLite-backed shared limiter for
+  same-host multi-process deployments, a verified arm64 CPU dependency lock and
+  Buildx matrix, and a CPU-only Helm chart for the documented Kubernetes 1.28+
+  target. Multi-node deployments still require a gateway limiter and shared
+  storage with appropriate access semantics.
 
 ## P3 - feature expansion
 
 - [x] Local Ollama backend and fully offline ranking path (LM Studio remains open)
-- [ ] Custom virality prompts, multi-language output, and chapter-aware clips
-- [ ] Additional aspect ratios, ducking, transitions, and platform presets
-- [ ] Direct publishing integrations, analytics feedback, and A/B variants
-- [ ] **T-033 YouTube publishing foundation** - Connect a channel with OAuth,
-  keep uploads private or unlisted by default, support resumable upload and
-  scheduling, and expose an approval queue before public publishing.
+- [x] Custom virality scoring templates, language auto-detection, and
+  chapter-aware highlight hints
+- [x] 16:9/4:5 validation, platform export presets, speech-aware music
+  ducking, and fade/slide/zoom transitions for multi-range renders
+- [x] **T-033 YouTube publishing foundation** - Added PKCE OAuth, process-memory
+  token handling, approval-first plans, private-by-default/resumable uploads,
+  future scheduling validation, idempotency keys, and an audit entry on upload.
+- [x] Explicit merge workflow for separate local highlights
+- [ ] Direct publishing integrations beyond the YouTube foundation, analytics
+  feedback, and A/B variants
 - [ ] Plugin, mobile, collaboration, and cloud-rendering systems
 
 ## Game-changing future bets (v2+)
@@ -147,6 +151,30 @@ it becomes a committed release milestone.
 - v0.10.2 frontend modules, progress/batch monitoring, keyboard/accessibility
   coverage, UTF-8 response headers, export presets, media-inclusive backup, and
   durable clip undo/redo (the v0.10.2 release itself is intentionally local)
+
+## v0.10.3 and v0.11.0 implementation record
+
+- [x] T-032 shared SQLite rate limits, arm64 dependency proof, multi-architecture
+  CPU Docker build configuration, and documented Kubernetes/Helm packaging
+- [x] User-editable virality prompt templates, Whisper language auto-detection,
+  safe YouTube chapter sidecars, platform validation presets, ducking,
+  transitions, explicit merge rendering, and export UI controls
+- [x] T-033 approval-first YouTube OAuth foundation with PKCE, resumable chunks,
+  private/scheduled defaults, idempotent approvals, and no token persistence
+
+## v0.11.1 implementation record
+
+- [x] Cross-platform `scripts/build.py` plus Makefile and compatibility `.bat`
+  wrappers
+- [x] Release Drafter workflow and beta/nightly pre-release channel workflow
+- [x] Real Authenticode/codesign/notarization tooling; signing is enabled when
+  the owner's certificate/Apple credentials are supplied and never faked when
+  they are absent
+- [x] Strict mypy configuration (Pydantic plugin) across all source modules,
+  remaining optional imports moved behind dynamic adapters, Bandit CI linting,
+  and a 55% coverage floor ratcheted from the 35% baseline toward 70%
+- [x] Release gate: fresh Windows packaged API health, authentication, and
+  shutdown smoke must pass before the GitHub release is created
 
 ## Backlog hygiene
 

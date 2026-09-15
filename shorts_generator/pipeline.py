@@ -30,6 +30,7 @@ from .costs import estimate_cost, normalize_usage, rates_from_environment
 from .downloader import download_youtube
 from .highlights import call_muapi_llm, get_highlights
 from .transcriber import transcribe
+from .export_profiles import resolve_export_dimensions
 
 
 def _emit(progress: ProgressFn, stage: str, message: str) -> None:
@@ -90,9 +91,16 @@ def _run_local(
     *,
     cancel_check: CancelFn = None,
     cost_rates: Optional[Dict[str, Dict[str, float]]] = None,
+    virality_prompt: Optional[str] = None,
+    chapters: Optional[List[Dict]] = None,
+    music_ducking: bool = False,
+    ducking_strength: float = 0.65,
+    transition: str = "none",
+    transition_duration: float = 0.25,
+    export_preset: Optional[str] = None,
 ) -> Dict:
     from .local.clipper import crop_highlights_local
-    from .local.downloader import download_youtube_local
+    from .local.downloader import download_youtube_local_with_metadata
     from .local.llm import call_local_llm
     from .local.fallback import rank_highlights_offline
     from .local.transcriber import transcribe_local
@@ -100,7 +108,7 @@ def _run_local(
 
     _check_cancel(cancel_check)
     _emit(progress, "download", "Fetching source video...")
-    source_path = download_youtube_local(
+    source_path, download_metadata = download_youtube_local_with_metadata(
         youtube_url,
         fmt=download_format,
         out_dir=output_dir,
@@ -126,6 +134,10 @@ def _run_local(
         cancel_check=cancel_check,
     )
     transcript["visual_events"] = visual_events
+    merged_chapters = list(download_metadata.get("chapters") or []) if isinstance(download_metadata, dict) else []
+    merged_chapters.extend(chapters or [])
+    if merged_chapters:
+        transcript["chapters"] = merged_chapters[:200]
     if not transcript["segments"]:
         raise RuntimeError("Whisper produced no segments. The video may have no detectable speech.")
 
@@ -148,7 +160,13 @@ def _run_local(
             llm_model=llm_model,
             llm_temperature=llm_temperature,
         ):
-            highlights_result = get_highlights(transcript, num_clips=num_clips, llm_fn=call_local_llm, focus=focus)
+            highlights_result = get_highlights(
+                transcript,
+                num_clips=num_clips,
+                llm_fn=call_local_llm,
+                focus=focus,
+                virality_prompt=virality_prompt,
+            )
     all_highlights: List[Dict] = highlights_result.get("highlights", [])
     if not all_highlights:
         raise RuntimeError("Highlight generator returned zero clips.")
@@ -157,10 +175,11 @@ def _run_local(
     _check_cancel(cancel_check)
     _emit(progress, "crop", f"Cropping {len(top)} of {len(all_highlights)} candidates...")
 
+    resolved_ratio, resolved_height, _ = resolve_export_dimensions(aspect_ratio, output_height, export_preset)
     shorts = crop_highlights_local(
         source_path,
         top,
-        aspect_ratio=aspect_ratio,
+        aspect_ratio=resolved_ratio,
         out_dir=output_dir,
         caption_segments=transcript.get("segments") or [],
         burn_captions=LOCAL_BURN_CAPTIONS,
@@ -183,11 +202,15 @@ def _run_local(
         outro=outro,
         jump_cuts=jump_cuts,
         layout=layout,
-        output_height=output_height,
+        output_height=resolved_height,
         music_volume=music_volume,
         music_fade_in=music_fade_in,
         music_fade_out=music_fade_out,
         cuts=cuts,
+        music_ducking=music_ducking,
+        ducking_strength=ducking_strength,
+        transition=transition,
+        transition_duration=transition_duration,
         cancel_check=cancel_check,
     )
 
@@ -223,6 +246,10 @@ def _run_api(
     *,
     cancel_check: CancelFn = None,
     cost_rates: Optional[Dict[str, Dict[str, float]]] = None,
+    virality_prompt: Optional[str] = None,
+    chapters: Optional[List[Dict]] = None,
+    export_preset: Optional[str] = None,
+    output_height: int = 1920,
 ) -> Dict:
     _check_cancel(cancel_check)
     _emit(progress, "download", "Fetching source video via MuAPI...")
@@ -231,12 +258,20 @@ def _run_api(
     _check_cancel(cancel_check)
     _emit(progress, "transcribe", "Transcribing with Whisper...")
     transcript = transcribe(source_url, language=language)
+    if chapters:
+        transcript["chapters"] = list(chapters)[:200]
     if not transcript["segments"]:
         raise RuntimeError("Whisper produced no segments. The video may have no detectable speech.")
 
     _check_cancel(cancel_check)
     _emit(progress, "rank", "Ranking viral highlights...")
-    highlights_result = get_highlights(transcript, num_clips=num_clips, llm_fn=call_muapi_llm, focus=focus)
+    highlights_result = get_highlights(
+        transcript,
+        num_clips=num_clips,
+        llm_fn=call_muapi_llm,
+        focus=focus,
+        virality_prompt=virality_prompt,
+    )
     all_highlights: List[Dict] = highlights_result.get("highlights", [])
     if not all_highlights:
         raise RuntimeError("Highlight generator returned zero clips.")
@@ -245,6 +280,9 @@ def _run_api(
     _check_cancel(cancel_check)
     _emit(progress, "crop", f"Cropping {len(top)} of {len(all_highlights)} candidates...")
 
+    # MuAPI owns its hosted render dimensions; still validate the named preset
+    # so a job cannot claim an incompatible platform contract.
+    resolve_export_dimensions(aspect_ratio, output_height, export_preset)
     shorts = crop_highlights(source_url, top, aspect_ratio=aspect_ratio)
 
     usage_record = current_llm_usage().get("muapi")
@@ -305,6 +343,13 @@ def generate_shorts(
     cuts: Optional[List[Dict]] = None,
     llm_model: Optional[str] = None,
     llm_temperature: float = 0.2,
+    virality_prompt: Optional[str] = None,
+    chapters: Optional[List[Dict]] = None,
+    music_ducking: bool = False,
+    ducking_strength: float = 0.65,
+    transition: str = "none",
+    transition_duration: float = 0.25,
+    export_preset: Optional[str] = None,
     *,
     cancel_check: CancelFn = None,
     cost_rates: Optional[Dict[str, Dict[str, float]]] = None,
@@ -399,6 +444,13 @@ def generate_shorts(
                 cuts,
                 cancel_check=cancel_check,
                 cost_rates=cost_rates,
+                virality_prompt=virality_prompt,
+                chapters=chapters,
+                music_ducking=music_ducking,
+                ducking_strength=ducking_strength,
+                transition=transition,
+                transition_duration=transition_duration,
+                export_preset=export_preset,
             )
         if mode == "api":
             return _run_api(
@@ -413,5 +465,9 @@ def generate_shorts(
                 llm_temperature,
                 cancel_check=cancel_check,
                 cost_rates=cost_rates,
+                virality_prompt=virality_prompt,
+                chapters=chapters,
+                export_preset=export_preset,
+                output_height=output_height,
             )
     raise ValueError(f"Unknown mode: {mode!r}. Use 'api' or 'local'.")

@@ -107,8 +107,9 @@ def open_folder(request: OpenFolderRequest) -> Dict[str, Any]:
     headless = os.getenv("SHORTS_STUDIO_HEADLESS", "false").strip().lower() in {"1", "true", "yes", "on"}
     if not headless:
         try:
-            if os.name == "nt":
-                os.startfile(str(folder))  # type: ignore[attr-defined]
+            start_file = getattr(os, "startfile", None)
+            if os.name == "nt" and callable(start_file):
+                start_file(str(folder))
             elif sys.platform == "darwin":
                 subprocess.Popen(["open", str(folder)])
             else:

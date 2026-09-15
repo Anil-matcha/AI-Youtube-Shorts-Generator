@@ -1,0 +1,7 @@
+apiVersion: v2
+name: shorts-studio
+description: Local-first Shorts Studio web/API service
+type: application
+version: 0.11.2
+appVersion: "0.11.2"
+kubeVersion: ">=1.28.0-0"

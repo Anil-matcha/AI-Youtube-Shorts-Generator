@@ -7,7 +7,7 @@
 <p align="center"><strong>A local-first workspace for turning long videos into polished short-form clips.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.10.0">Latest release: v0.10.0</a>
+  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.11.2">Latest release: v0.11.2</a>
   &nbsp; | &nbsp;
   <a href="CHANGELOG.md">Changelog</a>
   &nbsp; | &nbsp;
@@ -20,11 +20,11 @@ Shorts Studio is an independent desktop and web workspace maintained by **wiifhu
 
 ## Windows installation
 
-The latest packaged Windows desktop binaries are v0.10.0, released alongside the Docker distribution below.
+The latest packaged Windows desktop binaries are v0.11.2, released alongside the Docker distribution below.
 
 ### Recommended: installer
 
-1. Download [ShortsStudio-Setup-v0.10.0.exe](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.10.0/ShortsStudio-Setup-v0.10.0.exe).
+1. Download [ShortsStudio-Setup-v0.11.2.exe](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.11.2/ShortsStudio-Setup-v0.11.2.exe).
 2. Run the installer and choose whether to create a desktop shortcut.
 3. Start **Shorts Studio** from the Start menu or desktop.
 
@@ -34,7 +34,7 @@ Windows may show SmartScreen for an unsigned build. Select **More info -> Run an
 
 ### Portable ZIP
 
-1. Download [ShortsStudio-v0.10.0-windows.zip](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.10.0/ShortsStudio-v0.10.0-windows.zip).
+1. Download [ShortsStudio-v0.11.2-windows.zip](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.11.2/ShortsStudio-v0.11.2-windows.zip).
 2. Extract the entire ZIP to a folder (do not run the EXE inside the archive).
 3. Run `unblock_and_start.bat`, or double-click `ShortsStudio.exe` after Windows has unblocked the files.
 
@@ -56,7 +56,7 @@ Settings also includes:
 
 ## Docker deployment
 
-Release `v0.10.0` bundles the Windows desktop app and the reproducible Docker server image in one release. Docker supports Linux hosts, Docker Desktop, NAS machines, and home servers; the container serves the same FastAPI workspace over HTTP and does not need the Windows desktop shell or a separate Python installation on the host.
+Release `v0.11.2` bundles the Windows desktop app and the reproducible Docker server image in one release. Docker supports Linux hosts, Docker Desktop, NAS machines, and home servers; the container serves the same FastAPI workspace over HTTP and does not need the Windows desktop shell or a separate Python installation on the host.
 
 ### Quick start (CPU)
 
@@ -70,13 +70,13 @@ docker compose --env-file .env.docker up --build
 
 Then open <http://127.0.0.1:7860>. Projects, uploads, transcripts, Whisper models, and rendered clips live in the named `shorts_studio_data` volume and survive container restarts. `docker compose down` keeps that data; `docker compose down -v` removes it.
 
-The published CPU image is also available at `ghcr.io/wiifhub/shorts-studio:v0.10.0` (the `latest` tag tracks the newest release) and is built for `linux/amd64`:
+The published CPU image is also available at `ghcr.io/wiifhub/shorts-studio:v0.11.2` (the `latest` tag tracks the newest release) and is built for `linux/amd64` and `linux/arm64`:
 
 ```bash
 docker run --rm -p 127.0.0.1:7860:7860 \
   -v shorts_studio_data:/data \
   --env-file .env.docker \
-  ghcr.io/wiifhub/shorts-studio:v0.10.0
+  ghcr.io/wiifhub/shorts-studio:v0.11.2
 ```
 
 ### NVIDIA GPU mode
@@ -100,6 +100,18 @@ dependency sets use different OpenCV wheels (`opencv-python` locally and
 `opencv-python-headless` in Docker); install only the set that matches the
 runtime rather than combining both wheels in one environment.
 
+The arm64 CPU image intentionally omits `faster-whisper`: its current
+`onnxruntime` dependency has no compatible manylinux arm64 wheel. API mode,
+downloads, exports, and the web workspace remain supported on arm64. See
+[`docs/deployment/arm64-support.md`](docs/deployment/arm64-support.md) for the
+audited lock and exact platform-resolution command.
+
+For Kubernetes, use the CPU-only chart documented in
+[`docs/deployment/kubernetes.md`](docs/deployment/kubernetes.md). It targets
+Kubernetes 1.28+, one replica with a ReadWriteOnce `/data` volume, a ClusterIP
+Service, and an optional TLS Ingress. Multi-replica or multi-node deployments
+must put a shared gateway rate limiter in front of the service.
+
 ## Screenshots
 
 These screenshots are captured from the Shorts Studio application itself.
@@ -114,11 +126,11 @@ The theme switch applies to the entire interface. The light Settings view is sho
 
 ## What you can do
 
-- **Find highlights** with Whisper transcription, sentence-aware boundaries, virality scoring, hook text, and an explanation for every selected moment.
+- **Find highlights** with Whisper transcription, language auto-detection, sentence-aware boundaries, optional YouTube chapter hints, virality scoring, hook text, and an explanation for every selected moment.
 - **Edit the frame** with a face-framing toggle, manual drag positioning, crop-to-fill, fit plus blurred background, and foreground zoom.
 - **Design captions** with Bold, Clean, Boxed, and Karaoke presets, custom font, size, color, safe position, word timing, SRT/VTT downloads, and optional filler-word cleanup.
-- **Clean and shape audio** with silence trimming, real silent-section jump cuts, loudness normalization, background-noise reduction, and optional music.
-- **Fine-tune the timeline** with multi-range cuts whose transcript and word timestamps are remapped to the concatenated result, plus an editable transcript before export.
+- **Clean and shape audio** with silence trimming, real silent-section jump cuts, loudness normalization, background-noise reduction, optional music, and speech-aware music ducking.
+- **Fine-tune the timeline** with multi-range cuts whose transcript and word timestamps are remapped to the concatenated result, fade/slide/zoom transitions, explicit multi-highlight merge, and an editable transcript before export.
 - **Mix music precisely** with per-project volume, fade-in, and fade-out controls.
 - **Choose layouts** with a single frame or a two-panel speaker layout, plus watermark, intro, outro, and automatic thumbnails.
 - **Start quickly with project presets** for Podcast / interview, Educational, Reaction / gaming, Story / emotional, Kids / family, or fully custom settings. Presets are starting points and remain editable.
@@ -126,7 +138,8 @@ The theme switch applies to the entire interface. The light Settings view is sho
 - **Manage projects** with SQLite-backed durable jobs, checkpoints, batch sources, cancellation that terminates active FFmpeg children, retry, resume-after-restart, rename, duplicate, archive, recoverable delete, and Undo last delete.
 - **Export creator assets** as a ZIP containing clips, thumbnails, caption files, `metadata.json`, publishing text, and a manifest.
 - **Reuse and recover work** with named brand presets, storage usage reporting, conservative cache cleanup, and metadata-only backup/restore. Source media and completed clips are preserved by default.
-- **Prepare publishing handoffs** from the Export tab for YouTube Shorts, TikTok, and Instagram Reels with official upload/authorization links, without storing OAuth tokens or silently uploading on your behalf.
+- **Prepare publishing handoffs** from the Export tab for YouTube Shorts, TikTok, and Instagram Reels, or connect YouTube through PKCE OAuth for a visible approval plan, private-by-default resumable upload, idempotency, and scheduling. Tokens remain in process memory only.
+- **Use platform export contracts** for YouTube Shorts, TikTok, Instagram Reels, Instagram 4:5, and YouTube 16:9 presets that validate canvas and duration before rendering.
 - **Use GPU controls** to choose Whisper model and Auto/CPU/CUDA device. CUDA is detected at runtime and safely falls back to CPU.
 - **Use dark or light mode** from the top-bar switch. Your choice is saved locally and applies to panels, forms, previews, captions, timelines, dialogs, status states, and the closed screen.
 - **Personalize the accent** from Settings with Ocean, Indigo, Sunset, Emerald, or Berry palettes. Accent choices update controls, focus states, timelines, captions, badges, and the preview without changing your Dark, Light, or System appearance choice.
@@ -208,11 +221,21 @@ Copy `.env.example` to `.env` and edit only the settings you need. Never commit 
 | `SHORTS_RATE_LIMIT_PER_MINUTE` | General per-client API request limit | `600` |
 | `SHORTS_UPLOAD_RATE_LIMIT_PER_MINUTE` | Per-client upload limit | `10` |
 | `SHORTS_JOB_RATE_LIMIT_PER_MINUTE` | Per-client job submission limit | `30` |
+| `SHORTS_RATE_LIMIT_BACKEND` | `memory` for one process or `sqlite` for same-host multi-process workers | `memory` |
+| `SHORTS_RATE_LIMIT_STORE` | Shared SQLite rate-limit database path when the backend is `sqlite` | `<data>/rate_limits.sqlite3` |
 | `SHORTS_TRUST_PROXY_HEADERS` | Use `X-Forwarded-For` for rate-limit identity only behind a trusted proxy | `false` |
+| `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET` | Optional OAuth client for approval-first YouTube uploads; keep secrets in the deployment manager | empty |
+| `YOUTUBE_OAUTH_REDIRECT_URI` | OAuth callback registered in Google Cloud | `http://127.0.0.1:7860/api/youtube/oauth/callback` |
 | `SHORTS_REQUIRE_SIGNED_UPDATES` | Require GitHub release digests for in-app updates | `true` |
 | `SHORTS_MAX_UPDATE_MB` | Maximum in-app update asset size | `4096` |
 
 Packaged builds keep the optional `.env` beside the executable but place writable project data under `%LOCALAPPDATA%\ShortsStudio`. A custom **Save folder** in the workspace creates named folders such as `20260910_214500_shorts_source_a1b2c3d4`.
+
+For multiple Uvicorn workers on one host, set `SHORTS_RATE_LIMIT_BACKEND=sqlite`
+and point every worker at the same database path on a filesystem that supports
+SQLite WAL. Multi-host deployments should use a gateway limiter (Redis,
+Envoy, or the managed ingress) because a local SQLite file cannot coordinate
+independent hosts.
 
 ### Optional modern face detector
 
@@ -256,19 +279,23 @@ The loopback FastAPI service powers the desktop shell and can be used by local t
 | `GET /api/jobs/{id}/events` | Stream durable progress snapshots over Server-Sent Events |
 | `GET /api/provider-costs` / `PUT /api/provider-costs` | Read or save creator-supplied USD/token rates |
 | `POST /api/jobs/{id}/clips/{index}` | Regenerate one clip with editor settings |
+| `POST /api/jobs/{id}/merge` | Merge separate local highlights with an optional transition |
 | `PATCH /api/jobs/{id}/transcript` | Save edited transcript segments and timing |
+| `GET /api/export-presets` | List platform canvas, frame-rate, and duration contracts |
 | `GET /api/jobs/{id}/export` | Download a project ZIP |
 | `GET /api/storage` / `POST /api/storage/cleanup` | Inspect usage and remove only confirmed, expired generated caches |
 | `GET /api/backup` / `POST /api/restore` | Download or merge a metadata-only project backup |
 | `GET/POST/DELETE /api/brand-presets` | Manage reusable local brand presets |
 | `GET /api/publishing/platforms` | List supported platform handoff adapters |
 | `GET/POST /api/jobs/{id}/publishing` | Generate metadata and official manual-upload links for supported platforms |
+| `GET /api/youtube/oauth/status` / `GET /api/youtube/oauth/start` / `GET /api/youtube/oauth/callback` | Start and complete the optional PKCE YouTube connection |
+| `POST /api/jobs/{id}/youtube/publish` | Return an approval plan or execute a confirmed private/resumable YouTube upload |
 | `GET /api/auth/status` / `POST /api/auth/login` / `POST /api/auth/logout` | Inspect and manage the optional API-token session |
 | `GET /api/update` | Check the latest wiifhub release |
 | `POST /api/update/apply` | Download and apply a packaged update |
 | `POST /api/shutdown` | Stop the local server |
 
-All routes bind to `127.0.0.1` by default. When `SHORTS_API_TOKEN` is set, every API route other than health/auth status/login requires the token as `Authorization: Bearer ...`, `X-Shorts-Token`, or the HttpOnly cookie returned by login. Keep TLS, a single-worker deployment for the in-process limiter, and an upstream reverse proxy for internet-facing use.
+All routes bind to `127.0.0.1` by default. When `SHORTS_API_TOKEN` is set, every API route other than health/auth status/login requires the token as `Authorization: Bearer ...`, `X-Shorts-Token`, or the HttpOnly cookie returned by login. Keep TLS and an upstream reverse proxy for internet-facing use; choose the SQLite limiter for same-host multi-worker deployments and a gateway limiter for multi-host deployments.
 
 ## Project layout
 
@@ -283,8 +310,12 @@ web/                   FastAPI coordinator, typed models, security, SQLite queue
 assets/                Original icon and project artwork
 tests/                 Network-free API, pipeline, ranking, transcript, clipping, and security tests
 installer/             Inno Setup definition
+deploy/helm/           CPU-only Kubernetes 1.28+ Helm chart
+docs/deployment/       arm64 dependency proof and Kubernetes target
 launcher.py            Browser-free desktop launcher
 main.py                CLI entry point
+scripts/build.py       Cross-platform portable/installer build entry point
+scripts/sign_artifacts.py  Optional Authenticode/codesign/notarization
 install_windows.bat    Source dependency setup
 build_portable.bat     PyInstaller portable build
 build_installer.bat    Inno Setup installer build
@@ -292,6 +323,7 @@ Dockerfile             CPU server image
 Dockerfile.gpu         NVIDIA CUDA server image
 docker-compose.yml     CPU/GPU Compose profiles
 requirements-docker.txt Container server dependencies
+requirements-docker-arm64.txt  Audited arm64 CPU dependency lock
 requirements-dev.txt  Pinned test, lint, type-check, and audit tools
 tests/e2e/             Opt-in Playwright creator-flow and accessibility checks
 pyproject.toml        Project metadata and Ruff/mypy/pytest configuration
@@ -307,34 +339,46 @@ checks used by GitHub Actions:
 
 ```powershell
 .\venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\venv\Scripts\python.exe -m ruff check shorts_generator web launcher.py main.py tests
-.\venv\Scripts\python.exe -m mypy
-.\venv\Scripts\python.exe -m pytest
+.\venv\Scripts\python.exe -m ruff check shorts_generator web launcher.py main.py tests scripts
+.\venv\Scripts\python.exe -m mypy --strict
+.\venv\Scripts\python.exe -m bandit -r shorts_generator web launcher.py main.py scripts -ll -x tests
+.\venv\Scripts\python.exe -m pytest --cov=shorts_generator --cov=web --cov-fail-under=55
 .\venv\Scripts\python.exe -m pip_audit -r requirements-dev.txt --progress-spinner off
 .\venv\Scripts\python.exe -m pip_audit -r requirements-local.txt --progress-spinner off
 .\venv\Scripts\python.exe -m pip_audit -r requirements-gpu.txt --progress-spinner off
 .\venv\Scripts\python.exe -m pip_audit -r requirements-docker.txt --progress-spinner off
-node --check web\static\app.js
-node --check web\static\theme-init.js
+.\venv\Scripts\python.exe -m pip_audit -r requirements-docker-arm64.txt --progress-spinner off
+Get-ChildItem web\static -Filter *.js -File; Get-ChildItem web\static\modules -Filter *.js -File | ForEach-Object { node --check $_.FullName }
 
 # Optional browser flow (install Chromium once):
 python -m playwright install chromium
 $env:RUN_BROWSER_E2E="1"; .\venv\Scripts\python.exe -m pytest -q tests/e2e
 ```
 
-The CI workflow also validates the Docker Compose file. `pre-commit install`
-enables the Ruff and mypy hooks locally. Mypy covers `shorts_generator`, `web`,
-`launcher.py`, and `main.py`. Optional OpenCV/FFmpeg/provider integrations
-remain intentionally gradual at their dynamic boundaries, while request
-models, security helpers, routing, and pipeline interfaces are checked in CI.
+The CI workflow also validates the Docker Compose file, the arm64 dependency
+lock, and the Helm chart. `pre-commit install` enables the Ruff and mypy hooks
+locally. Mypy runs strict mode across `shorts_generator`, `web`, `launcher.py`,
+and `main.py`; optional SDKs are isolated behind dynamic runtime adapters.
 
 Build from a clean Windows checkout with the local dependencies installed:
 
 ```powershell
 .\venv\Scripts\python.exe -m pip install -r requirements-local.txt
-.\build_portable.bat
-.\build_installer.bat
+.\venv\Scripts\python.exe scripts\build.py portable
+.\venv\Scripts\python.exe scripts\build.py installer
 ```
+
+The `.bat` files remain compatibility wrappers for existing Windows shortcuts.
+To sign release artifacts, configure the owner-controlled certificate/Apple
+credentials in the environment and run:
+
+```powershell
+.\venv\Scripts\python.exe scripts\sign_artifacts.py release\ShortsStudio-Setup-v0.11.2.exe --report release\signing-report.json
+```
+
+Without those credentials the tool records an explicit unsigned report and
+never claims a signature. The release workflow can require signing by passing
+`--required`.
 
 The generated `dist`, `build`, and `release` directories are intentionally ignored by Git. Before publishing, verify the EXE starts, `/api/health` returns 200, the theme switch works in both modes, the Quit action stops the listener, and the ZIP/installer hashes match the uploaded files.
 
@@ -345,7 +389,7 @@ docker build -t shorts-studio:local .
 docker run --rm -p 127.0.0.1:7860:7860 -v shorts_studio_data:/data shorts-studio:local
 ```
 
-The GPU image is built locally through the Compose `gpu` profile because it requires the host's NVIDIA runtime. The published CPU image is intentionally limited to `linux/amd64`; the Python/Whisper dependency wheels are not promised for every ARM board.
+The GPU image is built locally through the Compose `gpu` profile because it requires the host's NVIDIA runtime. The published CPU image is built for `linux/amd64` and `linux/arm64`; arm64 intentionally uses `requirements-docker-arm64.txt` and runs API/web/export features without local faster-whisper until its onnxruntime wheel is available.
 
 ## Troubleshooting
 

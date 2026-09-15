@@ -9,13 +9,14 @@ values that the renderer cannot implement.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 Mode = Literal["local", "api"]
-AspectRatio = Literal["9:16", "1:1", "4:5"]
+AspectRatio = Literal["9:16", "1:1", "4:5", "16:9"]
 DownloadFormat = Literal["360", "480", "720", "1080"]
 CaptionStyle = Literal["clean", "bold", "boxed", "karaoke"]
 CaptionPosition = Literal["top", "center", "bottom"]
@@ -25,6 +26,8 @@ Layout = Literal["single", "split"]
 WhisperModel = Literal["tiny", "base", "small", "medium", "large-v3"]
 WhisperDevice = Literal["auto", "cpu", "cuda", "mps", "directml", "rocm"]
 LLMProvider = Literal["openai", "gemini", "ollama"]
+Transition = Literal["none", "fade", "slide", "zoom"]
+PrivacyStatus = Literal["private", "unlisted", "public"]
 
 _HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 _MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$")
@@ -58,6 +61,20 @@ class CutRange(StrictModel):
         return self
 
 
+class ChapterHint(StrictModel):
+    """A YouTube chapter used as a soft highlight boundary hint."""
+
+    start_time: float = Field(..., ge=0)
+    end_time: Optional[float] = Field(default=None, gt=0)
+    title: str = Field(..., min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_order(self) -> "ChapterHint":
+        if self.end_time is not None and self.end_time <= self.start_time + 0.1:
+            raise ValueError("chapter end_time must be after start_time")
+        return self
+
+
 class JobRequest(StrictModel):
     url: str = Field(..., min_length=3, max_length=8192)
     mode: Mode = "local"
@@ -65,6 +82,8 @@ class JobRequest(StrictModel):
     aspect_ratio: AspectRatio = "9:16"
     download_format: DownloadFormat = "720"
     language: Optional[str] = Field(default=None, max_length=16)
+    virality_prompt: Optional[str] = Field(default=None, max_length=12000)
+    chapters: List[ChapterHint] = Field(default_factory=list, max_length=200)
     caption_style: CaptionStyle = "bold"
     remove_silence: bool = False
     normalize_audio: bool = False
@@ -79,6 +98,8 @@ class JobRequest(StrictModel):
     music_volume: float = Field(0.18, ge=0.0, le=1.0)
     music_fade_in: float = Field(0.0, ge=0.0, le=30.0)
     music_fade_out: float = Field(0.0, ge=0.0, le=30.0)
+    music_ducking: bool = False
+    ducking_strength: float = Field(0.65, ge=0.0, le=1.0)
     watermark: Optional[str] = None
     auto_reframe: bool = True
     crop_position: float = Field(0.5, ge=0.0, le=1.0)
@@ -87,6 +108,8 @@ class JobRequest(StrictModel):
     intro: Optional[str] = None
     outro: Optional[str] = None
     jump_cuts: bool = False
+    transition: Transition = "none"
+    transition_duration: float = Field(0.25, ge=0.0, le=2.0)
     layout: Layout = "single"
     whisper_model: Optional[WhisperModel] = None
     whisper_device: Optional[WhisperDevice] = None
@@ -95,9 +118,10 @@ class JobRequest(StrictModel):
     llm_provider: Optional[LLMProvider] = None
     llm_model: Optional[str] = Field(default=None, max_length=120)
     llm_temperature: float = Field(0.2, ge=0.0, le=1.0)
+    export_preset: Optional[str] = Field(default=None, max_length=64)
     cuts: List[CutRange] = Field(default_factory=list, max_length=20)
 
-    @field_validator("url", "caption_font", "llm_model", mode="before")
+    @field_validator("url", "caption_font", "llm_model", "virality_prompt", "export_preset", mode="before")
     @classmethod
     def strip_text(cls, value: object) -> object:
         return str(value).strip() if value is not None else value
@@ -116,6 +140,24 @@ class JobRequest(StrictModel):
     @classmethod
     def clean_language(cls, value: object) -> Optional[str]:
         cleaned = str(value).strip() if value is not None else ""
+        if cleaned and cleaned.lower() != "auto" and not re.fullmatch(r"[A-Za-z]{2,3}(?:[-_][A-Za-z]{2,4})?", cleaned):
+            raise ValueError("language must be an ISO-639 code or auto")
+        return cleaned or None
+
+    @field_validator("virality_prompt")
+    @classmethod
+    def clean_prompt(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = "\n".join(line.rstrip() for line in str(value).replace("\x00", "").splitlines()).strip()
+        return cleaned or None
+
+    @field_validator("export_preset")
+    @classmethod
+    def clean_preset(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = str(value).strip().lower()
         return cleaned or None
 
     @field_validator("caption_color")
@@ -156,6 +198,10 @@ class ClipUpdate(StrictModel):
     music_volume: float = Field(0.18, ge=0.0, le=1.0)
     music_fade_in: float = Field(0.0, ge=0.0, le=30.0)
     music_fade_out: float = Field(0.0, ge=0.0, le=30.0)
+    music_ducking: bool = False
+    ducking_strength: float = Field(0.65, ge=0.0, le=1.0)
+    transition: Transition = "none"
+    transition_duration: float = Field(0.25, ge=0.0, le=2.0)
 
     @model_validator(mode="after")
     def validate_ranges(self) -> "ClipUpdate":
@@ -285,6 +331,8 @@ class BrandPreset(StrictModel):
     music_volume: float = Field(0.18, ge=0, le=1)
     music_fade_in: float = Field(0, ge=0, le=30)
     music_fade_out: float = Field(0, ge=0, le=30)
+    music_ducking: bool = False
+    ducking_strength: float = Field(0.65, ge=0, le=1)
 
     @field_validator("name")
     @classmethod
@@ -310,6 +358,60 @@ class BrandPreset(StrictModel):
 class PublishRequest(StrictModel):
     platform: Literal["youtube_shorts", "tiktok", "instagram_reels"]
     clip_index: Optional[int] = Field(default=None, ge=0, le=1000)
+    title: Optional[str] = Field(default=None, max_length=150)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    tags: List[str] = Field(default_factory=list, max_length=30)
+    privacy_status: PrivacyStatus = "private"
+    publish_at: Optional[str] = Field(default=None, max_length=80)
+    confirm: bool = False
+    allow_public: bool = False
+
+    @field_validator("title", "description", mode="before")
+    @classmethod
+    def clean_metadata(cls, value: object) -> Optional[str]:
+        if value is None:
+            return None
+        return str(value).replace("\x00", "").strip() or None
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def clean_tags(cls, value: object) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip()[:100] for item in value if str(item).strip()][:30]
+
+    @model_validator(mode="after")
+    def validate_publish(self) -> "PublishRequest":
+        if self.privacy_status == "public" and not self.allow_public:
+            raise ValueError("public uploads require allow_public=true")
+        if self.publish_at and self.privacy_status != "private":
+            raise ValueError("scheduled YouTube uploads must remain private until publish time")
+        if self.publish_at:
+            raw = self.publish_at.strip()
+            try:
+                parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ValueError("publish_at must be an ISO-8601 timestamp") from exc
+            if parsed.tzinfo is None:
+                raise ValueError("publish_at must include a timezone")
+            if parsed.astimezone(timezone.utc) <= datetime.now(timezone.utc):
+                raise ValueError("publish_at must be in the future")
+        return self
+
+
+class MergeRequest(StrictModel):
+    """Explicitly merge separate generated highlights into one local clip."""
+
+    clip_indices: List[int] = Field(..., min_length=2, max_length=12)
+    transition: Transition = "fade"
+    transition_duration: float = Field(0.25, ge=0.0, le=2.0)
+
+    @field_validator("clip_indices")
+    @classmethod
+    def unique_indices(cls, value: List[int]) -> List[int]:
+        if len(set(value)) != len(value):
+            raise ValueError("clip_indices must be unique")
+        return value
 
 
 class RestoreRequest(StrictModel):

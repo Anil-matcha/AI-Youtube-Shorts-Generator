@@ -12,6 +12,7 @@ import importlib
 import io
 import asyncio
 import json
+import hashlib
 import shutil
 import time
 import zipfile
@@ -23,7 +24,16 @@ from fastapi.responses import StreamingResponse
 
 from web.models import BrandPreset, CleanupRequest, ProviderCostRates, PublishRequest, TranscriptUpdate
 from web.security import redact_structure
-from web.publishing import PLATFORMS, build_publish_plan, platform_specs
+from web.publishing import (
+    PLATFORMS,
+    build_publish_plan,
+    complete_youtube_oauth,
+    platform_specs,
+    start_youtube_oauth,
+    upload_youtube_video,
+    youtube_oauth_status,
+)
+from shorts_generator.export_profiles import export_preset_specs
 
 
 router = APIRouter()
@@ -590,10 +600,17 @@ def update_transcript(job_id: str, update: TranscriptUpdate) -> Dict[str, Any]:
         return studio._job_snapshot(job)
 
 
+@router.get("/export-presets", tags=["projects"])
+def export_presets() -> Dict[str, Any]:
+    """List validated platform export profiles for the editor."""
+    return {"presets": export_preset_specs()}
+
+
 def _publishing_payload(short: Dict[str, Any], platform: str) -> Dict[str, Any]:
     studio = _studio()
     metadata = studio._creator_metadata(short)
     spec = PLATFORMS[platform]
+    oauth_status = youtube_oauth_status() if platform == "youtube_shorts" else {"configured": False, "authorized": False}
     return {
         "platform": platform,
         "label": spec.label,
@@ -607,7 +624,7 @@ def _publishing_payload(short: Dict[str, Any], platform: str) -> Dict[str, Any]:
         "upload_url": spec.upload_url,
         "authorization_url": spec.authorization_url,
         "requires_manual_upload": True,
-        "oauth_status": "not_configured",
+        "oauth_status": oauth_status,
         "token_storage": "disabled",
     }
 
@@ -615,7 +632,13 @@ def _publishing_payload(short: Dict[str, Any], platform: str) -> Dict[str, Any]:
 @router.get("/publishing/platforms", tags=["projects"])
 def publishing_platforms() -> Dict[str, Any]:
     """List supported provider handoffs without requesting credentials."""
-    return {"platforms": platform_specs(), "automatic_upload": False, "token_storage": "disabled"}
+    return {
+        "platforms": platform_specs(),
+        "automatic_upload": True,
+        "approval_required": True,
+        "youtube": youtube_oauth_status(),
+        "token_storage": "process_memory_only",
+    }
 
 
 @router.get("/jobs/{job_id}/publishing", tags=["projects"])
@@ -657,6 +680,88 @@ def prepare_publish(job_id: str, request: PublishRequest) -> Dict[str, Any]:
         "authorization_url": plan["authorization_url"],
         "items": plan["items"],
         "requires_manual_upload": True,
-        "oauth_status": "not_configured",
+        "oauth_status": youtube_oauth_status() if request.platform == "youtube_shorts" else {"configured": False, "authorized": False},
         "token_storage": "disabled",
     }
+
+
+@router.get("/youtube/oauth/status", tags=["projects"])
+def youtube_oauth_status_route() -> Dict[str, Any]:
+    return youtube_oauth_status()
+
+
+@router.get("/youtube/oauth/start", tags=["projects"])
+def youtube_oauth_start() -> Dict[str, Any]:
+    try:
+        return start_youtube_oauth()
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/youtube/oauth/callback", tags=["projects"])
+def youtube_oauth_callback(code: Optional[str] = None, state: Optional[str] = None) -> Dict[str, Any]:
+    if not code or not state:
+        raise HTTPException(400, "YouTube OAuth callback requires code and state")
+    try:
+        return {"status": "authorized", **complete_youtube_oauth(code, state)}
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/youtube/publish", tags=["projects"])
+def publish_youtube(job_id: str, request: PublishRequest) -> Dict[str, Any]:
+    """Prepare or execute one approval-first, private-by-default upload."""
+    if request.platform != "youtube_shorts":
+        raise HTTPException(400, "this endpoint only supports youtube_shorts")
+    studio = _studio()
+    with studio._lock:
+        job = studio._jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "job not found")
+        shorts = studio._dict_items(job.get("raw_shorts"))
+    index = request.clip_index if request.clip_index is not None else 0
+    if index < 0 or index >= len(shorts):
+        raise HTTPException(404, "clip not found")
+    short = shorts[index]
+    metadata = studio._creator_metadata(short)
+    title = request.title or metadata["title"]
+    description = request.description or metadata["description"]
+    tags = request.tags or [tag for tag in metadata["hashtags"].split() if tag]
+    plan = {
+        "platform": "youtube_shorts",
+        "clip_index": index,
+        "title": title[:100],
+        "description": description[:5000],
+        "tags": tags[:30],
+        "privacy_status": request.privacy_status,
+        "publish_at": request.publish_at,
+        "approval_required": True,
+        "resumable": True,
+        "idempotency_key": hashlib.sha256(
+            f"{job_id}:{index}:{title}:{request.publish_at or ''}:{request.privacy_status}".encode("utf-8")
+        ).hexdigest()[:32],
+    }
+    if not request.confirm:
+        return {"status": "approval_required", "message": "Review this plan and resend with confirm=true.", "plan": plan}
+    media = studio._job_media_path(job, short.get("clip_url"))
+    if not media or not media.is_file():
+        raise HTTPException(400, "YouTube publishing requires a local rendered clip")
+    try:
+        uploaded = upload_youtube_video(
+            media,
+            title=title,
+            description=description,
+            tags=tags,
+            privacy_status=request.privacy_status,
+            publish_at=request.publish_at,
+            idempotency_key=plan["idempotency_key"],
+        )
+    except (ValueError, OSError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    with studio._lock:
+        job = studio._jobs.get(job_id)
+        if job:
+            job.setdefault("youtube_uploads", []).append({"clip_index": index, **uploaded, "approved_at": time.time()})
+            studio._append_job_log(job, "publish", f"Approved YouTube upload for clip {index + 1}")
+            studio._persist_job_locked(job)
+    return {"status": "uploaded", "message": "YouTube upload completed.", "plan": plan, "upload": uploaded}

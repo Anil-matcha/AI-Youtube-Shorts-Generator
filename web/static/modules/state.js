@@ -51,8 +51,8 @@
   const formFields = [
     'sourceInput', 'mode', 'numClips', 'aspect', 'format', 'saveFolder',
     'captionStyle', 'captionPosition', 'captionFont', 'captionSize',
-    'captionColor', 'focus', 'music', 'musicVolume', 'musicFadeIn',
-    'musicFadeOut', 'watermark', 'intro', 'outro', 'language',
+    'captionColor', 'focus', 'viralityPrompt', 'music', 'musicVolume', 'musicFadeIn',
+    'musicFadeOut', 'musicDucking', 'duckingStrength', 'transition', 'transitionDuration', 'watermark', 'intro', 'outro', 'language',
     'whisperModel', 'whisperDevice', 'outputHeight', 'removeSilence',
     'jumpCuts', 'normalizeAudio', 'denoiseAudio', 'fillerWords',
     'autoReframe', 'cropPosition', 'fitMode', 'zoom', 'layout'
@@ -63,14 +63,14 @@
       'captionStyle', 'captionPosition', 'captionFont', 'captionSize',
       'captionColor', 'removeSilence', 'jumpCuts', 'normalizeAudio',
       'denoiseAudio', 'fillerWords', 'music', 'musicVolume', 'musicFadeIn',
-      'musicFadeOut', 'watermark', 'intro', 'outro', 'layout', 'whisperModel',
+      'musicFadeOut', 'musicDucking', 'duckingStrength', 'transition', 'transitionDuration', 'watermark', 'intro', 'outro', 'layout', 'whisperModel',
       'whisperDevice', 'outputHeight', 'saveFolder', 'autoReframe',
       'cropPosition', 'fitMode', 'zoom', 'llmModel', 'llmTemperature'
     ]
   });
 
   window.ShortsStudioState = {
-    UI_APP_VERSION: '0.10.2',
+    UI_APP_VERSION: '0.11.2',
     THEME_KEY: 'shorts-studio-theme',
     ACCENT_KEY: 'shorts-studio-accent',
     ACCENT_CHOICES: Object.freeze(['cyan', 'indigo', 'sunset', 'emerald', 'berry']),

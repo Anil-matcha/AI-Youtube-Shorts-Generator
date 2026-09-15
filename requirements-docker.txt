@@ -7,4 +7,6 @@ faster-whisper==1.2.1
 openai==2.49.0
 google-genai==2.14.0
 opencv-python-headless==4.13.0.92
-Pillow==12.3.0
+# Pillow 12.3.0 does not publish a manylinux arm64 wheel yet. 12.2.0 is
+# the newest compatible release for the CPU multi-architecture image.
+Pillow==12.2.0

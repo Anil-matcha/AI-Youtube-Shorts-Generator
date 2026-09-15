@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
-from importlib import resources
+from importlib import import_module, resources
 import os
 import socket
 import sys
@@ -112,7 +112,8 @@ def _wait_for_server(url: str, timeout: float = 20.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url + "/api/health", timeout=1.5) as response:
+            # ``url`` is assembled from the loopback bind address above.
+            with urllib.request.urlopen(url + "/api/health", timeout=1.5) as response:  # nosec B310
                 if response.status == 200:
                     return True
         except (OSError, urllib.error.URLError):
@@ -123,8 +124,11 @@ def _wait_for_server(url: str, timeout: float = 20.0) -> bool:
 def _make_tray(window: Any, server: Any) -> Optional[Any]:
     """Create an optional tray icon when pystray/Pillow are available."""
     try:
-        import pystray  # type: ignore
-        from PIL import Image, ImageDraw  # type: ignore
+        pystray = import_module("pystray")
+        pil = import_module("PIL.Image")
+        image_draw = import_module("PIL.ImageDraw")
+        Image = pil
+        ImageDraw = image_draw
     except Exception:
         return None
 
@@ -220,12 +224,15 @@ def main() -> None:
     preferred_port = os.getenv("SHORTS_PORT", "7860") or "7860"
     port = _free_port(preferred_port)
     url = f"http://127.0.0.1:{port}"
-    config = uvicorn.Config("web.app:app", host="127.0.0.1", port=port, log_level="warning", access_log=False)
+    # Import the app object once and pass it to Uvicorn.  Using an import
+    # string here makes frozen Windows bundles re-import the entry point and
+    # can leave a second interpreter alive after the shutdown request.
+    from web import app as studio_app
+
+    config = uvicorn.Config(studio_app.app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
     server = uvicorn.Server(config)
     # Let the in-app Quit button coordinate the same graceful shutdown path as
     # SIGTERM instead of terminating the packaged process abruptly.
-    from web import app as studio_app
-
     studio_app.bind_server(server)
     thread = threading.Thread(target=server.run, name="shorts-studio-server", daemon=True)
     thread.start()
@@ -238,11 +245,12 @@ def main() -> None:
         return
 
     use_browser = os.getenv("SHORTS_STUDIO_BROWSER", "0").strip().lower() in {"1", "true", "yes", "on"}
+    headless = os.getenv("SHORTS_STUDIO_HEADLESS", "false").strip().lower() in {"1", "true", "yes", "on"}
     tray = None
     try:
         if not use_browser:
             try:
-                import webview  # type: ignore
+                webview = import_module("webview")
 
                 window = webview.create_window(
                     "Shorts Studio",
@@ -266,7 +274,13 @@ def main() -> None:
                 webbrowser.open(url)
                 thread.join()
         else:
-            webbrowser.open(url)
+            # CI and container smoke tests deliberately run headless. Calling
+            # the Windows default browser there can block the launcher thread
+            # after the server has received /api/shutdown, leaving a packaged
+            # process alive even though the API is healthy. Desktop sessions
+            # still open the user's browser normally.
+            if not headless:
+                webbrowser.open(url)
             thread.join()
     finally:
         server.should_exit = True
@@ -275,7 +289,14 @@ def main() -> None:
                 tray.stop()
             except Exception:
                 pass
-        thread.join(timeout=5)
+        thread.join(timeout=2 if headless else 10)
+        if headless:
+            # A CI/container launcher has no desktop resources to unwind. A
+            # final hard exit prevents a non-daemon optional worker (for
+            # example a WebView/asyncio helper created by a frozen bundle)
+            # from keeping a healthy-but-shutting-down executable resident.
+            # Desktop sessions retain normal interpreter cleanup above.
+            os._exit(0)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import json
 import re
 import time
 from functools import lru_cache
+from importlib import import_module
 
 import requests
 
@@ -60,21 +61,23 @@ def _sleep_with_cancel(delay: float) -> None:
 
 @lru_cache(maxsize=4)
 def _openai_client(api_key: str):
-    from openai import OpenAI  # type: ignore
-
-    return OpenAI(api_key=api_key)
+    openai = import_module("openai")
+    return openai.OpenAI(api_key=api_key)
 
 
 @lru_cache(maxsize=4)
 def _gemini_client(api_key: str):
-    from google import genai  # type: ignore
-
+    genai = import_module("google.genai")
     return genai.Client(api_key=api_key)
 
 
 def _collect_openai_stream(response: object) -> str:
     pieces: list[str] = []
-    for chunk in response:  # type: ignore[union-attr]
+    try:
+        chunks = iter(response)
+    except TypeError:
+        return ""
+    for chunk in chunks:
         if cancellation_requested():
             raise RuntimeError("Job cancelled")
         choices = getattr(chunk, "choices", None) or []
@@ -96,7 +99,7 @@ def call_openai_llm(
 ) -> str:
     """OpenAI Chat Completions backend used by --mode local."""
     try:
-        from openai import OpenAI  # type: ignore
+        import_module("openai")
     except ImportError as e:
         raise RuntimeError(
             "openai is required for --mode local. Install it with:\n    pip install -r requirements-local.txt"
@@ -145,7 +148,7 @@ def call_gemini_llm(
 ) -> str:
     """Gemini backend used by --mode local when LLM_PROVIDER=gemini."""
     try:
-        from google import genai  # type: ignore
+        import_module("google.genai")
     except ImportError as e:
         raise RuntimeError(
             "google-genai is required for LLM_PROVIDER=gemini. Install it with:\n"
@@ -225,11 +228,14 @@ def call_ollama_llm(prompt: str, model: str | None = None, *, stream: bool = Fal
         try:
             request_kwargs = {
                 "json": {"model": selected_model, "prompt": prompt, "stream": bool(stream), "format": "json"},
-                "timeout": LOCAL_LLM_TIMEOUT_SECONDS,
             }
             if stream:
                 request_kwargs["stream"] = True
-            response = requests.post(f"{OLLAMA_BASE_URL}/api/generate", **request_kwargs)
+            response = requests.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                timeout=LOCAL_LLM_TIMEOUT_SECONDS,
+                **request_kwargs,
+            )
             response.raise_for_status()
             if stream:
                 pieces: list[str] = []

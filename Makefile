@@ -1,4 +1,4 @@
-.PHONY: install test lint typecheck audit check build docker
+.PHONY: install test lint typecheck audit security check build portable installer docker
 
 install:
 	python -m pip install -r requirements-local.txt
@@ -18,8 +18,16 @@ audit:
 check: lint typecheck test
 
 build:
-	build_portable.bat
-	build_installer.bat
+	python scripts/build.py all
+
+portable:
+	python scripts/build.py portable
+
+installer:
+	python scripts/build.py installer
+
+security:
+	python -m bandit -r shorts_generator web launcher.py main.py -ll -x tests
 
 docker:
 	docker compose --env-file .env.docker.example up --build

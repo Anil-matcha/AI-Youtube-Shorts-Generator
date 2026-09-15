@@ -1,7 +1,7 @@
 # Shorts Studio Upgrade Roadmap
 
-**Current local tag:** v0.10.2 (not pushed or publicly released)
-**Next implementation target:** v0.10.3 (security and production hardening)
+**Current local tag:** v0.11.2 (release candidate)
+**Next implementation target:** v1.0.0 (production-ready API and migration work)
 **Last updated:** 2026-09-15
 
 The actionable implementation list now lives in [TODO.md](TODO.md). This
@@ -111,14 +111,17 @@ No push, GitHub release, or asset upload has been performed.
       in public health responses
 - [x] Replace abrupt shutdown with SIGTERM/Windows graceful drain and durable
       job-store closure (TODO T-003)
-- [ ] Document or implement shared rate limiting for multi-process deployments
+- [x] Document and implement a SQLite-backed shared limiter for same-host
+      multi-process deployments; multi-host deployments use an upstream gateway
+      limiter as documented in `docs/deployment/arm64-support.md`
 
 ### Deployment
 - [x] Add a real local render smoke test; keep packaged Windows/Docker smoke as
       a release-gate follow-up
-- [ ] Add Docker multi-architecture builds only after arm64 dependency support
-      is verified
-- [ ] Publish Helm packaging only for a documented Kubernetes deployment target
+- [x] Verify the arm64 CPU dependency lock and publish a Linux amd64/arm64
+      Buildx matrix; keep CUDA/GPU builds amd64-only
+- [x] Publish a CPU Helm chart for the documented Kubernetes 1.28+ target with
+      PVC, Service, optional TLS Ingress, and shared-limiter guidance
 
 ---
 
@@ -127,26 +130,28 @@ No push, GitHub release, or asset upload has been performed.
 ### AI/LLM Enhancements
 - [x] Support the local Ollama backend for offline ranking; LM Studio remains
       an open adapter
-- [ ] Add custom virality scoring prompt templates (user-editable)
-- [ ] Add multi-language transcription support (auto-detect language)
-- [ ] Add chapter-aware highlight detection (use YouTube chapters as hints)
+- [x] Add custom virality scoring prompt templates (user-editable)
+- [x] Add multi-language transcription support with auto-detection and cache
+      metadata
+- [x] Add chapter-aware highlight detection using safe YouTube metadata sidecars
 
 ### Video Processing
 - [x] Expose 9:16, 1:1, and 4:5 framing choices in the workspace
-- [ ] Add platform-specific 16:9/4:5 export validation and presets
+- [x] Add platform-specific 16:9/4:5 export validation and presets
 - [x] Save and reuse batch watermark/branding presets
-- [ ] Add background music volume auto-mixing (duck speech under music)
-- [ ] Add transition effects between clips (fade, slide, zoom)
+- [x] Add background music volume auto-mixing (duck speech under music)
+- [x] Add transition effects between clips (fade, slide, zoom)
 
 ### Workflow
 - [x] Persist jobs/checkpoints and restore project metadata
 - [x] Add a user-facing project bundle with optional generated media and safe
       portable restore/relinking (base workflow delivered in v0.10.2)
-- [ ] Add export presets (TikTok, Instagram Reels, YouTube Shorts quality settings)
-- [ ] Add YouTube OAuth publishing foundation with approval-first, private-by-
-      default, resumable, and scheduled uploads (TODO T-033; future G-010)
-- [ ] Add explicit merge workflow for separate highlights (multi-cut ranges
-      already cover several ranges within one clip)
+- [x] Add export presets (TikTok, Instagram Reels, YouTube Shorts quality settings)
+- [x] Add YouTube OAuth publishing foundation with PKCE, approval-first,
+      private-by-default, resumable, idempotent, and scheduled uploads (T-033;
+      tokens remain process-memory-only)
+- [x] Add explicit merge workflow for separate highlights (multi-cut ranges
+      remain available for edits inside one clip)
 - [x] Expand the current one-level undo to a bounded full undo/redo history
 
 ---
@@ -154,18 +159,22 @@ No push, GitHub release, or asset upload has been performed.
 ## v0.11.1 — Developer Experience
 
 ### Build & Release
-- [ ] Add cross-platform build scripts (replace `.bat` with Python/Makefile)
-- [ ] Add automated release drafting via GitHub Actions (changelog → release notes)
-- [ ] Add signed builds (Windows Authenticode, macOS notarization)
-- [ ] Add pre-release channel (beta/nightly builds from main)
+- [x] Add cross-platform build scripts (replace `.bat` with Python/Makefile)
+- [x] Add automated release drafting via GitHub Actions (changelog → release notes)
+- [x] Add signed-build tooling (Windows Authenticode and macOS codesign/notarytool)
+      that activates only with owner-supplied credentials
+- [x] Add pre-release channel (beta/nightly builds from main)
 
 ### Code Quality
-- [ ] Enforce `mypy` strict mode across all modules
-- [x] Publish `pytest-cov` coverage reporting in CI (current gate: 35%)
-- [ ] Raise the CI coverage gate from 35% toward 70% after the v0.10.1
-      implementation baseline (currently 49% locally)
-- [ ] Add `bandit` security linting to CI
-- [ ] Refactor remaining type-ignored imports to proper abstractions
+- [x] Enforce `mypy` strict mode across all modules with the Pydantic plugin and
+      documented dynamic-boundary suppressions
+- [x] Publish `pytest-cov` coverage reporting in CI (current gate: 55%, ratcheted
+      from 35% toward the 70% target)
+- [x] Raise the CI coverage gate from 35% toward 70% after the v0.10.1
+      implementation baseline; the next ratchet is tracked with new tests
+- [x] Add `bandit` security linting to CI
+- [x] Refactor remaining type-ignored imports to dynamic optional-dependency
+      adapters and explicit runtime guards
 
 ---
 

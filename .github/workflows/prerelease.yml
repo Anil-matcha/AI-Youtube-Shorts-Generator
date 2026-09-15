@@ -1,0 +1,39 @@
+name: Nightly and beta channel
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel
+        required: true
+        default: nightly
+        type: choice
+        options: [nightly, beta]
+
+permissions:
+  contents: write
+
+jobs:
+  channel:
+    name: Publish pre-release channel marker
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Publish channel release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.channel || 'nightly' }}
+          target_commitish: ${{ github.sha }}
+          name: Shorts Studio ${{ github.event.inputs.channel || 'nightly' }}
+          body: |
+            Automated pre-release channel build from `${{ github.sha }}`.
+
+            This build is for testing and may change or be replaced on the next
+            main-branch update. Use a stable version tag for production.
+          prerelease: true
+          make_latest: false
+          generate_release_notes: false
+          fail_on_unmatched_files: false

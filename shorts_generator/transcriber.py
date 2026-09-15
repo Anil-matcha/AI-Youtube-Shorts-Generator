@@ -57,12 +57,14 @@ def transcribe(media_url: str, language: Optional[str] = None) -> Dict:
     straight into the highlight generator.
     """
     print(f"[transcribe] muapi /openai-whisper on {media_url}", flush=True)
+    requested_language = str(language or "").strip().lower()
+    whisper_language = None if requested_language in {"", "auto"} else requested_language
     payload = {
         "audio_url": media_url,
         "response_format": "verbose_json",
     }
-    if language:
-        payload["language"] = language
+    if whisper_language:
+        payload["language"] = whisper_language
 
     result = muapi.run("openai-whisper", payload, label="openai-whisper")
     verbose = _extract_verbose_payload(result)
@@ -92,4 +94,10 @@ def transcribe(media_url: str, language: Optional[str] = None) -> Dict:
     if not math.isfinite(duration) or duration <= 0:
         duration = max((segment["end"] for segment in segments), default=0.0)
     print(f"[transcribe] {len(segments)} segments, {duration:.0f}s of audio", flush=True)
-    return {"duration": duration, "segments": segments}
+    detected = str(verbose.get("language") or whisper_language or "").strip().lower() or None
+    return {
+        "duration": duration,
+        "segments": segments,
+        "language": detected,
+        "language_requested": requested_language or "auto",
+    }

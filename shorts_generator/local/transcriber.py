@@ -10,6 +10,7 @@ import re
 import hashlib
 import threading
 from functools import lru_cache
+from importlib import import_module
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
@@ -27,7 +28,7 @@ _MODEL_LOCK = threading.Lock()
 def _cuda_ready() -> bool:
     """Check CUDA through PyTorch or CTranslate2, whichever is installed."""
     try:
-        import torch  # type: ignore
+        torch = import_module("torch")
 
         if torch.cuda.is_available():
             torch.zeros(1, device="cuda")
@@ -35,7 +36,7 @@ def _cuda_ready() -> bool:
     except (ImportError, OSError, RuntimeError, TypeError, ValueError):
         pass
     try:
-        import ctranslate2  # type: ignore
+        ctranslate2 = import_module("ctranslate2")
 
         return int(ctranslate2.get_cuda_device_count()) > 0
     except (ImportError, OSError, RuntimeError, TypeError, ValueError):
@@ -166,7 +167,17 @@ def _write_srt_cache(
     )
     if signature:
         _cache_metadata_path(media_path, cache_dir=cache_dir, cache_key=cache_key).write_text(
-            json.dumps({"signature": signature, "version": 1}, ensure_ascii=False), encoding="utf-8"
+            json.dumps(
+                {
+                    "signature": signature,
+                    "version": 2,
+                    "language": transcript.get("language"),
+                    "language_requested": transcript.get("language_requested"),
+                    "language_probability": transcript.get("language_probability"),
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
         )
     return cache_path
 
@@ -231,7 +242,7 @@ def _resolve_model_name(requested: Optional[str], device: str) -> str:
     memory_gb = 0.0
     if device == "cuda":
         try:
-            import torch  # type: ignore
+            torch = import_module("torch")
 
             memory_gb = float(torch.cuda.get_device_properties(0).total_memory) / (1024**3)
         except Exception:
@@ -249,7 +260,8 @@ def _resolve_model_name(requested: Optional[str], device: str) -> str:
 def _load_whisper_model(model_name: str, device: str):
     """Reuse loaded Whisper models across jobs in the same worker process."""
     try:
-        from faster_whisper import WhisperModel  # type: ignore
+        faster_whisper = import_module("faster_whisper")
+        WhisperModel = faster_whisper.WhisperModel
     except ImportError as e:
         raise RuntimeError(
             "faster-whisper is required for --mode local. Install it with:\n    pip install -r requirements-local.txt"
@@ -274,9 +286,13 @@ def transcribe_local(
         raise RuntimeError("Job cancelled")
     if not media_path or not Path(media_path).is_file():
         raise RuntimeError(f"Local media file does not exist: {media_path}")
+    # faster-whisper uses ``None`` to request language auto-detection; the
+    # public API also accepts the explicit, user-friendly ``auto`` value.
+    requested_language = str(language or "").strip().lower()
+    whisper_language = None if requested_language in {"", "auto"} else requested_language
     selected_device = _resolve_device(device)
     selected_model = _resolve_model_name(model_name, selected_device)
-    signature = _cache_signature(media_path, language, selected_model, selected_device)
+    signature = _cache_signature(media_path, whisper_language, selected_model, selected_device)
     cache_key = signature[:32]
     cache_path = _transcript_cache_path(media_path, cache_dir=cache_dir, cache_key=cache_key)
     if cache_path.exists():
@@ -310,6 +326,12 @@ def transcribe_local(
                 cache_path.unlink(missing_ok=True)
                 _cache_metadata_path(media_path, cache_dir=cache_dir, cache_key=cache_key).unlink(missing_ok=True)
             else:
+                if isinstance(metadata, dict) and metadata.get("language"):
+                    cached["language"] = str(metadata["language"])
+                if isinstance(metadata, dict) and metadata.get("language_requested"):
+                    cached["language_requested"] = str(metadata["language_requested"])
+                if isinstance(metadata, dict) and metadata.get("language_probability") is not None:
+                    cached["language_probability"] = metadata.get("language_probability")
                 print(
                     f"[transcribe/local] {len(cached['segments'])} cached segments, {cached['duration']:.0f}s of audio",
                     flush=True,
@@ -326,7 +348,7 @@ def transcribe_local(
 
     transcribe_kwargs = {
         "audio": media_path,
-        "language": language,
+        "language": whisper_language,
         "beam_size": 5,
         "condition_on_previous_text": False,
         "word_timestamps": True,
@@ -393,7 +415,18 @@ def transcribe_local(
     if not math.isfinite(duration) or duration <= 0:
         duration = segments[-1]["end"] if segments else 0.0
     print(f"[transcribe/local] {len(segments)} segments, {duration:.0f}s of audio", flush=True)
-    transcript = {"duration": duration, "segments": segments}
+    detected_language = str(getattr(info, "language", "") or language or "").strip().lower() or None
+    try:
+        language_probability = float(getattr(info, "language_probability", 0.0) or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        language_probability = 0.0
+    transcript = {
+        "duration": duration,
+        "segments": segments,
+        "language": detected_language,
+        "language_requested": requested_language or "auto",
+        "language_probability": max(0.0, min(1.0, language_probability)),
+    }
     cache_path = _write_srt_cache(
         media_path,
         transcript,

@@ -43,6 +43,27 @@ def test_chunking_and_transcript_text_include_visual_signals() -> None:
     assert "Visual signals" in build_transcript_text(transcript)
 
 
+def test_chapters_and_custom_virality_guidance_reach_ranker() -> None:
+    transcript = {
+        "duration": 12,
+        "segments": [{"start": 0, "end": 12, "text": "A useful story"}],
+        "chapters": [{"start_time": 0, "end_time": 12, "title": "The payoff"}],
+    }
+    calls = []
+
+    def fake_llm(prompt: str) -> str:
+        calls.append(prompt)
+        if "classify the content type" in prompt:
+            return '{"content_type":"podcast","density":"medium"}'
+        return '{"highlights":[{"title":"A","start_time":1,"end_time":8,"score":90,"hook_sentence":"A","virality_reason":"Useful"}]}'
+
+    assert "The payoff" in build_transcript_text(transcript)
+    result = get_highlights(transcript, num_clips=1, llm_fn=fake_llm, virality_prompt="Prioritize practical takeaways.")
+
+    assert result["highlights"][0]["title"] == "A"
+    assert any("Prioritize practical takeaways" in prompt for prompt in calls)
+
+
 def test_get_highlights_uses_pluggable_llm_without_network() -> None:
     calls = []
 

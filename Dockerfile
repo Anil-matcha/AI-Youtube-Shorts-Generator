@@ -14,6 +14,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+ARG TARGETARCH
+
 # FFmpeg handles rendering, Node gives yt-dlp its optional YouTube challenge
 # runtime, and the small runtime libraries are required by OpenCV headless.
 RUN apt-get update \
@@ -26,9 +28,13 @@ RUN apt-get update \
         nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt requirements-docker.txt ./
+COPY requirements.txt requirements-docker.txt requirements-docker-arm64.txt ./
 RUN python -m pip install --upgrade pip \
-    && python -m pip install --no-cache-dir -r requirements-docker.txt
+    && if [ "$TARGETARCH" = "arm64" ]; then \
+         python -m pip install --no-cache-dir -r requirements-docker-arm64.txt; \
+       else \
+         python -m pip install --no-cache-dir -r requirements-docker.txt; \
+       fi
 
 COPY . .
 RUN mkdir -p /data/output /data/cache /data/models \

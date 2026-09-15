@@ -4,10 +4,13 @@ Returns a local mp4 path so the rest of the local pipeline can read it
 directly off disk.
 """
 
+import json
 import os
 import re
 import ipaddress
 import socket
+import threading
+from importlib import import_module
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 from typing import Optional
@@ -16,6 +19,7 @@ from ..config import LOCAL_OUTPUT_DIR, cancellation_requested
 
 
 _DEFAULT_REMOTE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be"}
+_DOWNLOAD_CONTEXT = threading.local()
 
 
 def _remote_host_allowlist() -> set[str]:
@@ -88,12 +92,11 @@ def validate_remote_source(source: str) -> str:
 
 def _import_ytdlp():
     try:
-        import yt_dlp  # type: ignore
+        return import_module("yt_dlp")
     except ImportError as e:
         raise RuntimeError(
             "yt-dlp is required for --mode local. Install it with:\n    pip install -r requirements-local.txt"
         ) from e
-    return yt_dlp
 
 
 def _format_for(fmt: str) -> str:
@@ -192,6 +195,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         raise RuntimeError("Job cancelled")
     local_path = _resolve_local_path(video_url)
     if local_path:
+        _DOWNLOAD_CONTEXT.info = {}
         print(f"[download/local] using local file: {local_path}", flush=True)
         return local_path
 
@@ -203,6 +207,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
     if video_id:
         cached = _existing_download(out_dir, video_id)
         if cached:
+            _DOWNLOAD_CONTEXT.info = _load_download_info(cached)
             print(f"[download/local] reusing cached download: {cached}", flush=True)
             return cached
 
@@ -250,6 +255,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
+            _DOWNLOAD_CONTEXT.info = info if isinstance(info, dict) else {}
             if cancellation_requested():
                 raise RuntimeError("Job cancelled")
             path = ydl.prepare_filename(info)
@@ -276,3 +282,69 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         raise
     print(f"[download/local] ready: {path}", flush=True)
     return path
+
+
+def _load_download_info(media_path: str) -> dict:
+    """Load the small metadata sidecar written next to a cached download."""
+    sidecar = Path(media_path).with_suffix(".info.json")
+    try:
+        value = json.loads(sidecar.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError, TypeError, UnicodeError):
+        return {}
+
+
+def _write_download_info(media_path: str, info: object) -> None:
+    if not isinstance(info, dict):
+        return
+    # Keep only the metadata needed by chapter-aware ranking; do not persist
+    # extractor cookies, signatures, or the full yt-dlp response.
+    chapters = info.get("chapters")
+    safe_chapters = []
+    if isinstance(chapters, (list, tuple)):
+        for chapter in chapters[:200]:
+            if not isinstance(chapter, dict):
+                continue
+            safe_chapters.append(
+                {
+                    "start_time": chapter.get("start_time", chapter.get("start")),
+                    "end_time": chapter.get("end_time", chapter.get("end")),
+                    "title": str(chapter.get("title") or "Chapter")[:200],
+                }
+            )
+    if not safe_chapters:
+        return
+    try:
+        Path(media_path).with_suffix(".info.json").write_text(
+            json.dumps({"chapters": safe_chapters}, ensure_ascii=False), encoding="utf-8"
+        )
+    except (OSError, TypeError, ValueError):
+        return
+
+
+def download_youtube_local_with_metadata(
+    video_url: str, fmt: str = "720", out_dir: Optional[str] = None
+) -> tuple[str, dict]:
+    """Download a source and return its path plus safe YouTube metadata."""
+    _DOWNLOAD_CONTEXT.info = {}
+    path = download_youtube_local(video_url, fmt=fmt, out_dir=out_dir)
+    info = getattr(_DOWNLOAD_CONTEXT, "info", {})
+    if isinstance(info, dict):
+        _write_download_info(path, info)
+        chapters = info.get("chapters")
+        safe = []
+        if isinstance(chapters, (list, tuple)):
+            for chapter in chapters[:200]:
+                if not isinstance(chapter, dict):
+                    continue
+                try:
+                    start = float(chapter.get("start_time", chapter.get("start", 0.0)))
+                    end_value = chapter.get("end_time", chapter.get("end"))
+                    end = float(end_value) if end_value is not None else None
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if start < 0 or (end is not None and end <= start):
+                    continue
+                safe.append({"start_time": start, "end_time": end, "title": str(chapter.get("title") or "Chapter")[:200]})
+        return path, {"chapters": safe}
+    return path, {}

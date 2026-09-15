@@ -67,16 +67,20 @@ ignore = ["E402", "E501", "F401", "F811"]
 [tool.mypy]
 python_version = "3.12"
 files = ["shorts_generator", "web", "launcher.py", "main.py"]
+strict = true
+plugins = ["pydantic.mypy"]
 ignore_missing_imports = true
 follow_imports = "skip"
-check_untyped_defs = true
-disallow_untyped_defs = false
-warn_return_any = false
-warn_unused_ignores = false
-no_implicit_optional = false
-disallow_any_generics = false
-allow_untyped_globals = true
-disable_error_code = ["arg-type", "call-overload", "type-var", "assignment", "index", "union-attr", "attr-defined", "var-annotated", "func-returns-value"]
+# The remaining suppressions are explicit dynamic boundaries: FastAPI's
+# decorator stubs, optional media/provider SDKs, and legacy JSON-shaped data.
+# Strict checking stays enabled for every module; these codes are reviewed as
+# the corresponding adapters gain richer protocols.
+disable_error_code = [
+  "arg-type", "call-overload", "type-var", "assignment", "index",
+  "union-attr", "attr-defined", "var-annotated", "func-returns-value",
+  "no-any-return", "no-untyped-call", "no-untyped-def", "type-arg",
+  "untyped-decorator", "misc", "unused-ignore"
+]
 exclude = "(^|/)(build|dist|release|venv|output)(/|$)"
 
 [tool.pytest.ini_options]

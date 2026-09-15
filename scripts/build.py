@@ -18,6 +18,12 @@ from typing import Iterable, List
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# These imports are part of the desktop runtime, not optional build-time
+# conveniences.  PyInstaller can otherwise continue after silently dropping
+# modules that are unavailable in the interpreter used to run this script,
+# producing an EXE that fails immediately with ``No module named uvicorn``.
+_REQUIRED_BUILD_IMPORTS = ("PyInstaller", "fastapi", "uvicorn", "pydantic", "dotenv", "webview", "pystray", "PIL")
+
 # Running ``python scripts/build.py`` puts ``scripts/`` (not the repository
 # root) on ``sys.path``.  Add the checkout explicitly so the installer target
 # can read the single source-of-truth package version from a clean environment.
@@ -36,9 +42,147 @@ def _data_arg(source: str, target: str) -> List[str]:
     return ["--add-data", f"{ROOT / source}{os.pathsep}{target}"]
 
 
+def _venv_python(venv: Path) -> Path:
+    """Return the platform-specific Python executable inside ``venv``."""
+    if os.name == "nt":
+        return venv / "Scripts" / "python.exe"
+    return venv / "bin" / "python"
+
+
+def _build_interpreters() -> List[Path]:
+    """List likely build interpreters, preferring an active/project venv."""
+    candidates: List[Path] = []
+    current = Path(sys.executable).resolve()
+    if sys.prefix != sys.base_prefix or os.getenv("VIRTUAL_ENV"):
+        candidates.append(current)
+    for name in ("venv", ".venv"):
+        candidates.append(_venv_python(ROOT / name))
+    candidates.append(current)
+
+    unique: List[Path] = []
+    seen = set()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            unique.append(resolved)
+    return unique
+
+
+def _has_build_dependencies(python: Path) -> bool:
+    probe = (
+        "import importlib.util, sys; "
+        "missing = [name for name in sys.argv[1:] if importlib.util.find_spec(name) is None]; "
+        "print('missing: ' + ', '.join(missing) if missing else 'ok'); "
+        "raise SystemExit(1 if missing else 0)"
+    )
+    result = subprocess.run(
+        [str(python), "-c", probe, *_REQUIRED_BUILD_IMPORTS],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode:
+        detail = (result.stdout or result.stderr).strip()
+        print(f"Skipping {python}: {detail or 'required build imports are unavailable'}")
+    return result.returncode == 0
+
+
+def _build_python(*, dry_run: bool = False) -> str:
+    """Select an interpreter that can actually build the desktop bundle."""
+    candidates = _build_interpreters()
+    if dry_run:
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate)
+        return str(Path(sys.executable).resolve())
+
+    for candidate in candidates:
+        if candidate.is_file() and _has_build_dependencies(candidate):
+            return str(candidate)
+
+    names = ", ".join(_REQUIRED_BUILD_IMPORTS)
+    raise RuntimeError(
+        "Portable build requires a Python environment containing "
+        f"{names}. Run install_windows.bat (or install requirements-local.txt) "
+        "and retry. No build was produced."
+    )
+
+
+def _first_file(candidates: Iterable[Path]) -> Path | None:
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _copy_windows_runtime_assets(bundle: Path, python: Path) -> None:
+    """Keep the self-contained Windows bundle's media runtime assets."""
+    if os.name != "nt":
+        return
+
+    ffmpeg = _first_file(
+        [
+            Path(shutil.which("ffmpeg.exe") or ""),
+            Path(os.getenv("USERPROFILE", "")) / "scoop" / "apps" / "ffmpeg" / "current" / "bin" / "ffmpeg.exe",
+            Path("C:/ffmpeg/bin/ffmpeg.exe"),
+            Path(os.getenv("ChocolateyToolsLocation", "")) / "ffmpeg" / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe",
+        ]
+    )
+    ffprobe = _first_file(
+        [
+            Path(shutil.which("ffprobe.exe") or ""),
+            Path(os.getenv("USERPROFILE", "")) / "scoop" / "apps" / "ffmpeg" / "current" / "bin" / "ffprobe.exe",
+            Path("C:/ffmpeg/bin/ffprobe.exe"),
+            Path(os.getenv("ChocolateyToolsLocation", "")) / "ffmpeg" / "tools" / "ffmpeg" / "bin" / "ffprobe.exe",
+        ]
+    )
+    winget_root = Path(os.getenv("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Packages"
+    if winget_root.is_dir():
+        if ffmpeg is None:
+            ffmpeg = _first_file(winget_root.rglob("ffmpeg.exe"))
+        if ffprobe is None:
+            ffprobe = _first_file(winget_root.rglob("ffprobe.exe"))
+    for source, name in ((ffmpeg, "ffmpeg.exe"), (ffprobe, "ffprobe.exe")):
+        if source is not None:
+            shutil.copy2(source, bundle / name)
+            print(f"Bundled {name} from {source}")
+        else:
+            print(f"WARNING: {name} was not found; install FFmpeg or add it to PATH for local rendering.")
+
+    cuda_root = Path(os.getenv("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "lib" / "ollama" / "cuda_v12"
+    cublas = cuda_root / "cublas64_12.dll"
+    if not cublas.is_file():
+        cuda_roots = Path(os.getenv("ProgramFiles", "")) / "NVIDIA GPU Computing Toolkit"
+        for candidate in sorted(cuda_roots.glob("CUDA/v12*/bin")):
+            if (candidate / "cublas64_12.dll").is_file():
+                cuda_root = candidate
+                cublas = candidate / "cublas64_12.dll"
+                break
+    if cublas.is_file():
+        for name in ("cublas64_12.dll", "cublasLt64_12.dll", "cudart64_12.dll"):
+            source = cuda_root / name
+            if source.is_file():
+                shutil.copy2(source, bundle / name)
+        print(f"Bundled CUDA 12 runtime files from {cuda_root}")
+    else:
+        print("WARNING: CUDA 12 runtime not found; CUDA mode will fall back to CPU.")
+
+    python_root = python.resolve().parent.parent
+    cudnn_candidates = (
+        python_root / "Lib" / "site-packages" / "ctranslate2" / "cudnn64_9.dll",
+        ROOT / "venv" / "Lib" / "site-packages" / "ctranslate2" / "cudnn64_9.dll",
+    )
+    cudnn = _first_file(cudnn_candidates)
+    if cudnn is not None:
+        shutil.copy2(cudnn, bundle / cudnn.name)
+
+
 def build_portable(*, dry_run: bool = False) -> None:
+    python = _build_python(dry_run=dry_run)
     command: List[str] = [
-        sys.executable,
+        python,
         "-m",
         "PyInstaller",
         "--noconfirm",
@@ -77,6 +221,7 @@ def build_portable(*, dry_run: bool = False) -> None:
     shutil.copy2(ROOT / ".env.example", bundle / ".env.example")
     if os.name == "nt" and (ROOT / "unblock_and_start.bat").is_file():
         shutil.copy2(ROOT / "unblock_and_start.bat", bundle / "unblock_and_start.bat")
+    _copy_windows_runtime_assets(bundle, Path(python))
     print(f"Portable build ready: {bundle}")
 
 

@@ -15,6 +15,7 @@
         num_clips: Math.min(12, Math.max(1, Math.round(number('numClips', 3)))),
         aspect_ratio: value('aspect'), download_format: value('format'),
         language: value('language').trim() || null,
+        virality_prompt: value('viralityPrompt').trim() || null,
         caption_style: local ? value('captionStyle') : 'bold',
         caption_position: local ? value('captionPosition') : 'bottom',
         caption_font: local ? (value('captionFont').trim() || 'Arial') : 'Arial',
@@ -25,6 +26,8 @@
         music_volume: local ? Math.min(1, Math.max(0, number('musicVolume', .18))) : .18,
         music_fade_in: local ? Math.min(30, Math.max(0, number('musicFadeIn', 0))) : 0,
         music_fade_out: local ? Math.min(30, Math.max(0, number('musicFadeOut', 0))) : 0,
+        music_ducking: local && checked('musicDucking'),
+        ducking_strength: local ? Math.min(1, Math.max(0, number('duckingStrength', .65))) : .65,
         watermark: local ? (value('watermark').trim() || null) : null,
         auto_reframe: local ? checked('autoReframe') : true,
         crop_position: local ? Math.min(1, Math.max(0, number('cropPosition', .5))) : .5,
@@ -34,6 +37,8 @@
         remove_silence: local && checked('removeSilence'), jump_cuts: local && checked('jumpCuts'),
         normalize_audio: local && checked('normalizeAudio'), denoise_audio: local && checked('denoiseAudio'),
         remove_filler_words: local && checked('fillerWords'), layout: local ? value('layout') : 'single',
+        transition: local ? (value('transition') || 'none') : 'none',
+        transition_duration: local ? Math.min(2, Math.max(0, number('transitionDuration', .25))) : .25,
         whisper_model: local ? (value('whisperModel') || null) : null,
         whisper_device: local ? (value('whisperDevice') || null) : null,
         output_height: local ? Math.min(4320, Math.max(0, Math.round(number('outputHeight', 1920)))) : 1920,
@@ -41,6 +46,7 @@
         llm_provider: local ? ($('settingsLlmProvider')?.value || state.settings.llmProvider || null) : null,
         llm_model: local ? ($('llmModel')?.value || null) : null,
         llm_temperature: local ? Math.min(1, Math.max(0, number('llmTemperature', .2))) : .2,
+        export_preset: value('platformPresetSelect') || null,
         cuts: local ? state.cuts : []
       };
     }
@@ -51,15 +57,16 @@
       [['sourceInput', 'url'], ['mode', 'mode'], ['numClips', 'num_clips'], ['aspect', 'aspect_ratio'],
         ['format', 'download_format'], ['language', 'language'], ['captionStyle', 'caption_style'],
         ['captionPosition', 'caption_position'], ['captionFont', 'caption_font'], ['captionSize', 'caption_size'],
-        ['captionColor', 'caption_color'], ['focus', 'focus'], ['music', 'background_music'],
-        ['musicVolume', 'music_volume'], ['musicFadeIn', 'music_fade_in'], ['musicFadeOut', 'music_fade_out'],
+        ['captionColor', 'caption_color'], ['focus', 'focus'], ['viralityPrompt', 'virality_prompt'], ['music', 'background_music'],
+        ['musicVolume', 'music_volume'], ['musicFadeIn', 'music_fade_in'], ['musicFadeOut', 'music_fade_out'], ['duckingStrength', 'ducking_strength'], ['transitionDuration', 'transition_duration'],
+        ['platformPresetSelect', 'export_preset'], ['transition', 'transition'],
         ['watermark', 'watermark'], ['cropPosition', 'crop_position'], ['fitMode', 'fit_mode'], ['zoom', 'zoom'],
         ['intro', 'intro'], ['outro', 'outro'], ['layout', 'layout'], ['whisperModel', 'whisper_model'],
         ['whisperDevice', 'whisper_device'], ['outputHeight', 'output_height'], ['saveFolder', 'save_folder'],
         ['settingsLlmProvider', 'llm_provider'], ['llmModel', 'llm_model'], ['llmTemperature', 'llm_temperature']]
         .forEach(([id, key]) => set(id, key));
       [['autoReframe', 'auto_reframe'], ['removeSilence', 'remove_silence'], ['jumpCuts', 'jump_cuts'],
-        ['normalizeAudio', 'normalize_audio'], ['denoiseAudio', 'denoise_audio'], ['fillerWords', 'remove_filler_words']]
+        ['normalizeAudio', 'normalize_audio'], ['denoiseAudio', 'denoise_audio'], ['fillerWords', 'remove_filler_words'], ['musicDucking', 'music_ducking']]
         .forEach(([id, key]) => check(id, key));
       state.cuts = Array.isArray(req.cuts) ? req.cuts.map(cut => ({...cut})) : [];
       renderCuts();

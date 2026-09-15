@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from web.models import BrandPreset, ClipUpdate, CutRange, JobRequest, TranscriptUpdate
+from web.models import BrandPreset, ClipUpdate, CutRange, JobRequest, PublishRequest, TranscriptUpdate
 
 
 def test_job_request_normalises_text_and_editor_defaults() -> None:
@@ -46,3 +46,12 @@ def test_transcript_and_brand_preset_contracts() -> None:
     assert preset.name == "My Brand"
     assert preset.caption_color == "#123456"
     assert preset.music_volume == 0
+
+
+def test_language_auto_and_approval_first_publish_contract() -> None:
+    request = JobRequest(url="video.mp4", language=" auto ", export_preset="youtube_shorts")
+    assert request.language == "auto"
+    assert request.export_preset == "youtube_shorts"
+    assert PublishRequest(platform="youtube_shorts").privacy_status == "private"
+    with pytest.raises(ValidationError, match="allow_public"):
+        PublishRequest(platform="youtube_shorts", privacy_status="public")

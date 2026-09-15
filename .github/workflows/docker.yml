@@ -45,7 +45,9 @@ jobs:
         with:
           context: .
           file: Dockerfile
-          platforms: linux/amd64
+          # CPU builds are multi-architecture after the arm64 wheel audit in
+          # docs/deployment/arm64-support.md. GPU/CUDA remains amd64-only.
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

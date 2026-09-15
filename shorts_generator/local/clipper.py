@@ -16,6 +16,7 @@ import time
 import math
 import threading
 from functools import lru_cache
+from importlib import import_module
 from pathlib import Path
 import textwrap
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -313,17 +314,30 @@ def _caption_style_values(style: str, position: str = "bottom") -> Tuple[int, st
             custom = json.loads(Path(LOCAL_CAPTION_PRESETS_FILE).expanduser().read_text(encoding="utf-8"))
             if isinstance(custom, dict):
                 for name, value in custom.items():
+                    key = str(name).strip().lower()
                     if isinstance(value, (list, tuple)) and len(value) >= 6:
-                        presets[str(name).strip().lower()] = tuple(value[:6])  # type: ignore[assignment]
+                        try:
+                            presets[key] = (
+                                int(value[0]),
+                                str(value[1]),
+                                str(value[2]),
+                                str(value[3]),
+                                int(value[4]),
+                                int(value[5]),
+                                2,
+                            )
+                        except (TypeError, ValueError, IndexError):
+                            continue
                     elif isinstance(value, dict):
-                        base = presets.get(str(name).strip().lower(), presets["bold"])
-                        presets[str(name).strip().lower()] = (
+                        base = presets.get(key, presets["bold"])
+                        presets[key] = (
                             int(value.get("font_size", base[0])),
                             str(value.get("primary", base[1])),
                             str(value.get("secondary", base[2])),
                             str(value.get("back", base[3])),
                             int(value.get("outline", base[4])),
                             int(value.get("border_style", base[5])),
+                            int(value.get("shadow", base[6])),
                         )
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             pass
@@ -710,8 +724,14 @@ def _shift_caption_segments(segments: List[Dict], offset: float) -> List[Dict]:
     return shifted
 
 
-def _cut_ranges(source_path: str, ranges: List[Tuple[float, float]], out_path: str) -> str:
-    """Cut one or more source intervals and concatenate them without reordering."""
+def _cut_ranges(
+    source_path: str,
+    ranges: List[Tuple[float, float]],
+    out_path: str,
+    transition: str = "none",
+    transition_duration: float = 0.25,
+) -> str:
+    """Cut intervals and optionally join them with video/audio transitions."""
     if not ranges:
         raise RuntimeError("at least one valid cut range is required")
     if len(ranges) == 1:
@@ -732,7 +752,41 @@ def _cut_ranges(source_path: str, ranges: List[Tuple[float, float]], out_path: s
         filters.append(f"[0:v]trim=start={left:.3f}:end={right:.3f},setpts=PTS-STARTPTS[v{index}]")
         filters.append(f"[0:a]atrim=start={left:.3f}:end={right:.3f},asetpts=PTS-STARTPTS[a{index}]")
         labels.append(f"[v{index}][a{index}]")
-    filters.append("".join(labels) + f"concat=n={len(ranges)}:v=1:a=1[v][a]")
+    transition_name = str(transition or "none").strip().lower()
+    if transition_name not in {"none", "fade", "slide", "zoom"}:
+        transition_name = "none"
+    try:
+        requested_duration = max(0.0, min(2.0, float(transition_duration)))
+    except (TypeError, ValueError, OverflowError):
+        requested_duration = 0.25
+    if transition_name == "none":
+        filters.append("".join(labels) + f"concat=n={len(ranges)}:v=1:a=1[v][a]")
+    else:
+        current_v = "v0"
+        current_a = "a0"
+        elapsed = ranges[0][1] - ranges[0][0]
+        transition_filter = {"fade": "fade", "slide": "slideleft", "zoom": "zoomin"}[transition_name]
+        for index in range(1, len(ranges)):
+            span = ranges[index][1] - ranges[index][0]
+            duration = min(requested_duration, max(0.0, span / 2.0), max(0.0, elapsed / 2.0))
+            if duration < 0.01:
+                duration = 0.0
+            video_out = f"vx{index}"
+            audio_out = f"ax{index}"
+            if duration:
+                offset = max(0.0, elapsed - duration)
+                filters.append(
+                    f"[{current_v}][v{index}]xfade=transition={transition_filter}:duration={duration:.3f}:offset={offset:.3f}[{video_out}]"
+                )
+                filters.append(f"[{current_a}][a{index}]acrossfade=d={duration:.3f}:c1=tri:c2=tri[{audio_out}]")
+                elapsed = elapsed + span - duration
+            else:
+                filters.append(f"[{current_v}][v{index}]concat=n=2:v=1:a=0[{video_out}]")
+                filters.append(f"[{current_a}][a{index}]concat=n=2:v=0:a=1[{audio_out}]")
+                elapsed += span
+            current_v, current_a = video_out, audio_out
+        filters.append(f"[{current_v}]null[v]")
+        filters.append(f"[{current_a}]anull[a]")
     try:
         _run_command(
             [
@@ -785,7 +839,7 @@ def _reframe_vertical(
 ) -> str:
     """Crop the cut clip to the target aspect ratio, tracking faces if possible."""
     try:
-        import cv2  # type: ignore
+        cv2 = import_module("cv2")
     except ImportError as e:
         raise RuntimeError(
             "opencv-python is required for --mode local. Install it with:\n    pip install -r requirements-local.txt"
@@ -1047,6 +1101,10 @@ def crop_clip_local(
     music_volume: float = 0.18,
     music_fade_in: float = 0.0,
     music_fade_out: float = 0.0,
+    music_ducking: bool = False,
+    ducking_strength: float = 0.65,
+    transition: str = "none",
+    transition_duration: float = 0.25,
     *,
     cancel_check: Optional[Callable[[], bool]] = None,
     timeline_map: Optional[List[Tuple[float, float]]] = None,
@@ -1093,7 +1151,7 @@ def crop_clip_local(
     try:
         if cancellation_requested() or (cancel_check and cancel_check()):
             raise RuntimeError("Job cancelled")
-        _cut_ranges(source_path, ranges, cut_path)
+        _cut_ranges(source_path, ranges, cut_path, transition=transition, transition_duration=transition_duration)
         if jump_cuts:
             changed, keep = _remove_silent_video_with_map(cut_path, jump_path)
             if changed:
@@ -1132,6 +1190,8 @@ def crop_clip_local(
             music_volume=music_volume,
             music_fade_in=music_fade_in,
             music_fade_out=music_fade_out,
+            music_ducking=music_ducking,
+            ducking_strength=ducking_strength,
         )
         intro_offset = _media_duration(intro) if intro else 0.0
         _apply_branding(out_path, aspect_ratio, output_height, intro, outro)
@@ -1251,6 +1311,8 @@ def _apply_media_extras(
     music_volume: float = 0.18,
     music_fade_in: float = 0.0,
     music_fade_out: float = 0.0,
+    music_ducking: bool = False,
+    ducking_strength: float = 0.65,
 ) -> None:
     """Mix optional background music and/or watermark into a rendered clip."""
     if not background_music and not watermark:
@@ -1278,7 +1340,17 @@ def _apply_media_extras(
             music_chain += "[music]"
             filters.append(music_chain)
             if _has_audio_stream(out_path):
-                filters.append("[0:a][music]amix=inputs=2:duration=first:dropout_transition=2[a]")
+                if music_ducking:
+                    strength = max(0.0, min(1.0, _finite_float(ducking_strength, 0.65)))
+                    ratio = 1.0 + (strength * 9.0)
+                    # Speech is the sidechain; music is compressed while the
+                    # voice is present, then mixed back at the requested level.
+                    filters.append(
+                        f"[music][0:a]sidechaincompress=threshold=0.03:ratio={ratio:.2f}:attack=20:release=300:makeup=1[ducked]"
+                    )
+                    filters.append("[0:a][ducked]amix=inputs=2:duration=first:dropout_transition=2[a]")
+                else:
+                    filters.append("[0:a][music]amix=inputs=2:duration=first:dropout_transition=2[a]")
             else:
                 # Some screen recordings contain video only. In that case
                 # use the supplied music as the complete audio track.
@@ -1542,6 +1614,10 @@ def crop_highlights_local(
     music_volume: float = 0.18,
     music_fade_in: float = 0.0,
     music_fade_out: float = 0.0,
+    music_ducking: bool = False,
+    ducking_strength: float = 0.65,
+    transition: str = "none",
+    transition_duration: float = 0.25,
     *,
     cancel_check: Optional[Callable[[], bool]] = None,
 ) -> List[Dict]:
@@ -1609,6 +1685,10 @@ def crop_highlights_local(
                 music_volume=music_volume,
                 music_fade_in=music_fade_in,
                 music_fade_out=music_fade_out,
+                music_ducking=music_ducking,
+                ducking_strength=ducking_strength,
+                transition=transition,
+                transition_duration=transition_duration,
                 cancel_check=cancel_check,
                 timeline_map=timeline_map,
             )

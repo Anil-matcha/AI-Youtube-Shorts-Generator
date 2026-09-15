@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+from importlib import import_module
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -15,7 +16,7 @@ def analyze_video(
 ) -> List[Dict]:
     """Find scene-change and face/reaction signals without a second ML model."""
     try:
-        import cv2  # type: ignore
+        cv2 = import_module("cv2")
     except ImportError:
         return []
 
@@ -90,7 +91,7 @@ def analyze_video(
 def extract_thumbnail(media_path: str, timestamp: float, out_path: str, text: str = "") -> str:
     """Extract a high-quality JPG frame for a short's thumbnail."""
     try:
-        import cv2  # type: ignore
+        cv2 = import_module("cv2")
     except ImportError as exc:
         raise RuntimeError("opencv-python is required for thumbnail extraction") from exc
     if not media_path or not os.path.isfile(media_path):

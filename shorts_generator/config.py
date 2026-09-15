@@ -5,6 +5,7 @@ import os
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
 
@@ -73,6 +74,12 @@ LOCAL_RANGE_MERGE_TOLERANCE = _positive_float_env("LOCAL_RANGE_MERGE_TOLERANCE",
 LOCAL_FFMPEG_REMOVE_RETRY_ATTEMPTS = _positive_int_env("LOCAL_FFMPEG_REMOVE_RETRY_ATTEMPTS", 8)
 LOCAL_FFMPEG_REMOVE_RETRY_DELAY = _positive_float_env("LOCAL_FFMPEG_REMOVE_RETRY_DELAY", 0.5)
 LOCAL_CAPTION_PRESETS_FILE = os.getenv("LOCAL_CAPTION_PRESETS_FILE", "").strip()
+LOCAL_VIRALITY_PROMPT_FILE = os.getenv("LOCAL_VIRALITY_PROMPT_FILE", "").strip()
+LOCAL_VIRALITY_PROMPT = os.getenv("LOCAL_VIRALITY_PROMPT", "").strip()
+LOCAL_MUSIC_DUCKING = os.getenv("LOCAL_MUSIC_DUCKING", "false").strip().lower() in {"1", "true", "yes", "on"}
+LOCAL_DUCKING_STRENGTH = min(1.0, max(0.0, _nonnegative_float_env("LOCAL_DUCKING_STRENGTH", 0.65)))
+LOCAL_TRANSITION = os.getenv("LOCAL_TRANSITION", "none").strip().lower() or "none"
+LOCAL_TRANSITION_DURATION = min(2.0, max(0.0, _nonnegative_float_env("LOCAL_TRANSITION_DURATION", 0.25)))
 LOCAL_AUDIO_SILENCE_FILTER = os.getenv(
     "LOCAL_AUDIO_SILENCE_FILTER",
     "silenceremove=stop_periods=1:stop_duration=0.35:stop_threshold=-40dB",
@@ -308,7 +315,7 @@ def gpu_status() -> dict:
     """Return safe CUDA availability details for the UI."""
     status = {"cuda_available": False, "device_name": None, "reason": "CUDA runtime unavailable"}
     try:
-        import torch  # type: ignore
+        torch = import_module("torch")
 
         if torch.cuda.is_available():
             status.update(cuda_available=True, device_name=torch.cuda.get_device_name(0), reason="ready")
@@ -318,7 +325,7 @@ def gpu_status() -> dict:
         status["reason"] = "PyTorch not installed"
     if not status["cuda_available"]:
         try:
-            import ctranslate2  # type: ignore
+            ctranslate2 = import_module("ctranslate2")
 
             count = int(ctranslate2.get_cuda_device_count())
             if count > 0:

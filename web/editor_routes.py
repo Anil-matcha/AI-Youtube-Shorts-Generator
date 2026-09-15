@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 
-from web.models import ClipUpdate
+from web.models import ClipUpdate, MergeRequest
 from web.security import redact_structure
 from shorts_generator.config import LOCAL_THUMBNAIL_POSITION, runtime_job_control
 from web.feature_routes import _safe_backup_value, _strip_backup_media_fields
@@ -336,6 +336,10 @@ def update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
                     music_volume=update.music_volume if update.music_volume is not None else float(request.get("music_volume", 0.18)),
                     music_fade_in=update.music_fade_in if update.music_fade_in is not None else float(request.get("music_fade_in", 0.0)),
                     music_fade_out=update.music_fade_out if update.music_fade_out is not None else float(request.get("music_fade_out", 0.0)),
+                    music_ducking=update.music_ducking,
+                    ducking_strength=update.ducking_strength,
+                    transition=update.transition,
+                    transition_duration=update.transition_duration,
                     timeline_map=timeline_map,
                 )
             if not os.path.isfile(render_path):
@@ -366,6 +370,10 @@ def update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
                 "music_volume": update.music_volume,
                 "music_fade_in": update.music_fade_in,
                 "music_fade_out": update.music_fade_out,
+                "music_ducking": update.music_ducking,
+                "ducking_strength": update.ducking_strength,
+                "transition": update.transition,
+                "transition_duration": update.transition_duration,
                 "caption_offset": round(_media_duration(intro), 6) if intro else 0.0,
                 "timeline_ranges": [
                     {"start_time": round(left, 6), "end_time": round(right, 6)}
@@ -400,6 +408,10 @@ def update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
                 or update.music_volume != 0.18
                 or update.music_fade_in
                 or update.music_fade_out
+                or update.music_ducking
+                or update.ducking_strength != 0.65
+                or update.transition != "none"
+                or update.transition_duration != 0.25
             )
             if unsupported_api_edit:
                 raise HTTPException(400, "API clips support only start/end timestamps; use Local mode for editor controls")
@@ -460,6 +472,129 @@ def update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
         result["shorts"] = studio._public_shorts(current, job_id)
         job["result"] = result
         job["message"] = f"Regenerated clip {index + 1}"
+        studio._append_job_log(job, "edit", job["message"])
+        studio._persist_job_locked(job)
+        return studio._job_snapshot(job)
+
+
+@router.post("/api/jobs/{job_id}/merge")
+def merge_clips(job_id: str, request: MergeRequest) -> Dict[str, Any]:
+    """Render an explicit multi-highlight merge with optional transitions."""
+    studio = _studio()
+    with studio._lock:
+        job = studio._jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "job not found")
+        result = studio._dict_value(job.get("result"))
+        settings = studio._dict_value(job.get("request"))
+        if str(result.get("mode") or settings.get("mode") or "local") != "local":
+            raise HTTPException(400, "merge workflow requires Local mode media")
+        shorts = studio._dict_items(job.get("raw_shorts"))
+        transcript = studio._dict_value(job.get("raw_transcript"))
+        source = job.get("raw_source_video_url")
+    if any(index < 0 or index >= len(shorts) for index in request.clip_indices):
+        raise HTTPException(404, "one or more clips were not found")
+    source_path = studio._job_source_path(job, source)
+    if not source_path:
+        raise HTTPException(400, "source video is unavailable for this job")
+    ranges: List[Dict[str, float]] = []
+    titles: List[str] = []
+    for index in request.clip_indices:
+        short = shorts[index]
+        cuts = short.get("cuts") if isinstance(short.get("cuts"), list) else []
+        if cuts:
+            ranges.extend(cut for cut in cuts if isinstance(cut, dict))
+        else:
+            try:
+                ranges.append({"start_time": float(short["start_time"]), "end_time": float(short["end_time"])})
+            except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                raise HTTPException(400, f"clip {index + 1} has invalid timestamps") from exc
+        titles.append(str(short.get("title") or f"Clip {index + 1}")[:80])
+    if len(ranges) < 2:
+        raise HTTPException(400, "select at least two separate highlight ranges")
+    start_time = min(float(item["start_time"]) for item in ranges)
+    end_time = max(float(item["end_time"]) for item in ranges)
+    output_dir = studio._job_output_dir(job)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / f"merged_{uuid.uuid4().hex[:10]}.mp4"
+    from shorts_generator.local.clipper import crop_clip_local
+
+    background_music = _local_asset(studio, job, settings.get("background_music"), "background music")
+    watermark = _local_asset(studio, job, settings.get("watermark"), "watermark")
+    intro = _local_asset(studio, job, settings.get("intro"), "intro")
+    outro = _local_asset(studio, job, settings.get("outro"), "outro")
+    with studio._media_operation(job_id), runtime_job_control(
+        cancel_check=lambda: studio._job_cancelled(job_id),
+        register_process=lambda process: studio._register_job_process(job_id, process),
+        unregister_process=lambda process: studio._unregister_job_process(job_id, process),
+    ):
+        try:
+            crop_clip_local(
+                str(source_path), start_time, end_time,
+                str(settings.get("aspect_ratio") or "9:16"), str(out_path),
+                caption_segments=studio._dict_items(transcript.get("segments")),
+                burn_captions=studio.LOCAL_BURN_CAPTIONS,
+                caption_style=str(settings.get("caption_style") or "bold"),
+                caption_position=str(settings.get("caption_position") or "bottom"),
+                caption_font=str(settings.get("caption_font") or "Arial"),
+                caption_size=int(settings.get("caption_size") or 0),
+                caption_color=settings.get("caption_color"),
+                remove_silence=bool(settings.get("remove_silence")),
+                normalize_audio=bool(settings.get("normalize_audio")),
+                denoise_audio=bool(settings.get("denoise_audio")),
+                remove_filler_words=bool(settings.get("remove_filler_words")),
+                background_music=background_music,
+                watermark=watermark,
+                auto_reframe=bool(settings.get("auto_reframe", True)),
+                crop_position=float(settings.get("crop_position") or 0.5),
+                fit_mode=str(settings.get("fit_mode") or "crop"),
+                zoom=float(settings.get("zoom") or 1.0),
+                layout=str(settings.get("layout") or "single"),
+                output_height=int(settings.get("output_height") or 1920),
+                intro=intro,
+                outro=outro,
+                cuts=ranges,
+                music_volume=float(settings.get("music_volume") or 0.18),
+                music_fade_in=float(settings.get("music_fade_in") or 0.0),
+                music_fade_out=float(settings.get("music_fade_out") or 0.0),
+                music_ducking=bool(settings.get("music_ducking")),
+                ducking_strength=float(settings.get("ducking_strength") or 0.65),
+                transition=request.transition,
+                transition_duration=request.transition_duration,
+            )
+        except Exception as exc:
+            if out_path.is_file():
+                out_path.unlink(missing_ok=True)
+            raise HTTPException(500, f"could not merge clips: {exc}") from exc
+    merged = {
+        "title": "Merged: " + " + ".join(titles[:4]),
+        "start_time": start_time,
+        "end_time": end_time,
+        "score": max((int(shorts[index].get("score") or 0) for index in request.clip_indices), default=0),
+        "hook_sentence": "Combined highlight",
+        "virality_reason": "Explicitly merged from separate highlights.",
+        "cuts": ranges,
+        "transition": request.transition,
+        "transition_duration": request.transition_duration,
+        "clip_url": str(out_path),
+    }
+    try:
+        from shorts_generator.local.visual import extract_thumbnail
+
+        thumbnail = out_path.with_suffix(".jpg")
+        extract_thumbnail(str(out_path), studio.LOCAL_THUMBNAIL_POSITION, str(thumbnail), text=merged["title"])
+        merged["thumbnail_path"] = str(thumbnail)
+    except Exception:
+        pass
+    with studio._lock:
+        job = studio._jobs[job_id]
+        current = studio._dict_items(job.get("raw_shorts"))
+        current.append(merged)
+        job["raw_shorts"] = current
+        result = studio._dict_value(job.get("result"))
+        result["shorts"] = studio._public_shorts(current, job_id)
+        job["result"] = result
+        job["message"] = f"Merged {len(request.clip_indices)} highlights"
         studio._append_job_log(job, "edit", job["message"])
         studio._persist_job_locked(job)
         return studio._job_snapshot(job)
@@ -991,6 +1126,10 @@ def preview_clip(job_id: str, update: ClipUpdate) -> Dict[str, Any]:
                 music_volume=update.music_volume,
                 music_fade_in=update.music_fade_in,
                 music_fade_out=update.music_fade_out,
+                music_ducking=update.music_ducking,
+                ducking_strength=update.ducking_strength,
+                transition=update.transition,
+                transition_duration=update.transition_duration,
             )
         if not render_path.is_file():
             raise RuntimeError("preview renderer did not produce an output file")

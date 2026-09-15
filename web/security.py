@@ -7,9 +7,11 @@ import hmac
 import ipaddress
 import os
 import re
+import sqlite3
 import threading
 import time
 from collections import defaultdict, deque
+from pathlib import Path
 from typing import Any, Deque, Dict, Optional, Tuple
 
 from fastapi import Request
@@ -125,6 +127,82 @@ class SlidingWindowLimiter:
                 for name in stale:
                     self._hits.pop(name, None)
             return True, 0
+
+
+class SQLiteRateLimiter:
+    """SQLite-backed sliding-window limiter shared by workers on one host.
+
+    SQLite gives a multi-process Uvicorn deployment one authoritative counter
+    without introducing a mandatory Redis service. The database must live on
+    a local/shared filesystem visible to every worker; deployments spanning
+    multiple hosts should use an upstream gateway limiter instead.
+    """
+
+    def __init__(self, path: str | Path, limit: int = 600, window_seconds: float = 60.0) -> None:
+        self.path = Path(path).expanduser()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.limit = max(1, int(limit))
+        self.window_seconds = max(1.0, float(window_seconds))
+        self._lock = threading.Lock()
+        self._initialize()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(str(self.path), timeout=5.0)
+        connection.execute("PRAGMA busy_timeout=5000")
+        connection.execute("PRAGMA journal_mode=WAL")
+        return connection
+
+    def _initialize(self) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS rate_limit_hits "
+                "(id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL, hit_at REAL NOT NULL)"
+            )
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_rate_limit_hits_key_time ON rate_limit_hits(key, hit_at)")
+
+    def allow(self, key: str, limit: Optional[int] = None) -> Tuple[bool, int]:
+        maximum = max(1, int(limit or self.limit))
+        now = time.time()
+        cutoff = now - self.window_seconds
+        try:
+            with self._lock:
+                with self._connect() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    connection.execute("DELETE FROM rate_limit_hits WHERE hit_at <= ?", (cutoff,))
+                    row = connection.execute(
+                        "SELECT COUNT(*), MIN(hit_at) FROM rate_limit_hits WHERE key = ?",
+                        (str(key),),
+                    ).fetchone()
+                    count = int(row[0] or 0) if row else 0
+                    oldest = float(row[1]) if row and row[1] is not None else now
+                    if count >= maximum:
+                        retry_after = max(1, int(oldest + self.window_seconds - now))
+                        connection.rollback()
+                        return False, retry_after
+                    connection.execute("INSERT INTO rate_limit_hits(key, hit_at) VALUES (?, ?)", (str(key), now))
+                    connection.commit()
+                    return True, 0
+        except (OSError, sqlite3.Error):
+            # A broken shared store must not silently disable abuse protection.
+            return False, 1
+
+
+def make_rate_limiter(limit: int, *, name: str = "general") -> SlidingWindowLimiter | SQLiteRateLimiter:
+    """Build the configured limiter backend for a route group.
+
+    ``SHORTS_RATE_LIMIT_BACKEND=sqlite`` enables a durable shared counter. The
+    optional store path is shared by all route groups and workers; route names
+    remain part of the key in the middleware.
+    """
+
+    backend = os.getenv("SHORTS_RATE_LIMIT_BACKEND", "memory").strip().lower()
+    store = os.getenv("SHORTS_RATE_LIMIT_STORE", "").strip()
+    if backend in {"sqlite", "shared", "file"} or store:
+        if not store:
+            data_root = os.getenv("SHORTS_STUDIO_DATA_DIR", "").strip() or "."
+            store = str(Path(data_root).expanduser() / "rate_limits.sqlite3")
+        return SQLiteRateLimiter(store, limit=limit)
+    return SlidingWindowLimiter(limit)
 
 
 def client_key(request: Request) -> str:

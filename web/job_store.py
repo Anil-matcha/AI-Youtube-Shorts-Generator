@@ -54,9 +54,11 @@ class JobStore:
     def _ensure_open_locked(self) -> sqlite3.Connection:
         if self._closed or self._connection is None:
             self._connect_locked()
-        # The invariant is established by _connect_locked; the cast keeps
-        # static checkers aware that all store operations have a connection.
-        return self._connection  # type: ignore[return-value]
+        # The invariant is established by _connect_locked; keep the explicit
+        # guard so static checkers and future refactors retain that contract.
+        if self._connection is None:
+            raise RuntimeError("job store connection is unavailable")
+        return self._connection
 
     def reopen(self) -> None:
         """Reopen the connection after a coordinated application shutdown."""

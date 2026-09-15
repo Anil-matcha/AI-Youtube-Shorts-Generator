@@ -472,6 +472,74 @@ def test_transcript_brand_and_publishing_endpoints(client: TestClient, monkeypat
     assert '"status": "done"' in events.text
 
 
+def test_export_presets_and_youtube_approval_plan(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(studio, "_min_free_gb", 0)
+    with studio._lock:
+        studio._jobs["youtube-plan"] = {
+            "id": "youtube-plan",
+            "name": "YouTube plan",
+            "status": "done",
+            "request": {"url": "source.mp4", "mode": "local"},
+            "result": {"mode": "local", "shorts": []},
+            "raw_shorts": [{"title": "Hook", "start_time": 0, "end_time": 8, "clip_url": "clip.mp4"}],
+            "raw_transcript": {"duration": 8, "segments": []},
+            "logs": [],
+            "created_at": time.time(),
+        }
+        studio._persist_job_locked(studio._jobs["youtube-plan"])
+
+    presets = client.get("/api/export-presets")
+    assert presets.status_code == 200
+    assert any(item["key"] == "instagram_feed" for item in presets.json()["presets"])
+    plan = client.post("/api/jobs/youtube-plan/youtube/publish", json={"platform": "youtube_shorts"})
+    assert plan.status_code == 200
+    assert plan.json()["status"] == "approval_required"
+    assert plan.json()["plan"]["privacy_status"] == "private"
+
+
+def test_explicit_merge_renders_separate_highlights(client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setattr(studio, "_output_root", tmp_path)
+    monkeypatch.setattr(studio, "_jobs_dir", tmp_path / "jobs")
+    monkeypatch.setattr(studio, "_allow_external_paths", False)
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    output_dir = tmp_path / "jobs" / "merge-job"
+    output_dir.mkdir(parents=True)
+    with studio._lock:
+        studio._jobs["merge-job"] = {
+            "id": "merge-job",
+            "name": "Merge project",
+            "status": "done",
+            "request": {"url": str(source), "mode": "local", "aspect_ratio": "9:16"},
+            "result": {"mode": "local", "shorts": []},
+            "raw_shorts": [
+                {"title": "First", "start_time": 0, "end_time": 4, "clip_url": str(output_dir / "one.mp4")},
+                {"title": "Second", "start_time": 6, "end_time": 10, "clip_url": str(output_dir / "two.mp4")},
+            ],
+            "raw_transcript": {"duration": 10, "segments": []},
+            "raw_source_video_url": str(source),
+            "output_dir": str(output_dir),
+            "logs": [],
+            "created_at": time.time(),
+        }
+        studio._persist_job_locked(studio._jobs["merge-job"])
+
+    def fake_render(*args, **kwargs):
+        output = args[4]
+        with open(output, "wb") as stream:
+            stream.write(b"merged")
+        return output
+
+    monkeypatch.setattr("shorts_generator.local.clipper.crop_clip_local", fake_render)
+    response = client.post(
+        "/api/jobs/merge-job/merge",
+        json={"clip_indices": [0, 1], "transition": "fade", "transition_duration": 0.2},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"]["shorts"][-1]["title"].startswith("Merged:")
+
+
 def test_provider_costs_and_publishing_catalog(client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     monkeypatch.setattr(studio, "_cost_rates_path", tmp_path / "provider_costs.json")
     initial = client.get("/api/provider-costs")

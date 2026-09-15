@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 from shorts_generator.local import transcriber
+from shorts_generator import transcriber as api_transcriber
 
 
 def test_srt_timestamp_round_trip_and_parser(tmp_path: Path) -> None:
@@ -53,3 +54,18 @@ def test_cache_paths_use_content_signature_for_same_named_sources(tmp_path: Path
     assert transcriber._transcript_cache_path(str(first), str(tmp_path), cache_key=first_key) != transcriber._transcript_cache_path(
         str(second), str(tmp_path), cache_key=second_key
     )
+
+
+def test_api_transcriber_uses_provider_auto_detection(monkeypatch) -> None:
+    calls = []
+
+    def fake_run(_task, payload, **kwargs):
+        calls.append(payload)
+        return {"segments": [{"start": 0, "end": 2, "text": "Bonjour"}], "duration": 2, "language": "fr"}
+
+    monkeypatch.setattr(api_transcriber.muapi, "run", fake_run)
+    result = api_transcriber.transcribe("https://cdn.example/source.mp4", language="auto")
+
+    assert "language" not in calls[0]
+    assert result["language"] == "fr"
+    assert result["language_requested"] == "auto"

@@ -4,6 +4,23 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-09-15
+
+### Fixed
+
+- Windows portable builds now select the project virtual environment instead
+  of accidentally packaging with a dependency-free global Python.
+- Portable builds fail before packaging when runtime imports such as Uvicorn,
+  FastAPI, WebView, or PyInstaller are unavailable.
+- Restored bundling of FFmpeg/FFprobe and detected CUDA 12 runtime files for
+  self-contained Windows local rendering.
+
+### Verification
+
+- Rebuilt the portable EXE and installer from the corrected build path.
+- Packaged API health, authentication, authenticated shutdown, and clean
+  process exit all pass.
+
 ## [0.11.1] - 2026-09-15
 
 ### Added
@@ -124,7 +141,8 @@ kept as the stable baseline for v0.10.2 work.
 - Added persistent project library, logs, previews, exports, and in-app
   update checks.
 
-[Unreleased]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v0.11.2...HEAD
+[0.11.2]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v0.10.2...v0.11.1
 [0.10.0]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v0.9.5...v0.10.0
 [0.9.5]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.9.5
@@ -210,7 +228,8 @@ kept as the stable baseline for v0.10.2 work.
 - Added persistent project library, logs, previews, exports, and in-app
   update checks.
 
-[Unreleased]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v0.11.2...HEAD
+[0.11.2]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v0.10.2...v0.11.1
 [0.10.0]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v0.9.5...v0.10.0
 [0.9.5]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.9.5

@@ -61,6 +61,7 @@ from shorts_generator.config import (  # noqa: E402
 )
 from shorts_generator.local.downloader import validate_remote_source  # noqa: E402
 from shorts_generator.costs import rates_from_environment  # noqa: E402
+from shorts_generator.export_profiles import validate_export_settings  # noqa: E402
 from web.models import JobRequest, ProviderCostRates  # noqa: E402
 from web.security import (  # noqa: E402
     SlidingWindowLimiter,
@@ -68,6 +69,7 @@ from web.security import (  # noqa: E402
     authorized,
     client_key,
     error_response,
+    make_rate_limiter,
     rate_limit_response,
     redact_structure,
     redact_text,
@@ -216,9 +218,9 @@ _allow_external_paths = os.getenv("SHORTS_ALLOW_EXTERNAL_PATHS", "false").strip(
 _rate_limit_per_minute = _positive_int_env("SHORTS_RATE_LIMIT_PER_MINUTE", 600)
 _upload_rate_limit_per_minute = _positive_int_env("SHORTS_UPLOAD_RATE_LIMIT_PER_MINUTE", 10)
 _job_rate_limit_per_minute = _positive_int_env("SHORTS_JOB_RATE_LIMIT_PER_MINUTE", 30)
-_rate_limiter = SlidingWindowLimiter(_rate_limit_per_minute)
-_upload_rate_limiter = SlidingWindowLimiter(_upload_rate_limit_per_minute)
-_job_rate_limiter = SlidingWindowLimiter(_job_rate_limit_per_minute)
+_rate_limiter = make_rate_limiter(_rate_limit_per_minute, name="general")
+_upload_rate_limiter = make_rate_limiter(_upload_rate_limit_per_minute, name="upload")
+_job_rate_limiter = make_rate_limiter(_job_rate_limit_per_minute, name="job")
 _job_executor: Optional[ThreadPoolExecutor] = None
 _job_futures: Dict[str, Future[Any]] = {}
 _process_lock = threading.RLock()
@@ -934,6 +936,10 @@ def _runtime_credentials_from_headers(
 
 def _validate_mode_capabilities(req: JobRequest) -> None:
     """Reject settings that a hosted MuAPI render cannot honor silently."""
+    try:
+        validate_export_settings(req.aspect_ratio, req.output_height, preset=req.export_preset)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     if req.mode != "api":
         return
     parsed = urlparse(req.url.strip())
@@ -966,6 +972,10 @@ def _validate_mode_capabilities(req: JobRequest) -> None:
         unsupported.append("music_fade_in")
     if req.music_fade_out:
         unsupported.append("music_fade_out")
+    if req.music_ducking:
+        unsupported.append("music_ducking")
+    if req.ducking_strength != 0.65:
+        unsupported.append("ducking_strength")
     if req.watermark:
         unsupported.append("watermark")
     if req.intro:
@@ -984,7 +994,9 @@ def _validate_mode_capabilities(req: JobRequest) -> None:
         unsupported.append("auto_reframe")
     if req.crop_position != 0.5:
         unsupported.append("crop_position")
-    if req.output_height not in {0, 1920}:
+    # Hosted MuAPI rendering uses the requested aspect ratio and can honor a
+    # named platform preset; arbitrary local canvas heights remain local-only.
+    if req.output_height not in {0, 1920} and not req.export_preset:
         unsupported.append("output_height")
     if req.save_folder:
         unsupported.append("save_folder")
@@ -994,6 +1006,10 @@ def _validate_mode_capabilities(req: JobRequest) -> None:
         unsupported.append("whisper_device")
     if req.cuts:
         unsupported.append("cuts")
+    if req.transition != "none":
+        unsupported.append("transition")
+    if req.transition_duration != 0.25:
+        unsupported.append("transition_duration")
     if req.llm_provider or req.llm_model is not None or req.llm_temperature != 0.2:
         unsupported.append("local_llm_options")
     if unsupported:
@@ -1058,7 +1074,13 @@ def _shutdown_job_executor() -> None:
     executor = _job_executor
     _job_executor = None
     if executor is not None:
-        executor.shutdown(wait=False, cancel_futures=True)
+        # Uvicorn must not return from lifespan shutdown while a pool worker is
+        # still parked on its queue.  A non-waiting shutdown leaves that
+        # non-daemon thread alive in packaged smoke tests, so the executable
+        # remains resident after /api/shutdown even though the server socket is
+        # closed. Jobs have already been marked interrupted above; waiting here
+        # is bounded and gives the process a deterministic exit.
+        executor.shutdown(wait=True, cancel_futures=True)
 
 
 def _register_job_process(job_id: str, process: Any) -> None:
@@ -1247,6 +1269,13 @@ def _run_job(
                     music_fade_in=req.music_fade_in,
                     music_fade_out=req.music_fade_out,
                     cuts=[cut.model_dump() for cut in req.cuts],
+                    virality_prompt=req.virality_prompt,
+                    chapters=[chapter.model_dump() for chapter in req.chapters],
+                    music_ducking=req.music_ducking,
+                    ducking_strength=req.ducking_strength,
+                    transition=req.transition,
+                    transition_duration=req.transition_duration,
+                    export_preset=req.export_preset,
                     cancel_check=lambda: _job_cancelled(job_id),
                     cost_rates=_load_cost_rates(),
                 )
@@ -1400,6 +1429,8 @@ def _enqueue_job(
                 "aspect_ratio": req.aspect_ratio,
                 "download_format": req.download_format,
                 "language": req.language,
+                "virality_prompt": req.virality_prompt,
+                "chapters": [chapter.model_dump() for chapter in req.chapters],
                 "caption_style": req.caption_style,
                 "remove_silence": req.remove_silence,
                 "normalize_audio": req.normalize_audio,
@@ -1430,6 +1461,11 @@ def _enqueue_job(
                 "music_volume": req.music_volume,
                 "music_fade_in": req.music_fade_in,
                 "music_fade_out": req.music_fade_out,
+                "music_ducking": req.music_ducking,
+                "ducking_strength": req.ducking_strength,
+                "transition": req.transition,
+                "transition_duration": req.transition_duration,
+                "export_preset": req.export_preset,
                 "cuts": [cut.model_dump() for cut in req.cuts],
             },
         }

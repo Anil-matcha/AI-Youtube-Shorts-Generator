@@ -1,0 +1,11 @@
+-r requirements.txt
+
+# The CPU arm64 image supports API mode and all web/export features. The
+# faster-whisper wheel currently pulls onnxruntime, which has no supported
+# manylinux arm64 wheel on PyPI; keep that optional local dependency out of
+# the arm64 container until the upstream wheel exists.
+yt-dlp==2026.7.4
+openai==2.49.0
+google-genai==2.14.0
+opencv-python-headless==4.13.0.92
+Pillow==12.2.0

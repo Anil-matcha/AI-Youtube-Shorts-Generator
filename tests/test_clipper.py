@@ -8,6 +8,8 @@ import subprocess
 
 import pytest
 
+import shorts_generator.local.clipper as clipper
+
 from shorts_generator.local.clipper import (
     _normalise_cut_ranges,
     _remap_caption_segments,
@@ -79,6 +81,35 @@ def test_split_canvas_keeps_even_yuv420_dimensions() -> None:
 
     assert (height, width, panel) == (240, 136, 68)
     assert width % 2 == 0 and panel % 2 == 0
+
+
+def test_transition_and_ducking_filters_are_wired(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    output = tmp_path / "cut.mp4"
+    commands = []
+
+    monkeypatch.setattr(clipper, "_find_ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr(clipper, "_has_audio_stream", lambda _path: True)
+
+    def fake_run(args, **kwargs):
+        commands.append(args)
+        Path(args[-1]).write_bytes(b"rendered")
+
+    monkeypatch.setattr(clipper, "_run_command", fake_run)
+    clipper._cut_ranges(str(source), [(0, 3), (4, 7)], str(output), transition="fade", transition_duration=0.5)
+    assert any("xfade=transition=fade" in str(item) for item in commands[0])
+
+    rendered = tmp_path / "rendered.mp4"
+    rendered.write_bytes(b"video")
+    music = tmp_path / "music.mp3"
+    music.write_bytes(b"music")
+    monkeypatch.setattr(clipper, "_media_duration", lambda _path: 8.0)
+    clipper._apply_media_extras(
+        str(rendered), str(music), None, music_volume=0.2, music_ducking=True, ducking_strength=0.8
+    )
+    assert rendered.read_bytes() == b"rendered"
+    assert any("sidechaincompress" in str(item) for item in commands[-1])
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="FFmpeg is required for media regression")

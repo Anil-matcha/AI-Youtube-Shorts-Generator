@@ -48,7 +48,7 @@
             <div class="field"><label for="preset">Project preset</label><select class="select" id="preset"><option value="custom">Custom</option><option value="podcast">Podcast / interview</option><option value="educational">Educational</option><option value="reaction">Reaction / gaming</option><option value="story">Story / emotional</option><option value="kids">Kids / family</option></select></div>
             <div class="field"><label for="batchUrls">Batch sources <span>one per line</span></label><textarea class="textarea" id="batchUrls" rows="3" placeholder="Paste multiple URLs or local paths"></textarea></div>
             <div class="two"><div class="field"><label for="mode">Mode</label><select class="select" id="mode"><option value="local" selected>Local</option><option value="api">API</option></select></div><div class="field"><label for="numClips">Clips</label><input class="input" id="numClips" type="number" min="1" max="12" value="3"></div></div>
-            <div class="two"><div class="field"><label for="aspect">Aspect</label><select class="select" id="aspect"><option value="9:16">9:16 vertical</option><option value="1:1">1:1 square</option><option value="4:5">4:5</option></select></div><div class="field"><label for="format">Source res</label><select class="select" id="format"><option>360</option><option selected>720</option><option>1080</option></select></div></div>
+            <div class="two"><div class="field"><label for="aspect">Aspect</label><select class="select" id="aspect"><option value="9:16">9:16 vertical</option><option value="1:1">1:1 square</option><option value="4:5">4:5</option><option value="16:9">16:9</option></select></div><div class="field"><label for="format">Source res</label><select class="select" id="format"><option>360</option><option selected>720</option><option>1080</option></select></div></div>
             <div class="field"><label for="saveFolder">Save folder <span>optional</span></label><input class="input" id="saveFolder" placeholder="C:\\Users\\You\\Videos\\Shorts"></div>
              <div class="two" style="margin-top:14px"><button class="primary" id="generateButton" type="button">Generate shorts</button><button class="danger" id="cancelButton" type="button" hidden>Cancel job</button></div><div id="jobProgress" class="job-progress" role="status" aria-live="polite" hidden></div>
           </div></section>
@@ -99,6 +99,7 @@
   <script src="/static/modules/api.js" defer></script>
   <script src="/static/modules/editor.js" defer></script>
   <script src="/static/modules/timeline.js" defer></script>
+  <script src="/static/modules/features.js" defer></script>
   <script src="/static/app.js" defer></script>
 </body>
 </html>

@@ -45,7 +45,11 @@ class UpdateService:
         match = re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", str(value or ""))
         if not match:
             return (0, 0, 0)
-        return tuple(int(part or 0) for part in match.groups())  # type: ignore[return-value]
+        return (
+            int(match.group(1) or 0),
+            int(match.group(2) or 0),
+            int(match.group(3) or 0),
+        )
 
     def github_release(self) -> Dict[str, Any]:
         import requests

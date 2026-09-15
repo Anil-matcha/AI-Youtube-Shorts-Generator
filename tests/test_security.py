@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from web.security import SlidingWindowLimiter, redact_structure, redact_text
+from pathlib import Path
+
+from web.security import SQLiteRateLimiter, SlidingWindowLimiter, redact_structure, redact_text
 
 
 def test_redact_text_removes_provider_and_session_secrets(monkeypatch) -> None:
@@ -34,3 +36,17 @@ def test_sliding_window_limiter_returns_retry_hint() -> None:
     assert allowed is False
     assert retry_after >= 1
     assert limiter.allow("other-client")[0] is True
+
+
+def test_sqlite_rate_limiter_shares_counters_between_instances(tmp_path: Path) -> None:
+    store = tmp_path / "shared" / "rate-limits.sqlite3"
+    first = SQLiteRateLimiter(store, limit=2, window_seconds=60)
+    second = SQLiteRateLimiter(store, limit=2, window_seconds=60)
+
+    assert first.allow("client") == (True, 0)
+    assert second.allow("client") == (True, 0)
+    allowed, retry_after = first.allow("client")
+
+    assert allowed is False
+    assert retry_after >= 1
+    assert second.allow("other-client") == (True, 0)

@@ -1,0 +1,10 @@
+{{- if .Values.env }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "shorts-studio.fullname" . }}
+  labels:
+    {{- include "shorts-studio.labels" . | nindent 4 }}
+data:
+  {{- toYaml .Values.env | nindent 2 }}
+{{- end }}

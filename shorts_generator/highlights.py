@@ -14,6 +14,7 @@ drive either MuAPI (default, --mode api) or a direct local LLM client
 import json
 import math
 import re
+from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from . import muapi
@@ -26,6 +27,8 @@ from .config import (
     HIGHLIGHT_MAX_DURATION_SECONDS,
     HIGHLIGHT_MIN_DURATION_SECONDS,
     LOCAL_LLM_TIMEOUT_SECONDS,
+    LOCAL_VIRALITY_PROMPT,
+    LOCAL_VIRALITY_PROMPT_FILE,
     record_llm_usage,
 )
 
@@ -223,6 +226,19 @@ def detect_content_type(transcript: Dict, llm_fn: LLMFn = call_muapi_llm) -> Dic
         return {"content_type": "other", "density": "medium"}
 
 
+def load_virality_prompt(custom_prompt: Optional[str] = None) -> str:
+    """Load a bounded creator scoring template without allowing prompt bloat."""
+    candidate = str(custom_prompt or "").strip()
+    if not candidate and LOCAL_VIRALITY_PROMPT_FILE:
+        try:
+            candidate = Path(LOCAL_VIRALITY_PROMPT_FILE).expanduser().read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError):
+            candidate = ""
+    if not candidate:
+        candidate = LOCAL_VIRALITY_PROMPT
+    return candidate[:12000].strip()
+
+
 def build_transcript_text(transcript: Dict) -> str:
     segments = _items(transcript.get("segments", []) if isinstance(transcript, dict) else [])
     lines = []
@@ -247,6 +263,19 @@ def build_transcript_text(transcript: Dict) -> str:
             event_type = str(event.get("type") or "visual_event").strip() or "visual_event"
             visual_lines.append(f"[{timestamp:.1f}s] {event_type}")
         text += "\n".join(visual_lines)
+    chapters = _items(transcript.get("chapters") if isinstance(transcript, dict) else [])
+    if chapters:
+        text += "\n\nYouTube chapters (soft boundary hints; do not invent timestamps):\n"
+        chapter_lines = []
+        for chapter in chapters[:200]:
+            if not isinstance(chapter, dict):
+                continue
+            start = _coerce_float(chapter.get("start_time", chapter.get("start")), 0.0)
+            end = chapter.get("end_time", chapter.get("end"))
+            end_text = f"-{_coerce_float(end, 0.0):.1f}s" if end is not None else ""
+            title = str(chapter.get("title") or "Chapter").strip()[:200]
+            chapter_lines.append(f"[{start:.1f}s{end_text}] {title}")
+        text += "\n".join(chapter_lines)
     return text
 
 
@@ -295,6 +324,7 @@ def call_highlight_api(
     is_chunk: bool = False,
     llm_fn: LLMFn = call_muapi_llm,
     focus: str = "balanced",
+    virality_prompt: Optional[str] = None,
 ) -> Dict:
     duration = max(0.0, _coerce_float(duration, default=0.0))
     num_clips = max(1, min(HIGHLIGHT_MAX_CLIPS, _coerce_int(num_clips, default=3)))
@@ -313,8 +343,12 @@ def call_highlight_api(
         "visual": "favor energetic moments, expressive reactions, reveals, and visually motivated beats",
     }
     normalized_focus = str(focus or "balanced").strip().lower()
+    creator_prompt = load_virality_prompt(virality_prompt)
+    criteria = VIRALITY_CRITERIA
+    if creator_prompt:
+        criteria += "\n\nCreator scoring guidance (follow this in addition to the safety and JSON rules):\n" + creator_prompt
     system = HIGHLIGHT_SYSTEM_PROMPT.format(
-        virality_criteria=VIRALITY_CRITERIA,
+        virality_criteria=criteria,
         content_type=content_info.get("content_type", "other"),
         density=content_info.get("density", "medium"),
         num_clips_instruction=f"Generate at least {min_clips} highlights",
@@ -447,6 +481,7 @@ def get_highlights(
     num_clips: int = 3,
     llm_fn: Optional[LLMFn] = None,
     focus: str = "balanced",
+    virality_prompt: Optional[str] = None,
 ) -> Dict:
     """Main entry point — returns {highlights: [...]} sorted by score.
 
@@ -494,6 +529,7 @@ def get_highlights(
                     is_chunk=True,
                     llm_fn=llm_fn,
                     focus=focus,
+                    virality_prompt=virality_prompt,
                 )
             except RuntimeError as e:
                 # One bad chunk shouldn't kill the whole run if others worked.
@@ -526,6 +562,7 @@ def get_highlights(
             num_clips=num_clips,
             llm_fn=llm_fn,
             focus=focus,
+            virality_prompt=virality_prompt,
         )
         highlights = dedupe_highlights(result.get("highlights", []))
 
