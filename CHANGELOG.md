@@ -18,6 +18,8 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
   the Windows CI shutdown smoke request to include API authentication.
 - Kept the CI coverage gate at the currently measured 53.25% while the
   dynamic provider/media adapters gain direct integration coverage.
+- Updated the amd64 Docker image to security-fixed Pillow 12.3.0; the arm64
+  image remains pinned to 12.2.0 until an aarch64 wheel is published.
 
 ### Verification
 
