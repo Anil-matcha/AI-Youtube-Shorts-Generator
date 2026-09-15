@@ -1,7 +1,7 @@
 # Shorts Studio Upgrade Roadmap
 
-**Current local tag:** v0.10.1 (not pushed or publicly released)
-**Next implementation target:** v0.10.2 (frontend refresh and maintainability)
+**Current local tag:** v0.10.2 (not pushed or publicly released)
+**Next implementation target:** v0.10.3 (security and production hardening)
 **Last updated:** 2026-09-15
 
 The actionable implementation list now lives in [TODO.md](TODO.md). This
@@ -59,11 +59,10 @@ has been performed.
 
 ---
 
-## v0.10.2 — Frontend Refresh & Maintainability (next target)
+## v0.10.2 — Frontend Refresh & Maintainability (tagged locally)
 
-This is the active implementation target after the local v0.10.1 tag. Keep the
-work scoped to the remaining UX and maintainability items below; do not treat
-this planning milestone as released.
+The v0.10.2 implementation is complete in this checkout and is tagged locally.
+No push, GitHub release, or asset upload has been performed.
 
 ### Verified in v0.10.0
 - [x] Persist dark/light/system theme and accent choices in the browser
@@ -73,17 +72,24 @@ this planning milestone as released.
 
 ### Remaining UX work
 - [x] Add the Cancel action and cancelled-state rendering (TODO T-001)
-- [ ] Add real progress bars and skeleton states for long operations
-- [ ] Monitor every job in a batch instead of only the first job
-- [ ] Add keyboard shortcuts and persistent error notifications
-- [ ] Improve mobile layout and accessibility with automated checks
+- [x] Add real progress bars and skeleton states for long operations
+- [x] Monitor every job in a batch instead of only the first job
+- [x] Add keyboard shortcuts and persistent error notifications
+- [x] Improve mobile layout and accessibility with automated checks
 - [ ] Evaluate WebSocket/pub-sub only if SSE scaling measurements justify it
 
 ### Maintainability
-- [ ] Fix UTF-8 response handling at the server level (remove DOM workaround)
-- [ ] Split `app.js` into state, API, UI, editor, and timeline modules
-- [ ] Centralize the UI version and form/capability schema
-- [ ] Unify the SSE and polling connection manager
+- [x] Fix UTF-8 response handling at the server level (remove DOM workaround)
+- [x] Split `app.js` into state, API, UI, editor, and timeline modules
+- [x] Centralize the UI version and form/capability schema
+- [x] Unify the SSE and polling connection manager
+
+### v0.10.2 workflow additions
+
+- [x] Optional generated-media backup with safe restore/relinking
+- [x] Browser-local export presets
+- [x] Bounded multi-level clip undo/redo with legacy one-level migration
+- [x] Clear multi-cut ranges with adjacent/overlap merge guidance
 
 ---
 
@@ -132,13 +138,14 @@ this planning milestone as released.
 
 ### Workflow
 - [x] Persist jobs/checkpoints and restore project metadata
-- [ ] Add a user-facing project bundle with optional media and portable load
+- [x] Add a user-facing project bundle with optional generated media and safe
+      portable restore/relinking (base workflow delivered in v0.10.2)
 - [ ] Add export presets (TikTok, Instagram Reels, YouTube Shorts quality settings)
 - [ ] Add YouTube OAuth publishing foundation with approval-first, private-by-
       default, resumable, and scheduled uploads (TODO T-033; future G-010)
 - [ ] Add explicit merge workflow for separate highlights (multi-cut ranges
       already cover several ranges within one clip)
-- [ ] Expand the current one-level undo to a full undo/redo history
+- [x] Expand the current one-level undo to a bounded full undo/redo history
 
 ---
 

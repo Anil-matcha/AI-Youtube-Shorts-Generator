@@ -49,6 +49,9 @@ version = { attr = "shorts_generator.__version__" }
 include = ["shorts_generator*", "web*"]
 exclude = ["output*", "release*", "build*", "installer*", "assets*"]
 
+[tool.setuptools.package-data]
+web = ["static/*.html", "static/*.js", "static/*.css", "static/*.svg", "static/modules/*.js"]
+
 [tool.ruff]
 target-version = "py310"
 line-length = 120

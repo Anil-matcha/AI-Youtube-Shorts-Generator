@@ -204,6 +204,22 @@ def test_workspace_has_basic_accessibility_names(browser_page: Page) -> None:
     assert violations == []
 
 
+def test_v0102_frontend_modules_progress_and_keyboard_tabs(browser_page: Page) -> None:
+    page = browser_page
+    page.locator("#newProjectButton").click()
+    page.locator("#workspaceView").wait_for(state="visible")
+    assert page.locator('meta[name="shorts-studio-version"]').get_attribute("content") == "0.10.2"
+    resources = page.evaluate("""() => performance.getEntriesByType('resource').map(entry => entry.name)""")
+    for module in ("state.js", "ui.js", "api.js", "editor.js", "timeline.js"):
+        assert any(f"/static/modules/{module}" in resource for resource in resources)
+    assert page.locator("#jobProgress").count() == 1
+    page.locator('[data-tab="clipTab"]').focus()
+    page.keyboard.press("ArrowRight")
+    assert page.locator('[data-tab="captionTab"]').get_attribute("aria-selected") == "true"
+    page.locator('[data-tab="captionTab"]').press("End")
+    assert page.locator('[data-tab="exportTab"]').get_attribute("aria-selected") == "true"
+
+
 def test_browser_can_reach_real_health_endpoint(browser_page: Page) -> None:
     """Keep one browser check on the actual server instead of mocked API routes."""
     response = browser_page.request.get("http://127.0.0.1:18760/api/health")

@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
+import uuid
 from array import array
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -24,12 +25,12 @@ from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from web.models import ClipUpdate
 from web.security import redact_structure
 from shorts_generator.config import LOCAL_THUMBNAIL_POSITION, runtime_job_control
-from web.feature_routes import _safe_backup_value
+from web.feature_routes import _safe_backup_value, _strip_backup_media_fields
 
 
 def _safe_export_short(studio: Any, value: Dict[str, Any]) -> Dict[str, Any]:
     """Keep export manifests portable without shipping signed media URLs."""
-    return _safe_backup_value(redact_structure(value))
+    return _strip_backup_media_fields(_safe_backup_value(redact_structure(value)))
 
 
 router = APIRouter()
@@ -50,6 +51,189 @@ def _local_asset(studio: Any, job: Dict[str, Any], value: Any, label: str) -> Op
     if not path:
         raise HTTPException(400, f"{label} is unavailable for this job")
     return str(path)
+
+
+_CLIP_HISTORY_INTERNAL_KEYS = {
+    "undo_path",
+    "undo_metadata",
+    "redo_path",
+    "redo_metadata",
+    "history_depth",
+    "redo_depth",
+    "can_undo",
+    "can_redo",
+}
+_MAX_CLIP_HISTORY = 20
+
+
+def _clip_metadata(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a serialisable clip version without history implementation fields."""
+    return {key: value for key, value in item.items() if key not in _CLIP_HISTORY_INTERNAL_KEYS}
+
+
+def _history_dir(studio: Any, job: Dict[str, Any], index: int) -> Path:
+    """Return the private, job-scoped media history directory for one clip."""
+    output_dir = studio._job_output_dir(job).resolve()
+    history_dir = (output_dir / ".history" / str(index)).resolve()
+    history_dir.relative_to(output_dir)
+    history_dir.mkdir(parents=True, exist_ok=True)
+    return history_dir
+
+
+def _copy_history_media(
+    studio: Any,
+    job: Dict[str, Any],
+    index: int,
+    source: Optional[Path],
+    prefix: str,
+) -> Optional[str]:
+    """Copy a local clip version into durable, bounded history storage."""
+    if not source or not source.is_file():
+        return None
+    suffix = source.suffix.lower() if source.suffix.lower() in {".mp4", ".webm", ".mov", ".mkv"} else ".mp4"
+    destination = _history_dir(studio, job, index) / f"{prefix}-{uuid.uuid4().hex[:12]}{suffix}"
+    shutil.copyfile(source, destination)
+    return str(destination)
+
+
+def _discard_history_entry(entry: Any, studio: Any = None, job: Optional[Dict[str, Any]] = None) -> None:
+    """Remove one private history media file when it leaves the bounded stack."""
+    if not isinstance(entry, dict):
+        return
+    value = entry.get("media_path")
+    if not value:
+        return
+    try:
+        path = studio._job_media_path(job, value) if studio is not None and job is not None else Path(str(value))
+        if not path:
+            return
+        if path.is_file():
+            path.unlink()
+    except (OSError, TypeError, ValueError):
+        return
+
+
+def _history_stacks(job: Dict[str, Any], index: int) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Read validated per-clip undo/redo stacks from a persisted job."""
+    key = str(index)
+    history_map = job.get("clip_history")
+    redo_map = job.get("clip_redo")
+    history = history_map.get(key) if isinstance(history_map, dict) else []
+    redo = redo_map.get(key) if isinstance(redo_map, dict) else []
+    safe_history = [entry for entry in history if isinstance(entry, dict)] if isinstance(history, list) else []
+    safe_redo = [entry for entry in redo if isinstance(entry, dict)] if isinstance(redo, list) else []
+    return safe_history[-_MAX_CLIP_HISTORY:], safe_redo[-_MAX_CLIP_HISTORY:]
+
+
+def _set_history_state(
+    job: Dict[str, Any],
+    index: int,
+    item: Dict[str, Any],
+    history: List[Dict[str, Any]],
+    redo: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Persist stack metadata on the public clip while keeping stacks private."""
+    key = str(index)
+    job.setdefault("clip_history", {})[key] = history[-_MAX_CLIP_HISTORY:]
+    job.setdefault("clip_redo", {})[key] = redo[-_MAX_CLIP_HISTORY:]
+    item = dict(item)
+    item["history_depth"] = len(history)
+    item["redo_depth"] = len(redo)
+    item["can_undo"] = bool(history)
+    item["can_redo"] = bool(redo)
+    if history:
+        item["undo_path"] = history[-1].get("media_path")
+        item["undo_metadata"] = history[-1].get("metadata")
+    else:
+        item.pop("undo_path", None)
+        item.pop("undo_metadata", None)
+    if redo:
+        item["redo_path"] = redo[-1].get("media_path")
+        item["redo_metadata"] = redo[-1].get("metadata")
+    else:
+        item.pop("redo_path", None)
+        item.pop("redo_metadata", None)
+    return item
+
+
+def _refresh_clip_thumbnail(studio: Any, job: Dict[str, Any], clip_path: Optional[Path], item: Dict[str, Any]) -> None:
+    """Refresh a local thumbnail after restoring a clip version when possible."""
+    if not clip_path or not clip_path.is_file():
+        return
+    thumbnail = studio._job_media_path(job, item.get("thumbnail_path"))
+    if not thumbnail:
+        thumbnail = clip_path.with_suffix(".jpg")
+    try:
+        from shorts_generator.local.visual import extract_thumbnail
+
+        extract_thumbnail(
+            str(clip_path),
+            LOCAL_THUMBNAIL_POSITION,
+            str(thumbnail),
+            text=item.get("hook_sentence") or item.get("title") or "",
+        )
+        item["thumbnail_path"] = str(thumbnail)
+    except Exception:
+        # Optional OpenCV/FFmpeg thumbnail work must not make undo/redo fail.
+        return
+
+
+def _legacy_history_entry(studio: Any, job: Dict[str, Any], item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Upgrade a v0.10.1 one-level undo snapshot into the new history format."""
+    undo_path = studio._job_media_path(job, item.get("undo_path"))
+    undo_metadata = item.get("undo_metadata")
+    if not undo_path or not undo_path.is_file():
+        return None
+    metadata = dict(undo_metadata) if isinstance(undo_metadata, dict) else _clip_metadata(item)
+    return {"media_path": str(undo_path), "metadata": _clip_metadata(metadata)}
+
+
+def _restore_history_entry(
+    studio: Any,
+    job: Dict[str, Any],
+    item: Dict[str, Any],
+    entry: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Restore metadata and local media from one history entry."""
+    restored = dict(entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {})
+    entry_media = studio._job_media_path(job, entry.get("media_path"))
+    current_media = studio._job_media_path(job, item.get("clip_url"))
+    if entry_media and entry_media.is_file():
+        if not current_media:
+            raise HTTPException(400, "current local clip is unavailable")
+        shutil.copyfile(entry_media, current_media)
+        restored["clip_url"] = str(current_media)
+        _refresh_clip_thumbnail(studio, job, current_media, restored)
+    elif restored.get("clip_url") and str(restored.get("clip_url")).startswith(("http://", "https://")):
+        # API-mode edits retain their provider URL and have no local media to copy.
+        restored["clip_url"] = str(restored["clip_url"])
+    else:
+        raise HTTPException(400, "clip media for this history version is unavailable")
+    return restored
+
+
+def _commit_edit_history(
+    studio: Any,
+    job: Dict[str, Any],
+    index: int,
+    old: Dict[str, Any],
+    replacement: Dict[str, Any],
+    old_media_path: Optional[Path] = None,
+    history_media_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Push an edit onto the durable undo stack and clear redo versions."""
+    history, redo = _history_stacks(job, index)
+    for entry in redo:
+        _discard_history_entry(entry, studio, job)
+    history.append(
+        {
+            "media_path": history_media_path or _copy_history_media(studio, job, index, old_media_path, "undo"),
+            "metadata": _clip_metadata(old),
+        }
+    )
+    while len(history) > _MAX_CLIP_HISTORY:
+        _discard_history_entry(history.pop(0), studio, job)
+    return _set_history_state(job, index, replacement, history, [])
 
 
 @router.post("/api/jobs/{job_id}/clips/{index}")
@@ -93,6 +277,8 @@ def update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
         raise HTTPException(400, "source video is unavailable for this job")
 
     old = dict(raw_shorts[index])
+    history_media_path: Optional[str] = None
+    old_media_path: Optional[Path] = None
     try:
         if mode == "local":
             from shorts_generator.local.clipper import _media_duration, _output_filename, crop_clip_local
@@ -101,6 +287,7 @@ def update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
             safe_old_path = studio._job_media_path(job, old_path)
             if safe_old_path and safe_old_path.is_file():
                 out_path = str(safe_old_path)
+                old_media_path = safe_old_path
             else:
                 job_output_dir = str(studio._job_output_dir(job))
                 out_path = str(Path(job_output_dir).expanduser().resolve() / _output_filename(index + 1))
@@ -157,6 +344,7 @@ def update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
             # until the replacement render has completed successfully.
             if os.path.isfile(out_path):
                 shutil.copyfile(out_path, undo_path)
+                history_media_path = _copy_history_media(studio, job, index, Path(out_path), "undo")
             os.replace(render_path, out_path)
             replacement = {
                 **old,
@@ -257,6 +445,15 @@ def update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
         current = studio._dict_items(job.get("raw_shorts"))
         if index >= len(current):
             raise HTTPException(409, "job clips changed while regenerating")
+        replacement = _commit_edit_history(
+            studio,
+            job,
+            index,
+            old,
+            replacement,
+            old_media_path=old_media_path,
+            history_media_path=history_media_path,
+        )
         current[index] = replacement
         job["raw_shorts"] = current
         result = studio._dict_value(job.get("result"))
@@ -279,40 +476,89 @@ def undo_clip(job_id: str, index: int) -> Dict[str, Any]:
         if index < 0 or index >= len(shorts):
             raise HTTPException(404, "clip not found")
         item = dict(shorts[index])
-        undo_path = studio._job_media_path(job, item.get("undo_path"))
-        clip_path = studio._job_media_path(job, item.get("clip_url"))
-        if not undo_path or not undo_path.is_file() or not clip_path:
+        history, redo = _history_stacks(job, index)
+        if not history:
+            legacy = _legacy_history_entry(studio, job, item)
+            if legacy:
+                history = [legacy]
+        if not history:
             raise HTTPException(400, "no previous clip version is available")
-        shutil.copyfile(undo_path, clip_path)
-        restored = studio._dict_value(item.get("undo_metadata")) or dict(item)
-        restored["clip_url"] = str(clip_path)
-        restored.pop("undo_path", None)
-        restored.pop("undo_metadata", None)
-        # The thumbnail filename is intentionally stable across edits.  Undo
-        # restores the media bytes, then re-extracts that thumbnail from the
-        # restored video so the card cannot show the newer frame.
-        thumbnail = studio._job_media_path(job, restored.get("thumbnail_path"))
-        if thumbnail:
-            try:
-                from shorts_generator.local.visual import extract_thumbnail
-
-                extract_thumbnail(
-                    str(clip_path),
-                    LOCAL_THUMBNAIL_POSITION,
-                    str(thumbnail),
-                    text=restored.get("hook_sentence") or restored.get("title") or "",
-                )
-                restored["thumbnail_path"] = str(thumbnail)
-            except Exception:
-                # A missing optional OpenCV dependency must not make a valid
-                # video undo fail; the existing thumbnail path is retained.
-                pass
+        current_media = studio._job_media_path(job, item.get("clip_url"))
+        current_entry = {
+            "media_path": _copy_history_media(studio, job, index, current_media, "redo"),
+            "metadata": _clip_metadata(item),
+        }
+        entry = history[-1]
+        try:
+            restored = _restore_history_entry(studio, job, item, entry)
+        except Exception:
+            _discard_history_entry(current_entry, studio, job)
+            raise
+        history.pop()
+        redo.append(current_entry)
+        while len(redo) > _MAX_CLIP_HISTORY:
+            _discard_history_entry(redo.pop(0), studio, job)
+        _discard_history_entry(entry, studio, job)
+        restored = _set_history_state(job, index, restored, history, redo)
         shorts[index] = restored
         job["raw_shorts"] = shorts
         result = studio._dict_value(job.get("result"))
         if result:
             result["shorts"] = studio._public_shorts(shorts, job_id)
             job["result"] = result
+        job["message"] = f"Undid edit on clip {index + 1}"
+        studio._append_job_log(job, "edit", job["message"])
+        studio._persist_job_locked(job)
+        return studio._job_snapshot(job)
+
+
+@router.post("/api/jobs/{job_id}/clips/{index}/redo")
+def redo_clip(job_id: str, index: int) -> Dict[str, Any]:
+    """Restore the next clip version after an undo."""
+    studio = _studio()
+    with studio._lock:
+        job = studio._jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "job not found")
+        shorts = studio._dict_items(job.get("raw_shorts"))
+        if index < 0 or index >= len(shorts):
+            raise HTTPException(404, "clip not found")
+        item = dict(shorts[index])
+        history, redo = _history_stacks(job, index)
+        if not redo:
+            redo_path = studio._job_media_path(job, item.get("redo_path"))
+            redo_metadata = item.get("redo_metadata")
+            if redo_path and redo_path.is_file():
+                redo = [{"media_path": str(redo_path), "metadata": _clip_metadata(dict(redo_metadata or item))}]
+            elif isinstance(redo_metadata, dict) and str(redo_metadata.get("clip_url") or "").startswith(("http://", "https://")):
+                redo = [{"media_path": None, "metadata": _clip_metadata(redo_metadata)}]
+        if not redo:
+            raise HTTPException(400, "no next clip version is available")
+        current_media = studio._job_media_path(job, item.get("clip_url"))
+        current_entry = {
+            "media_path": _copy_history_media(studio, job, index, current_media, "undo"),
+            "metadata": _clip_metadata(item),
+        }
+        entry = redo[-1]
+        try:
+            restored = _restore_history_entry(studio, job, item, entry)
+        except Exception:
+            _discard_history_entry(current_entry, studio, job)
+            raise
+        redo.pop()
+        history.append(current_entry)
+        while len(history) > _MAX_CLIP_HISTORY:
+            _discard_history_entry(history.pop(0), studio, job)
+        _discard_history_entry(entry, studio, job)
+        restored = _set_history_state(job, index, restored, history, redo)
+        shorts[index] = restored
+        job["raw_shorts"] = shorts
+        result = studio._dict_value(job.get("result"))
+        if result:
+            result["shorts"] = studio._public_shorts(shorts, job_id)
+            job["result"] = result
+        job["message"] = f"Redid edit on clip {index + 1}"
+        studio._append_job_log(job, "edit", job["message"])
         studio._persist_job_locked(job)
         return studio._job_snapshot(job)
 

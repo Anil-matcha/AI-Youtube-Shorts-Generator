@@ -19,7 +19,7 @@ if not exist "dist\ShortsStudio\ShortsStudio.exe" (
 )
 if not exist "release" mkdir release
 for /f "delims=" %%V in ('venv\Scripts\python.exe -c "from shorts_generator import __version__; print(__version__)" 2^>nul') do set "SHORTS_STUDIO_VERSION=%%V"
-if not defined SHORTS_STUDIO_VERSION set "SHORTS_STUDIO_VERSION=0.10.1"
+if not defined SHORTS_STUDIO_VERSION set "SHORTS_STUDIO_VERSION=0.10.2"
 "%ISCC%" /DMyAppVersion="%SHORTS_STUDIO_VERSION%" "installer\ShortsStudio.iss"
 if errorlevel 1 goto :failed
 echo.

@@ -4,7 +4,23 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
 
 ## [Unreleased]
 
-### v0.10.1 implementation (not released)
+### v0.10.2 implementation (local, not released)
+
+- Split the browser coordinator into state, UI, API, editor, and timeline
+  modules, with a shared version/capability schema and one SSE/polling monitor.
+- Added real job progress bars, loading skeletons, batch monitoring with
+  per-source cancellation, keyboard navigation/shortcuts, live-region status,
+  and persistent error notifications.
+- Added browser-local export presets, a clear multi-cut workflow, and durable
+  per-clip undo/redo history with a bounded 20-version stack.
+- Added optional generated-media project backups and safe media relinking during
+  restore; metadata backups continue to omit local paths and provider secrets.
+- Declared UTF-8 for textual responses at the server boundary and added mobile-
+  responsive batch rows plus reduced-motion styling.
+- Validation: 62 Python tests passed, 4 Playwright browser tests passed, plus
+  compile, Ruff, mypy, JavaScript, package, pip-check, and pip-audit checks.
+
+### v0.10.1 implementation (local, not released)
 
 - Added queued/running cancellation UX, cooperative worker admission, active
   FFmpeg termination, coordinated shutdown, and durable interrupted-job recovery.
@@ -21,7 +37,8 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
 - Validation: 60 Python tests passed, 3 Playwright browser tests passed, plus
   compile, Ruff, mypy, JavaScript, package, pip-check, and pip-audit checks.
 
-The v0.10.1 release/tag/upload is intentionally pending.
+The v0.10.1 public release/upload was intentionally skipped; its local tag is
+kept as the stable baseline for v0.10.2 work.
 
 ## [0.10.0] - 2026-09-14
 

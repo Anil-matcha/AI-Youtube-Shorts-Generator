@@ -53,11 +53,13 @@ def test_health_and_static_assets(client: TestClient) -> None:
 
     page = client.get("/")
     assert page.status_code == 200
+    assert "charset=utf-8" in page.headers["content-type"].lower()
     assert 'href="/static/styles.css"' in page.text
     assert 'src="/static/app.js"' in page.text
     assert "Logs" in page.text
-    assert client.get("/static/styles.css").status_code == 200
-    assert client.get("/static/app.js").status_code == 200
+    assert "charset=utf-8" in client.get("/static/styles.css").headers["content-type"].lower()
+    assert "charset=utf-8" in client.get("/static/app.js").headers["content-type"].lower()
+    assert "charset=utf-8" in client.get("/static/modules/state.js").headers["content-type"].lower()
     assert client.get("/static/theme-init.js").status_code == 200
 
 
@@ -243,17 +245,132 @@ def test_api_clip_edit_rejects_unsupported_caption_controls(client: TestClient) 
     assert "only start/end timestamps" in response.json()["error"]
 
 
-def test_backup_restore_and_storage_cleanup_are_scoped(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_local_clip_edit_supports_durable_multi_level_undo_and_redo(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setattr(studio, "_output_root", tmp_path)
+    monkeypatch.setattr(studio, "_jobs_dir", tmp_path / "jobs")
+    monkeypatch.setattr(studio, "_allow_external_paths", False)
+    source = tmp_path / "source.mp4"
+    output_dir = tmp_path / "jobs" / "history-job"
+    clip = output_dir / "clip-01.mp4"
+    source.write_bytes(b"source")
+    output_dir.mkdir(parents=True)
+    clip.write_bytes(b"old")
+
+    with studio._lock:
+        studio._jobs["history-job"] = {
+            "id": "history-job",
+            "name": "History project",
+            "status": "done",
+            "request": {"url": str(source), "mode": "local", "aspect_ratio": "9:16"},
+            "result": {"mode": "local", "shorts": []},
+            "raw_shorts": [{"title": "Hook", "start_time": 0, "end_time": 4, "clip_url": str(clip)}],
+            "raw_transcript": {"duration": 8, "segments": []},
+            "raw_source_video_url": str(source),
+            "output_dir": str(output_dir),
+            "logs": [],
+            "created_at": time.time(),
+        }
+        studio._persist_job_locked(studio._jobs["history-job"])
+
+    render_count = {"value": 0}
+
+    def fake_render(*args, **kwargs):
+        render_count["value"] += 1
+        args[4]  # output path
+        with open(args[4], "wb") as rendered:
+            rendered.write(f"new-{render_count['value']}".encode("ascii"))
+        return args[4]
+
+    monkeypatch.setattr("shorts_generator.local.clipper.crop_clip_local", fake_render)
+    monkeypatch.setattr("shorts_generator.local.clipper._media_duration", lambda _path: 0.0)
+
+    update = {"start_time": 0, "end_time": 5}
+    first = client.post("/api/jobs/history-job/clips/0", json=update)
+    assert first.status_code == 200
+    assert clip.read_bytes() == b"new-1"
+    assert first.json()["result"]["shorts"][0]["history_depth"] == 1
+
+    second = client.post("/api/jobs/history-job/clips/0", json={"start_time": 1, "end_time": 6})
+    assert second.status_code == 200
+    assert clip.read_bytes() == b"new-2"
+    assert second.json()["result"]["shorts"][0]["history_depth"] == 2
+
+    undone = client.post("/api/jobs/history-job/clips/0/undo")
+    assert undone.status_code == 200
+    assert clip.read_bytes() == b"new-1"
+    assert undone.json()["result"]["shorts"][0]["history_depth"] == 1
+    assert undone.json()["result"]["shorts"][0]["redo_depth"] == 1
+
+    redone = client.post("/api/jobs/history-job/clips/0/redo")
+    assert redone.status_code == 200
+    assert clip.read_bytes() == b"new-2"
+    assert redone.json()["result"]["shorts"][0]["history_depth"] == 2
+    assert redone.json()["result"]["shorts"][0]["redo_depth"] == 0
+
+
+def test_legacy_one_level_undo_snapshot_is_migrated(client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setattr(studio, "_output_root", tmp_path)
+    monkeypatch.setattr(studio, "_jobs_dir", tmp_path / "jobs")
+    output_dir = tmp_path / "jobs" / "legacy-job"
+    output_dir.mkdir(parents=True)
+    clip = output_dir / "short_01.mp4"
+    undo = output_dir / "short_01.mp4.undo.mp4"
+    clip.write_bytes(b"new")
+    undo.write_bytes(b"old")
+    with studio._lock:
+        studio._jobs["legacy-job"] = {
+            "id": "legacy-job",
+            "status": "done",
+            "request": {"url": "https://example.com/source.mp4", "mode": "local"},
+            "result": {"mode": "local", "shorts": []},
+            "raw_shorts": [
+                {
+                    "title": "Legacy",
+                    "start_time": 0,
+                    "end_time": 4,
+                    "clip_url": str(clip),
+                    "undo_path": str(undo),
+                    "undo_metadata": {"title": "Original", "start_time": 0, "end_time": 3, "clip_url": str(clip)},
+                }
+            ],
+            "raw_transcript": {"duration": 8, "segments": []},
+            "raw_source_video_url": "https://example.com/source.mp4",
+            "output_dir": str(output_dir),
+            "logs": [],
+            "created_at": time.time(),
+        }
+        studio._persist_job_locked(studio._jobs["legacy-job"])
+
+    response = client.post("/api/jobs/legacy-job/clips/0/undo")
+    assert response.status_code == 200
+    assert clip.read_bytes() == b"old"
+    short = response.json()["result"]["shorts"][0]
+    assert short["title"] == "Original"
+    assert short["history_depth"] == 0
+    assert short["redo_depth"] == 1
+
+
+def test_backup_restore_and_storage_cleanup_are_scoped(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     monkeypatch.setattr(studio, "_min_free_gb", 0)
+    monkeypatch.setattr(studio, "_allow_external_paths", True)
+    media_root = tmp_path / "test-backup-media"
+    media_root.mkdir(parents=True, exist_ok=True)
+    (media_root / "clip.mp4").write_bytes(b"backup-media")
     with studio._lock:
         studio._jobs["backup-source"] = {
             "id": "backup-source",
             "name": "Backup source",
             "status": "done",
             "request": {"url": "source.mp4"},
+            "raw_shorts": [{"title": "Backup clip", "clip_url": str(media_root / "clip.mp4")}],
             "logs": [],
             "created_at": time.time(),
             "credentials": {"muapi": "should-not-export"},
+            "output_dir": str(media_root),
         }
         studio._persist_job_locked(studio._jobs["backup-source"])
 
@@ -262,6 +379,28 @@ def test_backup_restore_and_storage_cleanup_are_scoped(client: TestClient, monke
     with zipfile.ZipFile(io.BytesIO(backup.content)) as archive:
         assert {"backup.json", "jobs.json", "studio_state.json", "brand_presets.json"}.issubset(archive.namelist())
         assert "should-not-export" not in archive.read("jobs.json").decode("utf-8")
+        assert str(media_root).encode() not in archive.read("jobs.json")
+
+    media_backup = client.get("/api/backup", params={"include_media": "true"})
+    assert media_backup.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(media_backup.content)) as archive:
+        assert "media/backup-source/clip.mp4" in archive.namelist()
+        manifest = json.loads(archive.read("media_manifest.json"))
+        assert manifest["count"] == 1
+        assert archive.read("media/backup-source/clip.mp4") == b"backup-media"
+
+    with studio._lock:
+        studio._jobs.pop("backup-source", None)
+    restored_media = client.post(
+        "/api/restore?confirm=true",
+        files={"file": ("media-backup.zip", media_backup.content, "application/zip")},
+    )
+    assert restored_media.status_code == 200
+    assert restored_media.json()["restored_media_files"] == 1
+    restored_clip = studio._jobs["backup-source"]["raw_shorts"][0]["clip_url"]
+    assert os.path.isfile(restored_clip)
+    with open(restored_clip, "rb") as restored_file:
+        assert restored_file.read() == b"backup-media"
 
     imported_job = {
         "id": "restored-job",

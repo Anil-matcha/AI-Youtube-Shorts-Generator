@@ -226,7 +226,7 @@ _job_processes: Dict[str, Dict[int, Any]] = {}
 _shutdown_requested = threading.Event()
 _bound_server: Any = None
 _media_slots = threading.Semaphore(_positive_int_env("SHORTS_MAX_MEDIA_OPERATIONS", 2))
-_JOB_SCHEMA_VERSION = 2
+_JOB_SCHEMA_VERSION = 3
 
 _APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", __version__).strip().lstrip("v") or __version__
 _GITHUB_REPO = "wiifhub/AI-Youtube-Shorts-Generator"
@@ -296,6 +296,17 @@ async def request_limits(request: Request, call_next: Any):
             if content_length > 8 * 1024 * 1024:
                 return error_response("Request body is too large", "request_too_large", 413)
     return await call_next(request)
+
+
+@app.middleware("http")
+async def utf8_response_headers(request: Request, call_next: Any):
+    """Declare UTF-8 for textual responses so browsers decode the UI consistently."""
+    response = await call_next(request)
+    content_type = response.headers.get("content-type", "")
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    if (media_type.startswith("text/") or media_type in {"application/javascript", "application/json", "application/xml"}) and "charset=" not in content_type.lower():
+        response.headers["Content-Type"] = f"{content_type}; charset=utf-8"
+    return response
 
 
 @app.middleware("http")

@@ -12,6 +12,7 @@ import importlib
 import io
 import asyncio
 import json
+import shutil
 import time
 import zipfile
 from pathlib import Path
@@ -42,6 +43,17 @@ _BACKUP_URL_KEYS = {
     "thumbnail_url",
     "preview_url",
 }
+_BACKUP_MEDIA_PATH_KEYS = {
+    "clip_url",
+    "thumbnail_path",
+    "local_path",
+    "play_url",
+    "preview_url",
+    "undo_path",
+    "redo_path",
+    "undo_metadata",
+    "redo_metadata",
+}
 
 
 def _safe_backup_value(value: Any, key: str = "") -> Any:
@@ -62,6 +74,75 @@ def _safe_backup_value(value: Any, key: str = "") -> Any:
         except (TypeError, ValueError):
             return None
     return value
+
+
+def _strip_backup_media_fields(value: Any) -> Any:
+    """Remove local media references from nested backup metadata."""
+    if isinstance(value, dict):
+        return {
+            str(key): _strip_backup_media_fields(item)
+            for key, item in value.items()
+            if str(key) not in _BACKUP_MEDIA_PATH_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_backup_media_fields(item) for item in value]
+    return value
+
+
+def _restore_job_media(
+    archive: zipfile.ZipFile,
+    names: List[str],
+    studio: Any,
+    job: Dict[str, Any],
+    shorts: List[Dict[str, Any]],
+) -> int:
+    """Restore explicitly included job media inside the job trust boundary."""
+    job_id = str(job.get("id") or "")
+    prefix = f"media/{job_id}/"
+    output_dir = studio._job_output_dir(job).resolve()
+    extracted: List[Path] = []
+    for name in names:
+        normalized = str(name).replace("\\", "/")
+        if not normalized.startswith(prefix) or normalized.endswith("/"):
+            continue
+        relative = Path(normalized[len(prefix) :])
+        if not relative.parts:
+            continue
+        target = (output_dir / relative).resolve()
+        try:
+            target.relative_to(output_dir)
+        except ValueError:
+            continue
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(name, "r") as source, target.open("wb") as destination:
+                shutil.copyfileobj(source, destination)
+            extracted.append(target)
+        except (OSError, KeyError, RuntimeError):
+            continue
+
+    # Generated clip files normally use the short_XX.mp4 template. Restrict
+    # automatic relinking to root-level clip-like files so an included source
+    # video or a nested history snapshot cannot become a playable short.
+    clip_files = sorted(
+        [
+            path
+            for path in extracted
+            if path.parent == output_dir
+            and path.suffix.lower() in {".mp4", ".webm", ".mov", ".mkv"}
+            and ("short" in path.stem.lower() or "clip" in path.stem.lower())
+        ],
+        key=lambda path: path.name.casefold(),
+    )
+    for index, short in enumerate(shorts):
+        if index >= len(clip_files):
+            break
+        clip = clip_files[index]
+        short["clip_url"] = str(clip)
+        thumbnail = clip.with_suffix(".jpg")
+        if thumbnail in extracted:
+            short["thumbnail_path"] = str(thumbnail)
+    return len(extracted)
 
 
 @router.get("/storage", tags=["system"])
@@ -175,19 +256,60 @@ def cleanup_storage(request: CleanupRequest) -> Dict[str, Any]:
 
 
 @router.get("/backup", tags=["system"])
-def backup_projects() -> StreamingResponse:
-    """Download project metadata/settings without copying source media."""
+def backup_projects(include_media: bool = Query(default=False)) -> StreamingResponse:
+    """Download project metadata/settings, optionally with job-owned media."""
     studio = _studio()
+    media_files: List[tuple[str, Path, int]] = []
+    media_bytes = 0
+    max_media_bytes = 512 * 1024 * 1024
+    scratch_suffixes = (
+        ".part",
+        ".cut.mp4",
+        ".base.mp4",
+        ".render.mp4",
+        ".audio.mp4",
+        ".jump.mp4",
+        ".extras.mp4",
+        ".branded.mp4",
+        ".silent.mp4",
+        ".regenerate.mp4",
+        ".tmp",
+    )
     with studio._lock:
         records = []
         for job in studio._jobs.values():
             record = dict(job)
             record.pop("credentials", None)
             record.pop("_credentials", None)
-            record["request"] = _safe_backup_value(redact_structure(record.get("request")))
-            record["result"] = _safe_backup_value(redact_structure(record.get("result")))
+            # History stacks contain absolute local paths and are rebuilt from
+            # the optional media/ directory when a backup is inspected.
+            record.pop("clip_history", None)
+            record.pop("clip_redo", None)
+            request_snapshot = _safe_backup_value(redact_structure(record.get("request")))
+            if isinstance(request_snapshot, dict):
+                request_snapshot["save_folder"] = None
+            record["request"] = request_snapshot
+            record["result"] = _strip_backup_media_fields(_safe_backup_value(redact_structure(record.get("result"))))
             record["raw_source_video_url"] = None
-            record["raw_shorts"] = _safe_backup_value(record.get("raw_shorts"))
+            record["output_dir"] = None
+            safe_shorts = []
+            for short in (record.get("raw_shorts") if isinstance(record.get("raw_shorts"), list) else []):
+                if not isinstance(short, dict):
+                    continue
+                safe_short = _safe_backup_value(short)
+                for key in (
+                    "clip_url",
+                    "thumbnail_path",
+                    "local_path",
+                    "play_url",
+                    "undo_path",
+                    "redo_path",
+                    "undo_metadata",
+                    "redo_metadata",
+                ):
+                    safe_short.pop(key, None)
+                safe_shorts.append(safe_short)
+            record["raw_shorts"] = safe_shorts
             job_id = str(record.get("id") or "")
             record["error"] = studio._redact_log_text(record.get("error"), job_id) if record.get("error") else None
             record["logs"] = [
@@ -199,15 +321,51 @@ def backup_projects() -> StreamingResponse:
                 if isinstance(entry, dict)
             ]
             records.append(record)
+            if include_media:
+                output_dir = studio._job_output_dir(job)
+                if output_dir.is_dir():
+                    for media_path in output_dir.rglob("*"):
+                        if not media_path.is_file() or media_path.name.endswith(scratch_suffixes):
+                            continue
+                        try:
+                            relative = media_path.relative_to(output_dir)
+                            size = media_path.stat().st_size
+                        except (OSError, ValueError):
+                            continue
+                        media_bytes += size
+                        if media_bytes > max_media_bytes:
+                            raise HTTPException(413, "media backup exceeds the 512 MB safety limit")
+                        media_files.append((f"media/{job_id}/{relative.as_posix()}", media_path, size))
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
         bundle.writestr(
             "backup.json",
-            json.dumps({"schema_version": studio._JOB_SCHEMA_VERSION, "created_at": time.time()}, indent=2),
+            json.dumps(
+                {
+                    "schema_version": studio._JOB_SCHEMA_VERSION,
+                    "created_at": time.time(),
+                    "include_media": bool(include_media),
+                    "media_count": len(media_files),
+                    "media_bytes": media_bytes,
+                },
+                indent=2,
+            ),
         )
         bundle.writestr("jobs.json", json.dumps(records, ensure_ascii=False, indent=2, default=str))
         bundle.writestr("studio_state.json", json.dumps(studio._setup_state(), ensure_ascii=False, indent=2))
         bundle.writestr("brand_presets.json", json.dumps(studio._load_brand_presets(), ensure_ascii=False, indent=2))
+        if include_media:
+            manifest = []
+            for arcname, media_path, size in media_files:
+                try:
+                    bundle.write(media_path, arcname=arcname)
+                except OSError:
+                    continue
+                manifest.append({"path": arcname, "size": size})
+            bundle.writestr(
+                "media_manifest.json",
+                json.dumps({"count": len(manifest), "bytes": sum(item["size"] for item in manifest), "files": manifest}, indent=2),
+            )
     archive.seek(0)
     return StreamingResponse(
         archive,
@@ -218,11 +376,11 @@ def backup_projects() -> StreamingResponse:
 
 @router.post("/restore", tags=["system"])
 async def restore_projects(file: UploadFile = File(...), confirm: bool = Query(default=False)) -> Dict[str, Any]:
-    """Merge a metadata backup while rejecting zip-slip and oversized archives."""
+    """Merge a metadata or media-inclusive backup with strict archive bounds."""
     studio = _studio()
     if not confirm:
         raise HTTPException(400, "Set confirm=true to restore a backup")
-    max_backup_bytes = 100 * 1024 * 1024
+    max_backup_bytes = 512 * 1024 * 1024
     buffer = io.BytesIO()
     size = 0
     try:
@@ -233,7 +391,7 @@ async def restore_projects(file: UploadFile = File(...), confirm: bool = Query(d
             buffer.write(chunk)
             size += len(chunk)
             if size > max_backup_bytes:
-                raise HTTPException(413, "backup is larger than the 100 MB limit")
+                raise HTTPException(413, "backup is larger than the 512 MB limit")
         data = buffer.getvalue()
     finally:
         await file.close()
@@ -245,10 +403,19 @@ async def restore_projects(file: UploadFile = File(...), confirm: bool = Query(d
     if len(names) > 10000:
         archive.close()
         raise HTTPException(400, "backup contains too many files")
+    backup_meta: Dict[str, Any] = {}
+    if "backup.json" in names:
+        try:
+            loaded_meta = json.loads(archive.read("backup.json"))
+            if isinstance(loaded_meta, dict):
+                backup_meta = loaded_meta
+        except (KeyError, OSError, ValueError, TypeError):
+            backup_meta = {}
+    max_uncompressed = 512 * 1024 * 1024 if backup_meta.get("include_media") else 200 * 1024 * 1024
     total_uncompressed = sum(max(0, int(info.file_size)) for info in archive.infolist())
-    if total_uncompressed > 200 * 1024 * 1024:
+    if total_uncompressed > max_uncompressed:
         archive.close()
-        raise HTTPException(413, "backup expands beyond the 200 MB safety limit")
+        raise HTTPException(413, f"backup expands beyond the {max_uncompressed // (1024 * 1024)} MB safety limit")
     for name in names:
         normalized_name = str(name).replace("\\", "/")
         candidate = Path(normalized_name)
@@ -270,6 +437,8 @@ async def restore_projects(file: UploadFile = File(...), confirm: bool = Query(d
         archive.close()
         raise HTTPException(400, "jobs.json must contain an array")
     imported = 0
+    restored_media_files = 0
+    include_media = bool(backup_meta.get("include_media"))
     with studio._lock:
         for raw in records:
             if not isinstance(raw, dict):
@@ -277,8 +446,8 @@ async def restore_projects(file: UploadFile = File(...), confirm: bool = Query(d
             job_id = str(raw.get("id") or "")
             if not studio._job_id_pattern.fullmatch(job_id) or job_id in studio._jobs:
                 continue
-            # Metadata backups contain no media. Reset restored filesystem
-            # references so a crafted archive cannot read/write arbitrary paths.
+            # Reset restored filesystem references before optional, job-scoped
+            # media relinking so a crafted archive cannot escape its boundary.
             request_snapshot = studio._dict_value(raw.get("request"))
             request_snapshot["save_folder"] = None
             raw["request"] = request_snapshot
@@ -309,6 +478,10 @@ async def restore_projects(file: UploadFile = File(...), confirm: bool = Query(d
             raw["error"] = redact_structure(raw.get("error"))
             raw["logs"] = redact_structure(raw.get("logs"))
             studio._jobs[job_id] = raw
+            if include_media:
+                restored_media_files += _restore_job_media(archive, names, studio, raw, sanitized_shorts)
+                result_snapshot["shorts"] = studio._public_shorts(sanitized_shorts, job_id)
+                raw["result"] = result_snapshot
             studio._persist_job_locked(raw)
             imported += 1
     try:
@@ -324,7 +497,12 @@ async def restore_projects(file: UploadFile = File(...), confirm: bool = Query(d
         raise HTTPException(400, f"backup settings are invalid: {exc}") from exc
     finally:
         archive.close()
-    return {"status": "restored", "imported_jobs": imported, "skipped_existing": len(records) - imported}
+    return {
+        "status": "restored",
+        "imported_jobs": imported,
+        "skipped_existing": len(records) - imported,
+        "restored_media_files": restored_media_files,
+    }
 
 
 @router.get("/brand-presets", tags=["projects"])

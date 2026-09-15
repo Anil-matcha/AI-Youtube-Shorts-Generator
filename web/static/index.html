@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark light">
   <meta name="theme-color" content="#0a0e18">
+  <meta name="shorts-studio-version" content="0.10.2">
   <link rel="icon" type="image/svg+xml" href="/static/logo.svg">
   <link rel="mask-icon" href="/static/logo.svg" color="#5ee7ef">
   <title>Shorts Studio</title>
@@ -49,7 +50,7 @@
             <div class="two"><div class="field"><label for="mode">Mode</label><select class="select" id="mode"><option value="local" selected>Local</option><option value="api">API</option></select></div><div class="field"><label for="numClips">Clips</label><input class="input" id="numClips" type="number" min="1" max="12" value="3"></div></div>
             <div class="two"><div class="field"><label for="aspect">Aspect</label><select class="select" id="aspect"><option value="9:16">9:16 vertical</option><option value="1:1">1:1 square</option><option value="4:5">4:5</option></select></div><div class="field"><label for="format">Source res</label><select class="select" id="format"><option>360</option><option selected>720</option><option>1080</option></select></div></div>
             <div class="field"><label for="saveFolder">Save folder <span>optional</span></label><input class="input" id="saveFolder" placeholder="C:\\Users\\You\\Videos\\Shorts"></div>
-            <div class="two" style="margin-top:14px"><button class="primary" id="generateButton" type="button">Generate shorts</button><button class="danger" id="cancelButton" type="button" hidden>Cancel job</button></div>
+             <div class="two" style="margin-top:14px"><button class="primary" id="generateButton" type="button">Generate shorts</button><button class="danger" id="cancelButton" type="button" hidden>Cancel job</button></div><div id="jobProgress" class="job-progress" role="status" aria-live="polite" hidden></div>
           </div></section>
 
           <section class="panel preview-panel"><div class="panel-head preview-head"><div><h2>Preview</h2><p id="previewSub">Select a rendered clip to inspect it.</p></div><span class="badge" id="previewBadge">Draft</span></div><div class="frame-wrap"><div class="frame" id="frameCanvas" role="application" aria-label="Video crop preview"><video id="previewVideo" controls playsinline aria-label="Selected clip preview"></video><div class="preview-empty" id="previewEmpty">Your 9:16 preview will appear here.<br><small>Render a project or choose a clip.</small></div><div class="caption-overlay" id="captionOverlay" hidden></div></div></div><div class="preview-toolbar"><button class="secondary" id="previewButton" type="button" disabled>Preview draft</button><button class="secondary" id="selectVideoButton" type="button" disabled>Use selected clip</button><button class="ghost" id="fitButton" type="button">Fit frame</button></div><div class="render-note" id="renderNote"><b>Ready.</b> Draft previews use the same crop, caption, and layout settings as the final render.</div></section>
@@ -64,7 +65,7 @@
 
         <section class="panel timeline-panel"><div class="panel-head"><div><h2>Timeline and transcript</h2><p>Click a segment to focus the selected clip. Drag the preview to adjust horizontal framing.</p></div><span class="badge" id="timelineBadge">No transcript</span></div><div class="timeline-wrap"><div class="waveform-track" id="waveformTrack" aria-label="Audio waveform"></div><div class="timeline-track" id="timelineTrack"><div class="empty" style="border:0;padding:18px">Transcript markers appear after rendering.</div></div><div class="timeline-axis"><span>0:00</span><span id="timelineEnd">--:--</span></div><div class="transcript-list" id="transcriptList"><div class="empty" style="padding:15px">No transcript loaded.</div></div></div></section>
         <section class="panel clip-panel"><div class="panel-head"><div><h2>Rendered clips</h2><p>Choose a clip, preview edits, regenerate, or undo.</p></div><span class="badge" id="clipCountBadge">0 clips</span></div><div class="clip-grid" id="clipGrid"><div class="empty">Rendered clips will appear here.</div></div></section>
-        <section class="panel queue-panel"><div class="panel-head"><div><h2>Queue</h2><p>Monitor active and recent jobs.</p></div><button class="ghost" id="queueRefresh" type="button">Refresh</button></div><div class="queue-list" id="queueList"><div class="empty" style="padding:18px">No queued projects.</div></div></section>
+         <section class="panel queue-panel"><div class="panel-head"><div><h2>Queue</h2><p>Monitor active and recent jobs.</p></div><button class="ghost" id="queueRefresh" type="button">Refresh</button></div><div class="queue-list" id="queueList"><div class="empty" style="padding:18px">No queued projects.</div></div></section><section class="panel batch-panel" id="batchPanel" hidden><div class="panel-head"><div><h2>Batch monitor</h2><p>Every source reports its own progress and outcome.</p></div><button class="ghost" id="cancelBatchButton" type="button">Cancel remaining</button></div><div class="batch-summary" id="batchSummary" role="status" aria-live="polite"></div><div class="batch-list" id="batchList"></div></section>
       </section>
 
       <section class="panel editor-tools-panel"><div class="panel-head"><div><h2>Precision editing</h2><p>Keep several source ranges in one short and edit transcript text/timing before exporting.</p></div><span class="badge">Local mode</span></div><div class="three"><div class="field"><label for="musicVolume">Music volume</label><input class="input" id="musicVolume" type="number" min="0" max="1" step=".01" value=".18"></div><div class="field"><label for="musicFadeIn">Music fade in (s)</label><input class="input" id="musicFadeIn" type="number" min="0" max="30" step=".1" value="0"></div><div class="field"><label for="musicFadeOut">Music fade out (s)</label><input class="input" id="musicFadeOut" type="number" min="0" max="30" step=".1" value="0"></div></div><div class="field"><label>Multi-cut ranges</label><div id="cutsEditor" class="cuts-editor"><span class="dropzone-sub">Add ranges from the selected clip to remove dead air.</span></div><button class="secondary" id="addCutButton" type="button">Add current range</button></div><div class="field"><label for="transcriptEditor">Editable transcript</label><textarea class="textarea" id="transcriptEditor" rows="5" placeholder="Select a completed project to edit transcript text and timing."></textarea><div class="settings-actions"><button class="secondary" id="loadTranscriptButton" type="button">Load transcript</button><button class="primary" id="saveTranscriptButton" type="button" disabled>Save transcript</button></div></div></section>
@@ -89,11 +90,15 @@
     </main>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div id="liveRegion" class="sr-only" aria-live="polite"></div>
   <div class="setup-modal" id="authModal" role="dialog" aria-modal="true" aria-labelledby="authTitle" hidden><div class="setup-card"><div class="eyebrow">Protected workspace</div><h2 id="authTitle">Enter access token</h2><p>This server requires the configured Shorts Studio token. It is kept in an HttpOnly session cookie.</p><form id="authForm"><div class="field"><label for="authToken">Access token</label><input class="input" id="authToken" type="password" autocomplete="current-password" required></div><button class="primary" type="submit" id="authSubmit">Sign in</button><p class="setting-help" id="authStatus" role="status" aria-live="polite"></p></form></div></div>
   <div class="setup-modal" id="setupModal" role="dialog" aria-modal="true" aria-labelledby="setupTitle" hidden><div class="setup-card"><div class="eyebrow">First-run check</div><h2 id="setupTitle">Prepare Shorts Studio</h2><p id="setupSummary">Checking your local tools...</p><div class="setup-list" id="setupList"></div><div class="setup-actions"><button class="primary" id="setupPrepare" type="button">Prepare folders</button><button class="ghost" id="setupDismiss" type="button">Continue</button></div></div></div>
   <!-- Additional component styles are bundled in styles.css. -->
-  <script>document.querySelectorAll('.editor-tools-panel').forEach(panel => { panel.hidden = true; });</script>
-
+  <script src="/static/modules/state.js" defer></script>
+  <script src="/static/modules/ui.js" defer></script>
+  <script src="/static/modules/api.js" defer></script>
+  <script src="/static/modules/editor.js" defer></script>
+  <script src="/static/modules/timeline.js" defer></script>
   <script src="/static/app.js" defer></script>
 </body>
 </html>

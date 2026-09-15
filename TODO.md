@@ -1,7 +1,7 @@
 # Shorts Studio TODO
 
-**Current local tag:** v0.10.1 (not pushed or publicly released)
-**Implementation target:** v0.10.2 (next; planning only)
+**Current local tag:** v0.10.2 (not pushed or publicly released)
+**Implementation target:** v0.10.3 (security and production hardening)
 **Last reviewed:** 2026-09-15
 
 This is the canonical implementation backlog. Inline `TODO` comments should
@@ -63,21 +63,23 @@ than remaining as open TODOs.
   and enabled CI SBOM/provenance generation. Authenticode signing remains an
   opt-in release operation requiring the owner's certificate.
 
-## P2 - v0.10.2 UX and maintainability
+## P2 - v0.10.2 UX and maintainability (implemented locally)
 
-This is the active v0.10.2 scope. Implement these items with code, tests, and
-the relevant runtime smoke check before marking them complete.
+This v0.10.2 scope is implemented and tagged locally. The public release and
+asset upload remain intentionally out of scope.
 
-- [ ] **T-030 Frontend modularization** - Split `web/static/app.js` into state,
+- [x] **T-030 Frontend modularization** - Split `web/static/app.js` into state,
   API, UI, editor, and timeline modules; fix response encoding at the server;
-  add progress bars, skeletons, toasts, keyboard navigation, and batch-job
-  monitoring.
-- [ ] **T-031 Editing and export workflow** - Add durable project/media backup
-  options, export presets, multi-level undo/redo, and a clear multi-cut/merge
-  workflow.
+  add progress bars, skeletons, toasts, keyboard navigation, live status, and
+  batch-job monitoring with per-source cancellation.
+- [x] **T-031 Editing and export workflow** - Add durable project/media backup
+  options, browser-local export presets, bounded multi-level undo/redo, and a
+  clear multi-cut/merge workflow with removable ranges and merge guidance.
 - [ ] **T-032 Deployment targets** - Add multi-architecture Docker support only
   after dependency feasibility is proven, then consider GPU CI and Helm
-  packaging for a documented deployment target.
+  packaging for a documented deployment target. Deferred until an arm64
+  dependency proof and target host are available; no unverified platform claim
+  is included in v0.10.2.
 
 ## P3 - feature expansion
 
@@ -140,6 +142,9 @@ it becomes a committed release milestone.
   roadmap item is stale
 - Windows installer/portable build scripts, checksums, and passing CI workflow
   definitions (the v0.10.1 release itself is intentionally not published)
+- v0.10.2 frontend modules, progress/batch monitoring, keyboard/accessibility
+  coverage, UTF-8 response headers, export presets, media-inclusive backup, and
+  durable clip undo/redo (the v0.10.2 release itself is intentionally local)
 
 ## Backlog hygiene
 

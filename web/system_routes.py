@@ -39,7 +39,7 @@ def _studio() -> Any:
 
 @router.get("/", response_class=HTMLResponse)
 def index() -> FileResponse:
-    return FileResponse(_studio().STATIC / "index.html")
+    return FileResponse(_studio().STATIC / "index.html", media_type="text/html")
 
 
 @router.get("/api/auth/status", tags=["system"])
