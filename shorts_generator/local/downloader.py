@@ -6,11 +6,84 @@ directly off disk.
 
 import os
 import re
+import ipaddress
+import socket
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 from typing import Optional
 
 from ..config import LOCAL_OUTPUT_DIR, cancellation_requested
+
+
+_DEFAULT_REMOTE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be"}
+
+
+def _remote_host_allowlist() -> set[str]:
+    configured = os.getenv("SHORTS_ALLOWED_REMOTE_HOSTS", "").strip()
+    extra = {item.strip().lower().rstrip(".") for item in configured.split(",") if item.strip()}
+    return _DEFAULT_REMOTE_HOSTS | extra
+
+
+def _host_allowed(host: str, allowlist: set[str]) -> bool:
+    host = host.lower().rstrip(".")
+    return any(host == item or host.endswith("." + item) for item in allowlist)
+
+
+def _public_addresses(host: str, port: int) -> list[str]:
+    try:
+        records = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (OSError, socket.gaierror) as exc:
+        raise ValueError("remote host could not be resolved") from exc
+    addresses: list[str] = []
+    for record in records:
+        address = record[4][0]
+        try:
+            parsed = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise ValueError("remote host resolved to an invalid address") from exc
+        # Treat every resolved address as a trust boundary. Rejecting when any
+        # answer is private prevents DNS rebinding from reaching local services.
+        if (
+            parsed.is_private
+            or parsed.is_loopback
+            or parsed.is_link_local
+            or parsed.is_unspecified
+            or parsed.is_multicast
+            or parsed.is_reserved
+            or parsed in ipaddress.ip_network("100.64.0.0/10")
+            or parsed in ipaddress.ip_network("169.254.0.0/16")
+        ):
+            raise ValueError("remote host resolves to a private or reserved network")
+        addresses.append(str(parsed))
+    if not addresses:
+        raise ValueError("remote host has no usable addresses")
+    return addresses
+
+
+def validate_remote_source(source: str) -> str:
+    """Validate a remote source before yt-dlp can make any network request.
+
+    Only YouTube hosts (or an explicit administrator allowlist) are accepted.
+    DNS answers are checked too, so an allowed hostname cannot be used as a
+    redirect/rebinding tunnel into loopback, link-local, or cloud metadata.
+    """
+    parsed = urlparse(str(source or "").strip())
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("remote source must be an http(s) URL with a hostname")
+    if parsed.username or parsed.password:
+        raise ValueError("remote source credentials are not allowed")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("remote source port is invalid") from exc
+    if port not in (None, 80, 443):
+        raise ValueError("remote source ports must be 80 or 443")
+    host = parsed.hostname.rstrip(".").lower()
+    if not _host_allowed(host, _remote_host_allowlist()):
+        raise ValueError("remote source host is not on the administrator allowlist")
+    _public_addresses(host, port or (443 if scheme == "https" else 80))
+    return parsed.geturl()
 
 
 def _import_ytdlp():
@@ -85,6 +158,10 @@ def _resolve_local_path(source: str) -> Optional[str]:
         raise RuntimeError(f"Local file URL does not exist: {source}")
 
     if parsed.scheme in ("http", "https"):
+        try:
+            validate_remote_source(source)
+        except ValueError as exc:
+            raise RuntimeError(f"Remote source is not allowed: {exc}") from exc
         return None
 
     candidate = Path(source).expanduser()
@@ -157,6 +234,18 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
             raise RuntimeError("Job cancelled")
 
     ydl_opts["progress_hooks"] = [cancellation_hook]
+
+    def match_filter(info: object, *, incomplete: bool = False) -> Optional[str]:
+        if incomplete or not isinstance(info, dict):
+            return None
+        candidate = str(info.get("webpage_url") or info.get("original_url") or video_url)
+        try:
+            validate_remote_source(candidate)
+        except ValueError as exc:
+            return str(exc)
+        return None
+
+    ydl_opts["match_filter"] = match_filter
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import io
+import asyncio
 import json
 import time
 import zipfile
@@ -30,6 +31,37 @@ router = APIRouter()
 def _studio() -> Any:
     """Resolve the stateful app module only when a request is handled."""
     return importlib.import_module("web.app")
+
+
+_URL_SECRET_QUERY_KEYS = {"token", "access_token", "signature", "sig", "expires", "expiry", "auth"}
+_BACKUP_URL_KEYS = {
+    "raw_source_video_url",
+    "source_video_url",
+    "clip_url",
+    "play_url",
+    "thumbnail_url",
+    "preview_url",
+}
+
+
+def _safe_backup_value(value: Any, key: str = "") -> Any:
+    """Copy metadata while removing media URLs and signed query parameters."""
+    if key in _BACKUP_URL_KEYS:
+        return None
+    if isinstance(value, dict):
+        return {str(name): _safe_backup_value(item, str(name)) for name, item in value.items()}
+    if isinstance(value, list):
+        return [_safe_backup_value(item, key) for item in value]
+    if isinstance(value, str) and (value.startswith("http://") or value.startswith("https://")):
+        try:
+            from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+            parts = urlsplit(value)
+            query = [(name, item) for name, item in parse_qsl(parts.query, keep_blank_values=True) if name.lower() not in _URL_SECRET_QUERY_KEYS]
+            return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+        except (TypeError, ValueError):
+            return None
+    return value
 
 
 @router.get("/storage", tags=["system"])
@@ -60,6 +92,20 @@ def cleanup_storage(request: CleanupRequest) -> Dict[str, Any]:
     cutoff = time.time() - request.older_than_days * 86400
     removed: List[str] = []
     removed_bytes = 0
+    with studio._lock:
+        active_dirs = {
+            str(studio._job_output_dir(job).resolve())
+            for job in studio._jobs.values()
+            if str(job.get("status")) in {"queued", "running"}
+        }
+        active_sources = set()
+        for job in studio._jobs.values():
+            if str(job.get("status")) not in {"queued", "running"}:
+                continue
+            request_snapshot = studio._dict_value(job.get("request"))
+            source_path = studio._job_source_path(job, request_snapshot.get("url"))
+            if source_path:
+                active_sources.add(str(source_path.resolve()))
     roots = [studio._trash_dir]
     if request.include_uploads:
         roots.append(studio._uploads_dir)
@@ -71,6 +117,8 @@ def cleanup_storage(request: CleanupRequest) -> Dict[str, Any]:
             if not item.is_file():
                 continue
             try:
+                if str(item.resolve()) in active_sources:
+                    continue
                 if item.stat().st_mtime >= cutoff:
                     continue
                 size = item.stat().st_size
@@ -79,23 +127,29 @@ def cleanup_storage(request: CleanupRequest) -> Dict[str, Any]:
                 removed_bytes += size
             except OSError:
                 continue
-    # Previews and waveform caches are generated and safe to expire. Never
-    # touch completed clips, source videos, model files, or custom save folders.
-    for item in studio._output_root.rglob("*"):
-        if not item.is_file():
+    # Previews, waveforms, and transcript sidecars are renderer-owned only
+    # when they live below a job output directory. Snapshot active directories
+    # under the same lock used by workers so cleanup never races a render.
+    job_dirs = list(studio._jobs_dir.iterdir()) if studio._jobs_dir.is_dir() else []
+    for job_dir in job_dirs:
+        if not job_dir.is_dir() or str(job_dir.resolve()) in active_dirs:
             continue
-        try:
-            if item.stat().st_mtime >= cutoff:
+        for item in job_dir.rglob("*"):
+            if not item.is_file():
                 continue
-            is_transcript = item in transcript_cache_files
-            if "previews" not in item.parts and item.name != "waveform.json" and not is_transcript:
+            try:
+                if item.stat().st_mtime >= cutoff:
+                    continue
+                rel = item.relative_to(job_dir)
+                is_owned = rel.parts and (rel.parts[0] == "previews" or item.name == "waveform.json" or item in transcript_cache_files)
+                if not is_owned:
+                    continue
+                size = item.stat().st_size
+                item.unlink()
+                removed.append(str(item))
+                removed_bytes += size
+            except (OSError, ValueError):
                 continue
-            size = item.stat().st_size
-            item.unlink()
-            removed.append(str(item))
-            removed_bytes += size
-        except OSError:
-            continue
     if request.include_model_cache:
         for root in studio._model_cache_roots():
             if not root.is_dir():
@@ -130,8 +184,10 @@ def backup_projects() -> StreamingResponse:
             record = dict(job)
             record.pop("credentials", None)
             record.pop("_credentials", None)
-            record["request"] = redact_structure(record.get("request"))
-            record["result"] = redact_structure(record.get("result"))
+            record["request"] = _safe_backup_value(redact_structure(record.get("request")))
+            record["result"] = _safe_backup_value(redact_structure(record.get("result")))
+            record["raw_source_video_url"] = None
+            record["raw_shorts"] = _safe_backup_value(record.get("raw_shorts"))
             job_id = str(record.get("id") or "")
             record["error"] = studio._redact_log_text(record.get("error"), job_id) if record.get("error") else None
             record["logs"] = [
@@ -187,9 +243,11 @@ async def restore_projects(file: UploadFile = File(...), confirm: bool = Query(d
         raise HTTPException(400, "invalid backup archive") from exc
     names = archive.namelist()
     if len(names) > 10000:
+        archive.close()
         raise HTTPException(400, "backup contains too many files")
     total_uncompressed = sum(max(0, int(info.file_size)) for info in archive.infolist())
     if total_uncompressed > 200 * 1024 * 1024:
+        archive.close()
         raise HTTPException(413, "backup expands beyond the 200 MB safety limit")
     for name in names:
         normalized_name = str(name).replace("\\", "/")
@@ -201,12 +259,15 @@ async def restore_projects(file: UploadFile = File(...), confirm: bool = Query(d
             or ".." in candidate.parts
             or candidate.name != normalized_name.split("/")[-1]
         ):
+            archive.close()
             raise HTTPException(400, "backup contains an unsafe path")
     try:
         records = json.loads(archive.read("jobs.json"))
     except (KeyError, OSError, ValueError, TypeError) as exc:
+        archive.close()
         raise HTTPException(400, "backup is missing jobs.json") from exc
     if not isinstance(records, list):
+        archive.close()
         raise HTTPException(400, "jobs.json must contain an array")
     imported = 0
     with studio._lock:
@@ -294,14 +355,14 @@ def delete_brand_preset(name: str) -> Dict[str, Any]:
 
 
 @router.get("/jobs/{job_id}/events", tags=["projects"])
-def job_events(job_id: str) -> StreamingResponse:
+async def job_events(job_id: str) -> StreamingResponse:
     """Stream durable job snapshots for browser clients that support SSE."""
     studio = _studio()
     with studio._lock:
         if job_id not in studio._jobs:
             raise HTTPException(404, "job not found")
 
-    def stream():
+    async def stream():
         last_payload = ""
         deadline = time.monotonic() + 300
         while time.monotonic() < deadline:
@@ -317,7 +378,7 @@ def job_events(job_id: str) -> StreamingResponse:
                 last_payload = payload
             if status in {"done", "error", "cancelled", "interrupted"}:
                 break
-            time.sleep(0.5)
+            await asyncio.sleep(0.5)
 
     return StreamingResponse(
         stream(),

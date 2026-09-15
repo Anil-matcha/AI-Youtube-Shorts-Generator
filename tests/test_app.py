@@ -9,6 +9,7 @@ import os
 import threading
 import time
 import zipfile
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -171,6 +172,36 @@ def test_queued_cancellation_cancels_future_and_releases_event(client: TestClien
     with studio._lock:
         assert "queued-cancel" not in studio._cancel_events
         assert "queued-cancel" not in studio._job_futures
+
+
+def test_shutdown_persists_interrupted_jobs_and_stops_bound_server(client: TestClient) -> None:
+    server = SimpleNamespace(should_exit=False)
+    studio.bind_server(server)
+    with studio._lock:
+        studio._jobs["shutdown-job"] = {
+            "id": "shutdown-job",
+            "name": "Shutdown recovery",
+            "status": "running",
+            "stage": "transcribe",
+            "progress": 45,
+            "message": "Transcribing",
+            "request": {"url": "https://example.com/video.mp4", "mode": "api"},
+            "logs": [],
+            "created_at": time.time(),
+        }
+        studio._cancel_events["shutdown-job"] = threading.Event()
+        studio._persist_job_locked(studio._jobs["shutdown-job"])
+
+    response = client.post("/api/shutdown")
+
+    assert response.status_code == 200
+    assert response.json()["interrupted_jobs"] == 1
+    assert server.should_exit is True
+    with studio._lock:
+        assert studio._jobs["shutdown-job"]["status"] == "interrupted"
+        assert studio._cancel_events["shutdown-job"].is_set()
+    studio.bind_server(None)
+    studio._shutdown_requested.clear()
 
 
 def test_api_mode_rejects_local_only_controls_before_queueing(client: TestClient) -> None:

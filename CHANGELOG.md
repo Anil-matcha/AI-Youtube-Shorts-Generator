@@ -4,8 +4,24 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
 
 ## [Unreleased]
 
-- Continue polishing the editor, provider integrations, and packaging based on
-  user feedback.
+### v0.10.1 implementation (not released)
+
+- Added queued/running cancellation UX, cooperative worker admission, active
+  FFmpeg termination, coordinated shutdown, and durable interrupted-job recovery.
+- Added YouTube/administrator remote-host allowlists with DNS egress checks,
+  bounded preview/waveform work, async SSE polling, and job-scoped cleanup.
+- Sanitized backup/export metadata, closed invalid backup archives safely, and
+  kept generated media inside validated job boundaries.
+- Added typed pipeline configuration, configurable highlight/clipper controls,
+  hardware-aware Whisper selection, detector plugins, provider retries, cached
+  clients, structured/streaming JSON output, and local Ollama ranking.
+- Added remote-deployment headers/CORS/CSRF checks, login backoff, trusted proxy
+  handling, broader secret redaction, `/healthz`, reproducible version/build
+  settings, render smoke coverage, and CI SBOM/provenance metadata.
+- Validation: 60 Python tests passed, 3 Playwright browser tests passed, plus
+  compile, Ruff, mypy, JavaScript, package, pip-check, and pip-audit checks.
+
+The v0.10.1 release/tag/upload is intentionally pending.
 
 ## [0.10.0] - 2026-09-14
 

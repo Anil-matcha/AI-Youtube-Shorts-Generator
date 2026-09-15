@@ -22,31 +22,46 @@ class JobStore:
         self.path = Path(path).expanduser().resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._connection = sqlite3.connect(
-            str(self.path),
-            check_same_thread=False,
-            timeout=30.0,
-        )
-        self._connection.row_factory = sqlite3.Row
-        with self._lock:
-            self._connection.execute("PRAGMA journal_mode=WAL")
-            self._connection.execute("PRAGMA synchronous=NORMAL")
-            self._connection.execute("PRAGMA busy_timeout=30000")
-            self._connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS jobs (
-                    id TEXT PRIMARY KEY,
-                    status TEXT NOT NULL,
-                    stage TEXT NOT NULL,
-                    progress REAL NOT NULL DEFAULT 0,
-                    updated_at REAL NOT NULL,
-                    payload TEXT NOT NULL
-                )
-                """
+        self._connection: sqlite3.Connection | None = None
+        self._closed = True
+        self._connect_locked()
+
+    def _connect_locked(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(str(self.path), check_same_thread=False, timeout=30.0)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA synchronous=NORMAL")
+        connection.execute("PRAGMA busy_timeout=30000")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS jobs (
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                progress REAL NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL,
+                payload TEXT NOT NULL
             )
-            self._connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)")
-            self._connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_updated ON jobs(updated_at DESC)")
-            self._connection.commit()
+            """
+        )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_updated ON jobs(updated_at DESC)")
+        connection.commit()
+        self._connection = connection
+        self._closed = False
+
+    def _ensure_open_locked(self) -> sqlite3.Connection:
+        if self._closed or self._connection is None:
+            self._connect_locked()
+        # The invariant is established by _connect_locked; the cast keeps
+        # static checkers aware that all store operations have a connection.
+        return self._connection  # type: ignore[return-value]
+
+    def reopen(self) -> None:
+        """Reopen the connection after a coordinated application shutdown."""
+        with self._lock:
+            self._ensure_open_locked()
 
     def save(self, job: Dict[str, Any]) -> None:
         """Insert or update one complete job snapshot atomically."""
@@ -65,7 +80,8 @@ class JobStore:
             updated_at = 0.0
         payload = json.dumps(job, ensure_ascii=False, default=str, separators=(",", ":"))
         with self._lock:
-            self._connection.execute(
+            connection = self._ensure_open_locked()
+            connection.execute(
                 """
                 INSERT INTO jobs(id, status, stage, progress, updated_at, payload)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -78,12 +94,13 @@ class JobStore:
                 """,
                 (job_id, status, stage, progress, updated_at, payload),
             )
-            self._connection.commit()
+            connection.commit()
 
     def load_all(self) -> List[Dict[str, Any]]:
         """Return valid JSON job payloads newest first."""
         with self._lock:
-            rows = self._connection.execute(
+            connection = self._ensure_open_locked()
+            rows = connection.execute(
                 "SELECT payload FROM jobs ORDER BY updated_at DESC, id ASC"
             ).fetchall()
         records: List[Dict[str, Any]] = []
@@ -98,15 +115,20 @@ class JobStore:
 
     def delete(self, job_id: str) -> None:
         with self._lock:
-            self._connection.execute("DELETE FROM jobs WHERE id = ?", (str(job_id),))
-            self._connection.commit()
+            connection = self._ensure_open_locked()
+            connection.execute("DELETE FROM jobs WHERE id = ?", (str(job_id),))
+            connection.commit()
 
     def clear(self) -> None:
         """Clear records (used by isolated tests and explicit maintenance)."""
         with self._lock:
-            self._connection.execute("DELETE FROM jobs")
-            self._connection.commit()
+            connection = self._ensure_open_locked()
+            connection.execute("DELETE FROM jobs")
+            connection.commit()
 
     def close(self) -> None:
         with self._lock:
-            self._connection.close()
+            if self._connection is not None and not self._closed:
+                self._connection.close()
+            self._connection = None
+            self._closed = True

@@ -9,16 +9,33 @@ Two stages per highlight:
 
 import os
 import re
+import json
 import shutil
 import subprocess
 import time
 import math
+import threading
 from functools import lru_cache
 from pathlib import Path
 import textwrap
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..config import (
+    FACE_SMOOTHING,
+    LOCAL_AUDIO_BITRATE,
+    LOCAL_AUDIO_DENOISE_FILTER,
+    LOCAL_AUDIO_NORMALIZE_FILTER,
+    LOCAL_AUDIO_SILENCE_FILTER,
+    LOCAL_CAPTION_PRESETS_FILE,
+    LOCAL_CRF,
+    LOCAL_ENCODE_PRESET,
+    LOCAL_FFMPEG_REMOVE_RETRY_ATTEMPTS,
+    LOCAL_FFMPEG_REMOVE_RETRY_DELAY,
+    LOCAL_MAX_FFMPEG_PROCS,
+    LOCAL_OUTPUT_TEMPLATE,
+    LOCAL_RANGE_MERGE_TOLERANCE,
+    LOCAL_TEMP_DIR,
+    LOCAL_THUMBNAIL_POSITION,
     LOCAL_OUTPUT_DIR,
     cancellation_requested,
     register_runtime_process,
@@ -26,8 +43,12 @@ from ..config import (
 )
 from .face_detection import create_face_detector
 
+_ffmpeg_slots = threading.Semaphore(max(1, LOCAL_MAX_FFMPEG_PROCS))
 
-def _remove_with_retry(path: str, attempts: int = 8, delay: float = 0.5) -> None:
+
+def _remove_with_retry(
+    path: str, attempts: int = LOCAL_FFMPEG_REMOVE_RETRY_ATTEMPTS, delay: float = LOCAL_FFMPEG_REMOVE_RETRY_DELAY
+) -> None:
     """os.remove with retries — Windows Defender's real-time scanner can
     briefly hold a lock on a freshly-written file, causing WinError 32."""
     for i in range(attempts):
@@ -61,7 +82,20 @@ def _run_command(
     if capture_output:
         kwargs.setdefault("stdout", subprocess.PIPE)
         kwargs.setdefault("stderr", subprocess.PIPE)
-    process = subprocess.Popen(args, text=text, **kwargs)
+    while not _ffmpeg_slots.acquire(timeout=0.25):
+        if cancellation_requested():
+            raise RuntimeError("Job cancelled")
+    try:
+        if LOCAL_TEMP_DIR:
+            temp_dir = Path(LOCAL_TEMP_DIR).expanduser()
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            command_env = dict(kwargs.get("env") or os.environ)
+            command_env.update({"TMP": str(temp_dir), "TEMP": str(temp_dir), "TMPDIR": str(temp_dir)})
+            kwargs["env"] = command_env
+        process = subprocess.Popen(args, text=text, **kwargs)
+    except Exception:
+        _ffmpeg_slots.release()
+        raise
     register_runtime_process(process)
     started = time.monotonic()
     stdout: Any = None
@@ -104,6 +138,7 @@ def _run_command(
         return result
     finally:
         unregister_runtime_process(process)
+        _ffmpeg_slots.release()
 
 
 @lru_cache(maxsize=1)
@@ -248,15 +283,15 @@ def _add_silent_audio(media_path: str, out_path: str) -> str:
             "-c:v",
             "libx264",
             "-preset",
-            "fast",
+            LOCAL_ENCODE_PRESET,
             "-crf",
-            "20",
+            str(int(LOCAL_CRF)),
             "-pix_fmt",
             "yuv420p",
             "-c:a",
             "aac",
             "-b:a",
-            "128k",
+            LOCAL_AUDIO_BITRATE,
             "-shortest",
             out_path,
         ],
@@ -273,6 +308,25 @@ def _caption_style_values(style: str, position: str = "bottom") -> Tuple[int, st
         "boxed": (52, "&H00FFFFFF", "&H00000000", "&HCC000000", 1, 3, 2),
         "karaoke": (54, "&H0000FFFF", "&H0000FFFF", "&H99000000", 7, 1, 2),
     }
+    if LOCAL_CAPTION_PRESETS_FILE:
+        try:
+            custom = json.loads(Path(LOCAL_CAPTION_PRESETS_FILE).expanduser().read_text(encoding="utf-8"))
+            if isinstance(custom, dict):
+                for name, value in custom.items():
+                    if isinstance(value, (list, tuple)) and len(value) >= 6:
+                        presets[str(name).strip().lower()] = tuple(value[:6])  # type: ignore[assignment]
+                    elif isinstance(value, dict):
+                        base = presets.get(str(name).strip().lower(), presets["bold"])
+                        presets[str(name).strip().lower()] = (
+                            int(value.get("font_size", base[0])),
+                            str(value.get("primary", base[1])),
+                            str(value.get("secondary", base[2])),
+                            str(value.get("back", base[3])),
+                            int(value.get("outline", base[4])),
+                            int(value.get("border_style", base[5])),
+                        )
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            pass
     style_key = str(style or "bold").strip().lower()
     position_key = str(position or "bottom").strip().lower()
     values = presets.get(style_key, presets["bold"])
@@ -473,15 +527,15 @@ def _burn_in_captions(
             "-c:v",
             "libx264",
             "-preset",
-            "fast",
+            LOCAL_ENCODE_PRESET,
             "-crf",
-            "20",
+            str(int(LOCAL_CRF)),
             "-pix_fmt",
             "yuv420p",
             "-c:a",
             "aac",
             "-b:a",
-            "128k",
+            LOCAL_AUDIO_BITRATE,
             "-movflags",
             "+faststart",
             out_path,
@@ -510,13 +564,13 @@ def _cut_subclip(source_path: str, start: float, end: float, out_path: str) -> s
         "-c:v",
         "libx264",
         "-preset",
-        "fast",
+        LOCAL_ENCODE_PRESET,
         "-crf",
-        "20",
+        str(int(LOCAL_CRF)),
         "-c:a",
         "aac",
         "-b:a",
-        "128k",
+        LOCAL_AUDIO_BITRATE,
         out_path,
     ]
     _run_command(cmd, check=True)
@@ -553,7 +607,7 @@ def _normalise_cut_ranges(
     merged: List[Tuple[float, float]] = [ranges[0]]
     for left, right in ranges[1:]:
         previous_left, previous_right = merged[-1]
-        if left <= previous_right + 0.02:
+        if left <= previous_right + LOCAL_RANGE_MERGE_TOLERANCE:
             merged[-1] = (previous_left, max(previous_right, right))
         else:
             merged.append((left, right))
@@ -697,15 +751,15 @@ def _cut_ranges(source_path: str, ranges: List[Tuple[float, float]], out_path: s
                 "-c:v",
                 "libx264",
                 "-preset",
-                "fast",
+                LOCAL_ENCODE_PRESET,
                 "-crf",
-                "20",
+                str(int(LOCAL_CRF)),
                 "-pix_fmt",
                 "yuv420p",
                 "-c:a",
                 "aac",
                 "-b:a",
-                "128k",
+                LOCAL_AUDIO_BITRATE,
                 "-movflags",
                 "+faststart",
                 out_path,
@@ -765,15 +819,15 @@ def _reframe_vertical(
                 "-c:v",
                 "libx264",
                 "-preset",
-                "fast",
+                LOCAL_ENCODE_PRESET,
                 "-crf",
-                "20",
+                str(int(LOCAL_CRF)),
                 "-pix_fmt",
                 "yuv420p",
                 "-c:a",
                 "aac",
                 "-b:a",
-                "128k",
+                LOCAL_AUDIO_BITRATE,
                 "-shortest",
                 "-movflags",
                 "+faststart",
@@ -810,15 +864,15 @@ def _reframe_vertical(
                 "-c:v",
                 "libx264",
                 "-preset",
-                "fast",
+                LOCAL_ENCODE_PRESET,
                 "-crf",
-                "20",
+                str(int(LOCAL_CRF)),
                 "-pix_fmt",
                 "yuv420p",
                 "-c:a",
                 "aac",
                 "-b:a",
-                "128k",
+                LOCAL_AUDIO_BITRATE,
                 "-shortest",
                 "-movflags",
                 "+faststart",
@@ -878,7 +932,7 @@ def _reframe_vertical(
         raise RuntimeError(f"could not create temporary video writer for {out_path}")
 
     last_center: Optional[Tuple[int, int]] = None
-    smoothing = 0.15  # how aggressively to chase a new face position
+    smoothing = FACE_SMOOTHING
     frame_failed = False
     try:
         while True:
@@ -943,7 +997,7 @@ def _reframe_vertical(
         "-c:a",
         "aac",
         "-b:a",
-        "128k",
+        LOCAL_AUDIO_BITRATE,
         "-map",
         "0:v:0",
         "-map",
@@ -1126,11 +1180,11 @@ def _apply_audio_processing(
         # captions are timed against the video causes an audible/caption drift;
         # jump-cuts handle intentional interior edits with an explicit timeline
         # map before captions are burned.
-        audio_filters.append("silenceremove=stop_periods=1:stop_duration=0.35:stop_threshold=-40dB")
+        audio_filters.append(LOCAL_AUDIO_SILENCE_FILTER)
     if normalize_audio:
-        audio_filters.append("loudnorm=I=-14:TP=-1.5:LRA=11")
+        audio_filters.append(LOCAL_AUDIO_NORMALIZE_FILTER)
     if denoise_audio:
-        audio_filters.append("afftdn=nf=-25")
+        audio_filters.append(LOCAL_AUDIO_DENOISE_FILTER)
     if audio_filters and _has_audio_stream(out_path):
         processed_path = out_path + ".audio.mp4"
         try:
@@ -1150,7 +1204,7 @@ def _apply_audio_processing(
                     "-c:a",
                     "aac",
                     "-b:a",
-                    "128k",
+                    LOCAL_AUDIO_BITRATE,
                     "-movflags",
                     "+faststart",
                     processed_path,
@@ -1252,13 +1306,13 @@ def _apply_media_extras(
             "-c:v",
             "libx264",
             "-preset",
-            "fast",
+            LOCAL_ENCODE_PRESET,
             "-crf",
-            "20",
+            str(int(LOCAL_CRF)),
             "-c:a",
             "aac",
             "-b:a",
-            "128k",
+            LOCAL_AUDIO_BITRATE,
             "-shortest",
             "-movflags",
             "+faststart",
@@ -1328,13 +1382,13 @@ def _apply_branding(
             "-c:v",
             "libx264",
             "-preset",
-            "fast",
+            LOCAL_ENCODE_PRESET,
             "-crf",
-            "20",
+            str(int(LOCAL_CRF)),
             "-c:a",
             "aac",
             "-b:a",
-            "128k",
+            LOCAL_AUDIO_BITRATE,
             branded,
         ]
         _run_command(args, check=True)
@@ -1424,13 +1478,13 @@ def _remove_silent_video_with_map(
             "-c:v",
             "libx264",
             "-preset",
-            "fast",
+            LOCAL_ENCODE_PRESET,
             "-crf",
-            "20",
+            str(int(LOCAL_CRF)),
             "-c:a",
             "aac",
             "-b:a",
-            "128k",
+            LOCAL_AUDIO_BITRATE,
             "-movflags",
             "+faststart",
             out_path,
@@ -1444,6 +1498,17 @@ def _remove_silent_video(in_path: str, out_path: str, threshold: str = "-40dB", 
     """Backward-compatible boolean wrapper around the mapped silence cutter."""
     changed, _ = _remove_silent_video_with_map(in_path, out_path, threshold, min_silence)
     return changed
+
+
+def _output_filename(index: int) -> str:
+    try:
+        name = LOCAL_OUTPUT_TEMPLATE.format(index=index, number=index)
+    except (KeyError, IndexError, ValueError, TypeError):
+        name = f"short_{index:02d}.mp4"
+    name = Path(str(name)).name
+    if not name.lower().endswith(".mp4"):
+        name += ".mp4"
+    return name
 
 
 def crop_highlights_local(
@@ -1488,7 +1553,7 @@ def crop_highlights_local(
     for i, h in enumerate(items, 1):
         if cancellation_requested() or (cancel_check and cancel_check()):
             raise RuntimeError("Job cancelled")
-        out_path = os.path.join(out_dir, f"short_{i:02d}.mp4")
+        out_path = os.path.join(out_dir, _output_filename(i))
         if not isinstance(h, dict):
             message = "highlight must be a JSON object"
             print(f"[clip/local] {i} failed: {message}", flush=True)
@@ -1558,12 +1623,12 @@ def crop_highlights_local(
             try:
                 from .visual import extract_thumbnail
 
-                thumbnail_path = os.path.join(out_dir, f"short_{i:02d}.jpg")
+                thumbnail_path = os.path.join(out_dir, Path(_output_filename(i)).with_suffix(".jpg").name)
                 # Extract from the final render so the thumbnail reflects the
                 # selected framing, branding, and multi-cut timeline.
                 extract_thumbnail(
                     out_path,
-                    0.5,
+                    LOCAL_THUMBNAIL_POSITION,
                     thumbnail_path,
                     text=h.get("hook_sentence") or h.get("title") or "",
                 )

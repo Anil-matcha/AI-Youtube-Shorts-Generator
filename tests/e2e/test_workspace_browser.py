@@ -202,3 +202,10 @@ def test_workspace_has_basic_accessibility_names(browser_page: Page) -> None:
         """
     )
     assert violations == []
+
+
+def test_browser_can_reach_real_health_endpoint(browser_page: Page) -> None:
+    """Keep one browser check on the actual server instead of mocked API routes."""
+    response = browser_page.request.get("http://127.0.0.1:18760/api/health")
+    assert response.ok
+    assert response.json()["status"] == "ok"

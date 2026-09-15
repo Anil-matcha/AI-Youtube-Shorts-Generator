@@ -26,6 +26,12 @@ for /f "delims=" %%F in ('where ffmpeg.exe 2^>nul') do if not defined FFMPEG_EXE
 for /f "delims=" %%F in ('where ffprobe.exe 2^>nul') do if not defined FFPROBE_EXE set "FFPROBE_EXE=%%F"
 if not defined FFMPEG_EXE for /r "%LOCALAPPDATA%\Microsoft\WinGet\Packages" %%F in (ffmpeg.exe) do if not defined FFMPEG_EXE set "FFMPEG_EXE=%%F"
 if not defined FFPROBE_EXE for /r "%LOCALAPPDATA%\Microsoft\WinGet\Packages" %%F in (ffprobe.exe) do if not defined FFPROBE_EXE set "FFPROBE_EXE=%%F"
+if not defined FFMPEG_EXE if exist "%USERPROFILE%\scoop\apps\ffmpeg\current\bin\ffmpeg.exe" set "FFMPEG_EXE=%USERPROFILE%\scoop\apps\ffmpeg\current\bin\ffmpeg.exe"
+if not defined FFPROBE_EXE if exist "%USERPROFILE%\scoop\apps\ffmpeg\current\bin\ffprobe.exe" set "FFPROBE_EXE=%USERPROFILE%\scoop\apps\ffmpeg\current\bin\ffprobe.exe"
+if not defined FFMPEG_EXE if exist "C:\ffmpeg\bin\ffmpeg.exe" set "FFMPEG_EXE=C:\ffmpeg\bin\ffmpeg.exe"
+if not defined FFPROBE_EXE if exist "C:\ffmpeg\bin\ffprobe.exe" set "FFPROBE_EXE=C:\ffmpeg\bin\ffprobe.exe"
+if not defined FFMPEG_EXE if exist "%ChocolateyToolsLocation%\ffmpeg\tools\ffmpeg\bin\ffmpeg.exe" set "FFMPEG_EXE=%ChocolateyToolsLocation%\ffmpeg\tools\ffmpeg\bin\ffmpeg.exe"
+if not defined FFPROBE_EXE if exist "%ChocolateyToolsLocation%\ffmpeg\tools\ffmpeg\bin\ffprobe.exe" set "FFPROBE_EXE=%ChocolateyToolsLocation%\ffmpeg\tools\ffmpeg\bin\ffprobe.exe"
 if defined FFMPEG_EXE copy /y "!FFMPEG_EXE!" "dist\ShortsStudio\ffmpeg.exe" >nul
 if defined FFPROBE_EXE copy /y "!FFPROBE_EXE!" "dist\ShortsStudio\ffprobe.exe" >nul
 

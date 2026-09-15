@@ -3,8 +3,8 @@
 Two modes:
   * mode="api"   (default) — MuAPI does download / transcribe / LLM / autocrop.
                               Fast, no local deps, pay-per-call.
-  * mode="local"            — yt-dlp + faster-whisper + OpenAI or Gemini + ffmpeg/opencv.
-                              Self-hosted, LLM_PROVIDER selects OpenAI or Gemini.
+  * mode="local"            — yt-dlp + faster-whisper + OpenAI, Gemini, or Ollama + ffmpeg/opencv.
+                              Self-hosted, LLM_PROVIDER selects the ranking provider.
 """
 
 from typing import Callable, Dict, List, Optional
@@ -24,6 +24,7 @@ from .config import (
     current_llm_usage,
     runtime_credentials,
     runtime_llm_usage,
+    PipelineConfig,
 )
 from .costs import estimate_cost, normalize_usage, rates_from_environment
 from .downloader import download_youtube
@@ -108,8 +109,9 @@ def _run_local(
     _check_cancel(cancel_check)
     _emit(progress, "analyze", "Scanning scenes, faces, and visual changes...")
     try:
-        visual_events = analyze_video(source_path)
+        visual_events = analyze_video(source_path, cancel_check=cancel_check)
     except Exception as exc:
+        _check_cancel(cancel_check)
         print(f"[visual/local] analysis skipped: {exc}", flush=True)
         visual_events = []
 
@@ -130,14 +132,12 @@ def _run_local(
     _check_cancel(cancel_check)
     _emit(progress, "rank", "Ranking viral highlights...")
     provider = str(llm_provider or current_llm_provider() or "openai").strip().lower()
-    llm_configured = (provider == "openai" and bool(current_api_key("openai"))) or (
-        provider == "gemini" and bool(current_api_key("gemini"))
-    )
+    llm_configured = (provider in {"openai", "gemini"} and bool(current_api_key(provider))) or provider == "ollama"
     if LOCAL_HEURISTIC_FALLBACK and not llm_configured:
         _emit(
             progress,
             "rank",
-            "No OpenAI/Gemini key configured; using offline transcript ranking.",
+            "No cloud LLM key configured; using offline transcript ranking.",
         )
         highlights_result = {"highlights": rank_highlights_offline(transcript, num_clips=num_clips)}
     else:
@@ -334,8 +334,8 @@ def generate_shorts(
         fit_mode: crop to fill, or fit the full frame over a blurred background.
         zoom: fit-mode foreground scale from 0.5 (out) to 1.5 (in).
         output_height: local output canvas height in pixels (0 keeps 1920).
-        llm_provider: local ranking provider (`openai` or `gemini`); defaults to
-            ``LLM_PROVIDER`` from the environment.
+        llm_provider: local ranking provider (`openai`, `gemini`, or `ollama`);
+            defaults to ``LLM_PROVIDER`` from the environment.
 
     Returns:
         {
@@ -350,7 +350,8 @@ def generate_shorts(
         num_clips = int(num_clips)
     except (TypeError, ValueError, OverflowError):
         num_clips = 3
-    num_clips = max(1, min(12, num_clips))
+    pipeline_config = PipelineConfig.from_environment()
+    num_clips = max(1, min(pipeline_config.max_clips, num_clips))
     mode = str(mode or "api").strip().lower()
     if mode == "api":
         parsed_source = urlparse(str(youtube_url or "").strip())

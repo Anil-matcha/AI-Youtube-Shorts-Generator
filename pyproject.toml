@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shorts-studio"
-version = "0.10.0"
+dynamic = ["version"]
 description = "Local-first workspace for turning long videos into polished short-form clips"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -41,6 +41,13 @@ dev = [
   "pip-audit==2.10.1",
   "playwright==1.55.0",
 ]
+
+[tool.setuptools.dynamic]
+version = { attr = "shorts_generator.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["shorts_generator*", "web*"]
+exclude = ["output*", "release*", "build*", "installer*", "assets*"]
 
 [tool.ruff]
 target-version = "py310"

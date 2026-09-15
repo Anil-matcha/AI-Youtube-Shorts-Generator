@@ -7,11 +7,24 @@ offline-friendly; ``auto`` falls back to OpenCV's bundled Haar cascade.
 
 from __future__ import annotations
 
+import importlib
+import logging
 import sys
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Tuple
 
-from ..config import FACE_DETECTOR, FACE_DNN_CONFIG, FACE_DNN_MODEL
+from ..config import (
+    FACE_DETECTOR,
+    FACE_DETECTOR_PLUGIN,
+    FACE_DNN_CONFIG,
+    FACE_DNN_CONFIDENCE,
+    FACE_DNN_MODEL,
+    FACE_HAAR_MIN_NEIGHBORS,
+    FACE_HAAR_MIN_SIZE,
+    FACE_HAAR_SCALE_FACTOR,
+)
+
+_logger = logging.getLogger(__name__)
 
 FaceBox = Tuple[int, int, int, int]
 FaceDetector = Callable[[Any], List[FaceBox]]
@@ -34,17 +47,29 @@ def _model_paths() -> Tuple[Path, Path]:
 def _haar_detector(cv2: Any) -> Optional[FaceDetector]:
     """Build the bundled Haar detector used when no DNN model is installed."""
     try:
-        cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        cascades = [cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")]
+        profile = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml")
+        if not profile.empty():
+            cascades.append(profile)
     except Exception:
         return None
-    if cascade.empty():
+    cascades = [cascade for cascade in cascades if not cascade.empty()]
+    if not cascades:
         return None
 
     def detect(frame: Any) -> List[FaceBox]:
         try:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            values = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
-            return [(int(box[0]), int(box[1]), int(box[2]), int(box[3])) for box in values]
+            boxes = []
+            for cascade in cascades:
+                values = cascade.detectMultiScale(
+                    gray,
+                    scaleFactor=FACE_HAAR_SCALE_FACTOR,
+                    minNeighbors=FACE_HAAR_MIN_NEIGHBORS,
+                    minSize=(FACE_HAAR_MIN_SIZE, FACE_HAAR_MIN_SIZE),
+                )
+                boxes.extend((int(box[0]), int(box[1]), int(box[2]), int(box[3])) for box in values)
+            return boxes
         except Exception:
             return []
 
@@ -74,7 +99,7 @@ def _dnn_detector(cv2: Any, model_path: Path, config_path: Path) -> Optional[Fac
             boxes: List[FaceBox] = []
             for index in range(detections.shape[2]):
                 confidence = float(detections[0, 0, index, 2])
-                if confidence < 0.45:
+                if confidence < FACE_DNN_CONFIDENCE:
                     continue
                 x1, y1, x2, y2 = (detections[0, 0, index, 3:7] * [width, height, width, height]).astype("int")
                 left, top = max(0, x1), max(0, y1)
@@ -97,9 +122,19 @@ def create_face_detector(cv2: Any) -> Optional[FaceDetector]:
     """
     mode = str(FACE_DETECTOR or "auto").strip().lower()
     if mode not in {"auto", "dnn", "haar", "off", "none"}:
+        _logger.warning("Unknown SHORTS_FACE_DETECTOR=%s; using auto", mode)
         mode = "auto"
     if mode in {"off", "none"}:
         return None
+    if FACE_DETECTOR_PLUGIN:
+        try:
+            module_name, function_name = FACE_DETECTOR_PLUGIN.split(":", 1)
+            plugin = getattr(importlib.import_module(module_name), function_name)
+            detector = plugin(cv2)
+            if callable(detector):
+                return detector
+        except (ImportError, AttributeError, TypeError, ValueError) as exc:
+            _logger.warning("Could not load face detector plugin %s: %s", FACE_DETECTOR_PLUGIN, exc)
     model_path, config_path = _model_paths()
     if mode in {"auto", "dnn"}:
         detector = _dnn_detector(cv2, model_path, config_path)

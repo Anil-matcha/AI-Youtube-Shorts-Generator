@@ -23,6 +23,13 @@ from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 
 from web.models import ClipUpdate
 from web.security import redact_structure
+from shorts_generator.config import LOCAL_THUMBNAIL_POSITION, runtime_job_control
+from web.feature_routes import _safe_backup_value
+
+
+def _safe_export_short(studio: Any, value: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep export manifests portable without shipping signed media URLs."""
+    return _safe_backup_value(redact_structure(value))
 
 
 router = APIRouter()
@@ -88,7 +95,7 @@ def update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
     old = dict(raw_shorts[index])
     try:
         if mode == "local":
-            from shorts_generator.local.clipper import _media_duration, crop_clip_local
+            from shorts_generator.local.clipper import _media_duration, _output_filename, crop_clip_local
 
             old_path = str(old.get("clip_url") or "")
             safe_old_path = studio._job_media_path(job, old_path)
@@ -96,7 +103,7 @@ def update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
                 out_path = str(safe_old_path)
             else:
                 job_output_dir = str(studio._job_output_dir(job))
-                out_path = str(Path(job_output_dir).expanduser().resolve() / f"short_{index + 1:02d}.mp4")
+                out_path = str(Path(job_output_dir).expanduser().resolve() / _output_filename(index + 1))
             undo_path = out_path + ".undo.mp4"
             render_path = out_path + ".regenerate.mp4"
             timeline_map = []
@@ -105,40 +112,45 @@ def update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
             intro = _local_asset(studio, job, request.get("intro"), "intro")
             outro = _local_asset(studio, job, request.get("outro"), "outro")
             Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-            crop_clip_local(
-                str(source),
-                update.start_time,
-                update.end_time,
-                str(request.get("aspect_ratio") or "9:16"),
-                render_path,
-                caption_segments=studio._dict_items(transcript.get("segments")),
-                burn_captions=studio.LOCAL_BURN_CAPTIONS,
-                caption_style=style,
-                remove_silence=bool(request.get("remove_silence")),
-                normalize_audio=bool(request.get("normalize_audio")),
-                denoise_audio=bool(request.get("denoise_audio")),
-                remove_filler_words=bool(request.get("remove_filler_words")),
-                caption_position=update.caption_position,
-                caption_font=update.caption_font,
-                caption_size=update.caption_size,
-                caption_color=update.caption_color,
-                background_music=background_music,
-                watermark=watermark,
-                auto_reframe=bool(request.get("auto_reframe", True)),
-                crop_position=update.crop_position,
-                fit_mode=update.fit_mode,
-                zoom=update.zoom,
-                layout=update.layout,
-                output_height=update.output_height,
-                intro=intro,
-                outro=outro,
-                jump_cuts=bool(request.get("jump_cuts")),
-                cuts=[cut.model_dump() for cut in update.cuts],
-                music_volume=update.music_volume if update.music_volume is not None else float(request.get("music_volume", 0.18)),
-                music_fade_in=update.music_fade_in if update.music_fade_in is not None else float(request.get("music_fade_in", 0.0)),
-                music_fade_out=update.music_fade_out if update.music_fade_out is not None else float(request.get("music_fade_out", 0.0)),
-                timeline_map=timeline_map,
-            )
+            with studio._media_operation(job_id), runtime_job_control(
+                cancel_check=lambda: studio._job_cancelled(job_id),
+                register_process=lambda process: studio._register_job_process(job_id, process),
+                unregister_process=lambda process: studio._unregister_job_process(job_id, process),
+            ):
+                crop_clip_local(
+                    str(source),
+                    update.start_time,
+                    update.end_time,
+                    str(request.get("aspect_ratio") or "9:16"),
+                    render_path,
+                    caption_segments=studio._dict_items(transcript.get("segments")),
+                    burn_captions=studio.LOCAL_BURN_CAPTIONS,
+                    caption_style=style,
+                    remove_silence=bool(request.get("remove_silence")),
+                    normalize_audio=bool(request.get("normalize_audio")),
+                    denoise_audio=bool(request.get("denoise_audio")),
+                    remove_filler_words=bool(request.get("remove_filler_words")),
+                    caption_position=update.caption_position,
+                    caption_font=update.caption_font,
+                    caption_size=update.caption_size,
+                    caption_color=update.caption_color,
+                    background_music=background_music,
+                    watermark=watermark,
+                    auto_reframe=bool(request.get("auto_reframe", True)),
+                    crop_position=update.crop_position,
+                    fit_mode=update.fit_mode,
+                    zoom=update.zoom,
+                    layout=update.layout,
+                    output_height=update.output_height,
+                    intro=intro,
+                    outro=outro,
+                    jump_cuts=bool(request.get("jump_cuts")),
+                    cuts=[cut.model_dump() for cut in update.cuts],
+                    music_volume=update.music_volume if update.music_volume is not None else float(request.get("music_volume", 0.18)),
+                    music_fade_in=update.music_fade_in if update.music_fade_in is not None else float(request.get("music_fade_in", 0.0)),
+                    music_fade_out=update.music_fade_out if update.music_fade_out is not None else float(request.get("music_fade_out", 0.0)),
+                    timeline_map=timeline_map,
+                )
             if not os.path.isfile(render_path):
                 raise RuntimeError("clip renderer did not produce an output file")
             # Keep the current clip and its previous undo snapshot untouched
@@ -180,7 +192,7 @@ def update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
                 from shorts_generator.local.visual import extract_thumbnail
 
                 thumb = str(Path(out_path).with_suffix(".jpg"))
-                extract_thumbnail(out_path, 0.5, thumb)
+                extract_thumbnail(out_path, LOCAL_THUMBNAIL_POSITION, thumb)
                 replacement["thumbnail_path"] = thumb
             except Exception:
                 pass
@@ -284,7 +296,12 @@ def undo_clip(job_id: str, index: int) -> Dict[str, Any]:
             try:
                 from shorts_generator.local.visual import extract_thumbnail
 
-                extract_thumbnail(str(clip_path), 0.5, str(thumbnail), text=restored.get("hook_sentence") or restored.get("title") or "")
+                extract_thumbnail(
+                    str(clip_path),
+                    LOCAL_THUMBNAIL_POSITION,
+                    str(thumbnail),
+                    text=restored.get("hook_sentence") or restored.get("title") or "",
+                )
                 restored["thumbnail_path"] = str(thumbnail)
             except Exception:
                 # A missing optional OpenCV dependency must not make a valid
@@ -357,7 +374,8 @@ def get_waveform(job_id: str, bins: int = 240) -> Dict[str, Any]:
         from shorts_generator.local.clipper import _find_ffmpeg
 
         ffmpeg = _find_ffmpeg()
-        probe = subprocess.run(
+        probe = studio._run_media_command(
+            job_id,
             [
                 ffmpeg,
                 "-hide_banner",
@@ -373,9 +391,7 @@ def get_waveform(job_id: str, bins: int = 240) -> Dict[str, Any]:
                 "error",
                 "-",
             ],
-            capture_output=True,
             timeout=90,
-            check=False,
         )
         raw = probe.stdout or b""
         samples = array("h")
@@ -420,11 +436,11 @@ def export_job(job_id: str):
 
     manifest = {
         "job_id": job_id,
-        "request": redact_structure(request),
+        "request": _safe_backup_value(redact_structure(request)),
         "mode": result.get("mode"),
-        "source_video_url": redact_structure(result.get("source_video_url")),
+        "source_video_url": None,
         "shorts": [
-            redact_structure({
+            _safe_export_short(studio, {
                 **{key: value for key, value in short.items() if key != "clip_url"},
                 "creator_metadata": studio._creator_metadata(short),
             })
@@ -465,7 +481,10 @@ def export_job(job_id: str):
             if path and path.is_file():
                 bundle.write(path, arcname=f"clips/short_{index:02d}.mp4")
             elif str(short.get("clip_url") or "").startswith(("http://", "https://")):
-                bundle.writestr(f"clips/short_{index:02d}.remote.txt", str(short["clip_url"]))
+                bundle.writestr(
+                    f"clips/short_{index:02d}.remote.txt",
+                    "Remote media URL intentionally omitted from this export for privacy.\n",
+                )
             thumbnail = studio._job_media_path(job, short.get("thumbnail_path"))
             if thumbnail and thumbnail.is_file():
                 bundle.write(thumbnail, arcname=f"thumbnails/short_{index:02d}.jpg")
@@ -689,39 +708,44 @@ def preview_clip(job_id: str, update: ClipUpdate) -> Dict[str, Any]:
         }
     render_path = preview_dir / f"preview_{preview_key}.render.mp4"
     try:
-        crop_clip_local(
-            str(source_path),
-            update.start_time,
-            update.end_time,
-            str(request.get("aspect_ratio") or "9:16"),
-            str(render_path),
-            caption_segments=studio._dict_items(transcript.get("segments")),
-            burn_captions=studio.LOCAL_BURN_CAPTIONS,
-            caption_style=style,
-            caption_position=update.caption_position,
-            caption_font=update.caption_font,
-            caption_size=update.caption_size,
-            caption_color=update.caption_color,
-            remove_silence=bool(request.get("remove_silence")),
-            normalize_audio=bool(request.get("normalize_audio")),
-            denoise_audio=bool(request.get("denoise_audio")),
-            remove_filler_words=bool(request.get("remove_filler_words")),
-            background_music=background_music,
-            watermark=watermark,
-            auto_reframe=bool(request.get("auto_reframe", True)),
-            crop_position=update.crop_position,
-            fit_mode=update.fit_mode,
-            zoom=update.zoom,
-            layout=update.layout,
-            output_height=min(960, update.output_height or 1920),
-            intro=intro,
-            outro=outro,
-            jump_cuts=bool(request.get("jump_cuts")),
-            cuts=[cut.model_dump() for cut in update.cuts],
-            music_volume=update.music_volume,
-            music_fade_in=update.music_fade_in,
-            music_fade_out=update.music_fade_out,
-        )
+        with studio._media_operation(job_id), runtime_job_control(
+            cancel_check=lambda: studio._job_cancelled(job_id),
+            register_process=lambda process: studio._register_job_process(job_id, process),
+            unregister_process=lambda process: studio._unregister_job_process(job_id, process),
+        ):
+            crop_clip_local(
+                str(source_path),
+                update.start_time,
+                update.end_time,
+                str(request.get("aspect_ratio") or "9:16"),
+                str(render_path),
+                caption_segments=studio._dict_items(transcript.get("segments")),
+                burn_captions=studio.LOCAL_BURN_CAPTIONS,
+                caption_style=style,
+                caption_position=update.caption_position,
+                caption_font=update.caption_font,
+                caption_size=update.caption_size,
+                caption_color=update.caption_color,
+                remove_silence=bool(request.get("remove_silence")),
+                normalize_audio=bool(request.get("normalize_audio")),
+                denoise_audio=bool(request.get("denoise_audio")),
+                remove_filler_words=bool(request.get("remove_filler_words")),
+                background_music=background_music,
+                watermark=watermark,
+                auto_reframe=bool(request.get("auto_reframe", True)),
+                crop_position=update.crop_position,
+                fit_mode=update.fit_mode,
+                zoom=update.zoom,
+                layout=update.layout,
+                output_height=min(960, update.output_height or 1920),
+                intro=intro,
+                outro=outro,
+                jump_cuts=bool(request.get("jump_cuts")),
+                cuts=[cut.model_dump() for cut in update.cuts],
+                music_volume=update.music_volume,
+                music_fade_in=update.music_fade_in,
+                music_fade_out=update.music_fade_out,
+            )
         if not render_path.is_file():
             raise RuntimeError("preview renderer did not produce an output file")
         os.replace(render_path, cached)

@@ -23,8 +23,8 @@ Focus = Literal["balanced", "educational", "funny", "story", "controversial", "v
 FitMode = Literal["crop", "fit_blur"]
 Layout = Literal["single", "split"]
 WhisperModel = Literal["tiny", "base", "small", "medium", "large-v3"]
-WhisperDevice = Literal["auto", "cpu", "cuda"]
-LLMProvider = Literal["openai", "gemini"]
+WhisperDevice = Literal["auto", "cpu", "cuda", "mps", "directml", "rocm"]
+LLMProvider = Literal["openai", "gemini", "ollama"]
 
 _HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 _MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$")

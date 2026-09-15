@@ -9,6 +9,7 @@ import requests
 
 from .config import (
     MUAPI_BASE_URL,
+    MUAPI_RETRY_DELAY_SECONDS,
     POLL_INTERVAL_SECONDS,
     POLL_TIMEOUT_SECONDS,
     require_api_key,
@@ -37,6 +38,14 @@ def _headers() -> Dict[str, str]:
     }
 
 
+def _sleep_with_cancel(delay: float) -> None:
+    deadline = time.monotonic() + max(0.0, float(delay))
+    while time.monotonic() < deadline:
+        if cancellation_requested():
+            raise MuAPIError("Job cancelled")
+        time.sleep(min(0.25, max(0.01, deadline - time.monotonic())))
+
+
 def submit(endpoint: str, payload: Dict[str, Any], retries: int = 3) -> str:
     """POST to /api/v1/{endpoint} and return the request_id; retry transient errors."""
     if not isinstance(endpoint, str) or not endpoint.strip():
@@ -61,8 +70,12 @@ def submit(endpoint: str, payload: Dict[str, Any], retries: int = 3) -> str:
                     raise MuAPIError(f"{endpoint} submit failed [{resp.status_code}]: {_safe_response_text(resp)}")
                 last_err = MuAPIError(f"transient HTTP {resp.status_code}")
                 if attempt + 1 < retries:
-                    delay = min(30.0, max(1.0, float(resp.headers.get("Retry-After") or 2.0) * (2**attempt)))
-                    time.sleep(delay)
+                    try:
+                        retry_hint = float(resp.headers.get("Retry-After") or MUAPI_RETRY_DELAY_SECONDS)
+                    except (TypeError, ValueError, OverflowError):
+                        retry_hint = MUAPI_RETRY_DELAY_SECONDS
+                    delay = min(30.0, max(0.25, retry_hint * (2**attempt)))
+                    _sleep_with_cancel(delay)
                     continue
                 raise last_err
             data = resp.json()
@@ -75,7 +88,7 @@ def submit(endpoint: str, payload: Dict[str, Any], retries: int = 3) -> str:
         except (requests.Timeout, requests.ConnectionError) as e:
             last_err = e
             if attempt + 1 < retries:
-                time.sleep(min(30.0, 2.0 * (2**attempt)))
+                _sleep_with_cancel(min(30.0, MUAPI_RETRY_DELAY_SECONDS * (2**attempt)))
     raise MuAPIError(f"{endpoint} submit failed after {retries} retries: {last_err}")
 
 
@@ -101,7 +114,7 @@ def fetch_result(request_id: str, retries: int = 3) -> Dict[str, Any]:
                     raise MuAPIError(f"poll failed [{resp.status_code}]: {_safe_response_text(resp)}")
                 last_err = MuAPIError(f"transient HTTP {resp.status_code}")
                 if attempt + 1 < retries:
-                    time.sleep(min(30.0, 2.0 * (2**attempt)))
+                    _sleep_with_cancel(min(30.0, MUAPI_RETRY_DELAY_SECONDS * (2**attempt)))
                     continue
                 raise last_err
             data = resp.json()
@@ -111,7 +124,7 @@ def fetch_result(request_id: str, retries: int = 3) -> Dict[str, Any]:
         except (requests.Timeout, requests.ConnectionError) as e:
             last_err = e
             if attempt + 1 < retries:
-                time.sleep(min(30.0, 2.0 * (2**attempt)))
+                _sleep_with_cancel(min(30.0, MUAPI_RETRY_DELAY_SECONDS * (2**attempt)))
     raise MuAPIError(f"poll failed after {retries} retries: {last_err}")
 
 
@@ -149,7 +162,7 @@ def poll(
         if status in ("failed", "error"):
             raise MuAPIError(f"{label or request_id} failed: {data}")
 
-        time.sleep(interval)
+        _sleep_with_cancel(interval)
 
     raise MuAPIError(f"{label or request_id} timed out after {timeout}s")
 

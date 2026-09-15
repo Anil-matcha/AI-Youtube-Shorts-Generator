@@ -47,12 +47,12 @@ Open **Settings** in the sidebar (or use the top-bar **Settings** button) and cl
 Settings also includes:
 
 - **Appearance:** Dark, Light, or system theme, five accent palettes, plus a reduced-motion preference.
-- **API credentials:** Enter a MuAPI key for API mode, or optional OpenAI/Gemini keys for local highlight ranking. The fields are masked, session-only, and excluded from saved jobs.
+- **API credentials:** Enter a MuAPI key for API mode, or select OpenAI, Gemini, or local Ollama for highlight ranking. Hosted keys are masked, session-only, and excluded from saved jobs.
 - **Rendering defaults:** Local/API mode, output resolution, caption preset, aspect ratio, face framing, and a default save folder for new projects.
 - **Storage & privacy:** The active output path, free space, an **Open output folder** shortcut, and a local-first processing explanation.
 - **Backups, cleanup & brand presets:** Download or restore metadata backups, inspect storage usage, clean old generated caches, and save reusable caption/branding/music settings.
 - **Runtime diagnostics:** FFmpeg, FFprobe, Whisper, CUDA, disk space, and concurrency status with a refresh action.
-- **Provider controls:** Select the local OpenAI/Gemini model and temperature per project, enter current OpenAI/Gemini/MuAPI rates, and receive a transparent estimate only when the provider supplies usage; prices are never hard-coded.
+- **Provider controls:** Select the local OpenAI/Gemini/Ollama provider, model, and temperature per project, enter current OpenAI/Gemini/MuAPI rates, and receive a transparent estimate only when the provider supplies usage; prices are never hard-coded.
 
 ## Docker deployment
 

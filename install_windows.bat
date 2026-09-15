@@ -10,6 +10,12 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+python -c "import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)"
+if errorlevel 1 (
+  echo Python 3.10 or newer is required. Found an older Python on PATH.
+  pause
+  exit /b 1
+)
 
 if not exist "venv\Scripts\python.exe" (
   echo Creating virtual environment...

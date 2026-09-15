@@ -222,6 +222,11 @@ def main() -> None:
     url = f"http://127.0.0.1:{port}"
     config = uvicorn.Config("web.app:app", host="127.0.0.1", port=port, log_level="warning", access_log=False)
     server = uvicorn.Server(config)
+    # Let the in-app Quit button coordinate the same graceful shutdown path as
+    # SIGTERM instead of terminating the packaged process abruptly.
+    from web import app as studio_app
+
+    studio_app.bind_server(server)
     thread = threading.Thread(target=server.run, name="shorts-studio-server", daemon=True)
     thread.start()
     if not _wait_for_server(url):

@@ -18,7 +18,7 @@ echo Installing local dependencies...
 venv\Scripts\python.exe -m pip install -r requirements-local.txt
 if errorlevel 1 goto :failed
 echo Installing PyTorch (CUDA-enabled wheel)...
-venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+venv\Scripts\python.exe -m pip install -r requirements-gpu.txt --extra-index-url https://download.pytorch.org/whl/cu124
 if errorlevel 1 goto :failed
 echo.
 echo GPU setup complete. In Shorts Studio choose Whisper device = CUDA GPU.

@@ -29,13 +29,14 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.cors import CORSMiddleware
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).resolve().parent / "static"
@@ -43,7 +44,7 @@ STATIC = Path(__file__).resolve().parent / "static"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from shorts_generator import generate_shorts  # noqa: E402
+from shorts_generator import __version__, generate_shorts  # noqa: E402
 from shorts_generator.config import (  # noqa: E402
     GEMINI_API_KEY,
     LLM_PROVIDER,
@@ -58,6 +59,7 @@ from shorts_generator.config import (  # noqa: E402
     runtime_credentials,
     runtime_job_control,
 )
+from shorts_generator.local.downloader import validate_remote_source  # noqa: E402
 from shorts_generator.costs import rates_from_environment  # noqa: E402
 from web.models import JobRequest, ProviderCostRates  # noqa: E402
 from web.security import (  # noqa: E402
@@ -80,21 +82,24 @@ from web.job_store import JobStore  # noqa: E402
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _shutdown_requested.clear()
+    _job_store.reopen()
     _ensure_job_executor()
-    if _auto_resume:
-        # Recovery is a bounded metadata pass; enqueue recovered work before
-        # accepting requests so the SQLite queue is authoritative from the
-        # first client connection. Actual rendering runs in the worker pool.
-        _resume_interrupted_jobs()
     try:
+        if _auto_resume:
+            # Recovery is a bounded metadata pass; enqueue recovered work before
+            # accepting requests so the SQLite queue is authoritative from the
+            # first client connection. Actual rendering runs in the worker pool.
+            _resume_interrupted_jobs()
         yield
     finally:
         _shutdown_job_executor()
+        _job_store.close()
 
 
 app = FastAPI(
     title="Shorts Studio",
-    version="0.10.0",
+    version=__version__,
     description="Local-first video highlight extraction, editing, and export workspace.",
     contact={"name": "Shorts Studio", "url": "https://github.com/wiifhub/AI-Youtube-Shorts-Generator"},
     license_info={"name": "MIT"},
@@ -112,6 +117,20 @@ app.include_router(system_router)
 app.include_router(feature_router, prefix="/api")
 app.include_router(job_router)
 app.include_router(editor_router)
+
+_cors_origins = [
+    origin.strip().rstrip("/")
+    for origin in os.getenv("SHORTS_CORS_ORIGINS", "").split(",")
+    if origin.strip() and origin.strip() != "*"
+]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Shorts-Token", "X-CSRF-Token"],
+    )
 
 _logger = logging.getLogger("shorts_studio")
 
@@ -150,7 +169,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 
 _jobs: Dict[str, Dict[str, Any]] = {}
-_lock = threading.Lock()
+_lock = threading.RLock()
 _cancel_events: Dict[str, threading.Event] = {}
 # UI-supplied credentials live only for the lifetime of an active job.  They
 # are never included in the persisted request, snapshots, metadata, or logs.
@@ -204,9 +223,12 @@ _job_executor: Optional[ThreadPoolExecutor] = None
 _job_futures: Dict[str, Future[Any]] = {}
 _process_lock = threading.RLock()
 _job_processes: Dict[str, Dict[int, Any]] = {}
+_shutdown_requested = threading.Event()
+_bound_server: Any = None
+_media_slots = threading.Semaphore(_positive_int_env("SHORTS_MAX_MEDIA_OPERATIONS", 2))
 _JOB_SCHEMA_VERSION = 2
 
-_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", "0.10.0").strip().lstrip("v") or "0.10.0"
+_APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", __version__).strip().lstrip("v") or __version__
 _GITHUB_REPO = "wiifhub/AI-Youtube-Shorts-Generator"
 _require_signed_updates = os.getenv("SHORTS_REQUIRE_SIGNED_UPDATES", "true").strip().lower() in {"1", "true", "yes", "on"}
 _max_update_bytes = _positive_int_env("SHORTS_MAX_UPDATE_MB", 4096) * 1024 * 1024
@@ -286,9 +308,17 @@ async def security_middleware(request: Request, call_next: Any):
     or the secure session cookie issued by ``/api/auth/login``.
     """
     path = request.url.path
-    public = path in {"/api/health", "/api/auth/status", "/api/auth/login"} or not path.startswith("/api/")
+    public = path in {"/api/health", "/healthz", "/api/auth/status", "/api/auth/login"} or not path.startswith("/api/")
     if auth_enabled() and not public and not authorized(request):
         return error_response("Authentication required", "auth_required", 401)
+    if auth_enabled() and request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and request.cookies.get("shorts_token"):
+        origin = request.headers.get("origin") or request.headers.get("referer")
+        # SameSite=Strict is the primary protection; this origin check covers
+        # deployments that place the UI behind a reverse proxy.
+        if origin:
+            parsed_origin = urlparse(origin)
+            if parsed_origin.netloc and parsed_origin.netloc != request.url.netloc:
+                return error_response("Cross-site mutation blocked", "csrf_failed", 403)
     if path.startswith("/api/") and path not in {"/api/health", "/api/auth/status"}:
         limiter = _rate_limiter
         limit = None
@@ -301,7 +331,18 @@ async def security_middleware(request: Request, call_next: Any):
         allowed, retry_after = limiter.allow(f"{client_key(request)}:{path}", limit)
         if not allowed:
             return rate_limit_response(retry_after)
-    return await call_next(request)
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'",
+    )
+    if os.getenv("SHORTS_STRUCTURED_LOGS", "false").strip().lower() in {"1", "true", "yes", "on"}:
+        _logger.info("request method=%s path=%s status=%s", request.method, path, response.status_code)
+    return response
 
 
 def _safe_transcript_duration(transcript: Any) -> float:
@@ -408,6 +449,7 @@ def _persist_job_locked(job: Dict[str, Any]) -> None:
     available for human inspection and the metadata backup format.
     """
     _jobs_dir.mkdir(parents=True, exist_ok=True)
+    _job_store.reopen()
     job["schema_version"] = _JOB_SCHEMA_VERSION
     job["updated_at"] = time.time()
     _job_store.save(job)
@@ -418,6 +460,92 @@ def _persist_job_locked(job: Dict[str, Any]) -> None:
         encoding="utf-8",
     )
     os.replace(temporary, path)
+
+
+def _job_cancelled(job_id: str) -> bool:
+    """Return true for explicit cancellation or coordinated application stop."""
+    if _shutdown_requested.is_set():
+        return True
+    with _lock:
+        event = _cancel_events.get(str(job_id))
+        job = _jobs.get(str(job_id))
+        return bool(event and event.is_set()) or str((job or {}).get("status")) == "cancelled"
+
+
+@contextmanager
+def _media_operation(job_id: str):
+    """Bound waveform/preview work and make it cancel-aware like jobs."""
+    while True:
+        if _job_cancelled(job_id):
+            raise RuntimeError("Job cancelled")
+        if _media_slots.acquire(timeout=0.25):
+            break
+    try:
+        if _job_cancelled(job_id):
+            raise RuntimeError("Job cancelled")
+        yield
+    finally:
+        _media_slots.release()
+
+
+def _run_media_command(job_id: str, args: List[str], timeout: float = 90.0) -> subprocess.CompletedProcess[Any]:
+    """Run an editor subprocess with process tracking, timeout, and cancel support."""
+    with _media_operation(job_id):
+        process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        _register_job_process(job_id, process)
+        started = time.monotonic()
+        try:
+            while True:
+                if _job_cancelled(job_id):
+                    _terminate_job_processes(job_id)
+                    raise RuntimeError("Job cancelled")
+                if time.monotonic() - started > timeout:
+                    _terminate_job_processes(job_id)
+                    raise RuntimeError("media operation timed out")
+                try:
+                    stdout, stderr = process.communicate(timeout=0.25)
+                    return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+                except subprocess.TimeoutExpired:
+                    continue
+        finally:
+            _unregister_job_process(job_id, process)
+
+
+def bind_server(server: Any) -> None:
+    """Bind the packaged Uvicorn server so the shutdown route can stop it."""
+    global _bound_server
+    _bound_server = server
+
+
+def _request_shutdown() -> Dict[str, Any]:
+    """Stop accepting work, persist interrupted jobs, and terminate children."""
+    _shutdown_requested.set()
+    interrupted: List[str] = []
+    with _lock:
+        for job_id, job in _jobs.items():
+            if str(job.get("status")) not in {"queued", "running"}:
+                continue
+            job["status"] = "interrupted"
+            job["stage"] = "interrupted"
+            job["message"] = "Interrupted while Shorts Studio was shutting down; it can be resumed."
+            job["error"] = None
+            job["checkpoint"] = {"stage": "interrupted", "progress": job.get("progress", 0), "message": job["message"]}
+            _append_job_log(job, "interrupted", job["message"])
+            _persist_job_locked(job)
+            event = _cancel_events.setdefault(job_id, threading.Event())
+            event.set()
+            future = _job_futures.get(job_id)
+            if future:
+                future.cancel()
+            interrupted.append(job_id)
+    for job_id in interrupted:
+        _terminate_job_processes(job_id)
+    if _bound_server is not None:
+        try:
+            _bound_server.should_exit = True
+        except Exception:
+            pass
+    return {"status": "shutting_down", "interrupted_jobs": len(interrupted)}
 
 
 def _load_persisted_jobs() -> None:
@@ -787,8 +915,8 @@ def _runtime_credentials_from_headers(
             values[key] = cleaned
     if llm_provider is not None:
         provider = str(llm_provider).strip().lower()
-        if provider not in {"openai", "gemini"}:
-            raise HTTPException(400, "LLM provider must be openai or gemini")
+        if provider not in {"openai", "gemini", "ollama"}:
+            raise HTTPException(400, "LLM provider must be openai, gemini, or ollama")
         values["llm_provider"] = provider
     return values
 
@@ -864,7 +992,16 @@ def _validate_mode_capabilities(req: JobRequest) -> None:
 
 def _validate_local_paths(req: JobRequest) -> None:
     """Keep a remotely reachable worker from reading arbitrary host paths."""
-    if req.mode != "local" or _allow_external_paths:
+    if req.mode != "local":
+        return
+    source = str(req.url or "").strip()
+    parsed = urlparse(source)
+    if parsed.scheme.lower() in {"http", "https"}:
+        try:
+            validate_remote_source(source)
+        except ValueError as exc:
+            raise HTTPException(400, f"remote source is not allowed: {exc}") from exc
+    if _allow_external_paths:
         return
     allowed_root = _output_root.resolve()
 
@@ -882,8 +1019,6 @@ def _validate_local_paths(req: JobRequest) -> None:
         if must_exist and not candidate.is_file():
             raise HTTPException(400, f"{label} does not exist: {value}")
 
-    source = str(req.url or "").strip()
-    parsed = urlparse(source)
     if parsed.scheme.lower() not in {"http", "https"}:
         local_source = source
         if parsed.scheme.lower() == "file":
@@ -908,10 +1043,7 @@ def _ensure_job_executor() -> ThreadPoolExecutor:
 
 def _shutdown_job_executor() -> None:
     global _job_executor
-    with _process_lock:
-        active_job_ids = list(_job_processes)
-    for job_id in active_job_ids:
-        _terminate_job_processes(job_id)
+    _request_shutdown()
     executor = _job_executor
     _job_executor = None
     if executor is not None:
@@ -994,7 +1126,7 @@ def _run_job(
 ) -> None:
     slot_acquired = False
     with _lock:
-        cancel_event = _cancel_events.setdefault(job_id, threading.Event())
+        _cancel_events.setdefault(job_id, threading.Event())
     stage_weights = {
         "queued": 0,
         "download": 15,
@@ -1010,7 +1142,7 @@ def _run_job(
     def progress(stage: str, message: str) -> None:
         with _lock:
             job = _jobs[job_id]
-            if _cancel_events.get(job_id) and _cancel_events[job_id].is_set():
+            if _job_cancelled(job_id):
                 raise RuntimeError("Job cancelled")
             job["stage"] = stage
             job["message"] = message
@@ -1032,10 +1164,12 @@ def _run_job(
             _persist_job_locked(job)
 
     try:
-        _job_slots.acquire()
-        slot_acquired = True
+        while not slot_acquired:
+            if _job_cancelled(job_id):
+                raise RuntimeError("Job cancelled")
+            slot_acquired = _job_slots.acquire(timeout=0.25)
         with _lock:
-            if job_id in _jobs and _jobs[job_id].get("status") != "cancelled":
+            if job_id in _jobs and _jobs[job_id].get("status") not in {"cancelled", "interrupted"}:
                 _jobs[job_id]["status"] = "running"
                 _jobs[job_id]["progress"] = 0
                 _jobs[job_id]["eta_seconds"] = None
@@ -1053,7 +1187,7 @@ def _run_job(
             _persist_job_locked(_jobs[job_id])
         supplied = dict(credentials or {})
         with runtime_job_control(
-            cancel_check=cancel_event.is_set,
+            cancel_check=lambda: _job_cancelled(job_id),
             register_process=lambda process: _register_job_process(job_id, process),
             unregister_process=lambda process: _unregister_job_process(job_id, process),
         ):
@@ -1102,7 +1236,7 @@ def _run_job(
                     music_fade_in=req.music_fade_in,
                     music_fade_out=req.music_fade_out,
                     cuts=[cut.model_dump() for cut in req.cuts],
-                    cancel_check=cancel_event.is_set,
+                    cancel_check=lambda: _job_cancelled(job_id),
                     cost_rates=_load_cost_rates(),
                 )
         if not isinstance(result, dict):
@@ -1142,7 +1276,7 @@ def _run_job(
             progress("metadata", f"Could not write metadata.json: {exc}")
         with _lock:
             job = _jobs[job_id]
-            if job.get("status") == "cancelled":
+            if job.get("status") in {"cancelled", "interrupted"} or _shutdown_requested.is_set():
                 _cleanup_job_temporary_files(job)
                 return
             job["status"] = "done"
@@ -1159,7 +1293,13 @@ def _run_job(
             job = _jobs.get(job_id)
             if not job:
                 return
-            if job.get("status") == "cancelled":
+            if job.get("status") in {"cancelled", "interrupted"} or _shutdown_requested.is_set():
+                if _shutdown_requested.is_set() and job.get("status") == "running":
+                    job["status"] = "interrupted"
+                    job["stage"] = "interrupted"
+                    job["message"] = "Interrupted while Shorts Studio was shutting down; it can be resumed."
+                    job["error"] = None
+                    _persist_job_locked(job)
                 _cleanup_job_temporary_files(job)
                 return
             safe_error = _redact_log_text(str(exc), job_id)
@@ -1192,8 +1332,8 @@ def _enqueue_job(
     _validate_local_paths(req)
     if req.llm_provider is not None:
         provider = str(req.llm_provider).strip().lower()
-        if provider not in {"openai", "gemini"}:
-            raise HTTPException(400, "LLM provider must be openai or gemini")
+        if provider not in {"openai", "gemini", "ollama"}:
+            raise HTTPException(400, "LLM provider must be openai, gemini, or ollama")
         req.llm_provider = provider
     supplied_credentials = dict(credentials or {})
     # The JSON field is the durable project setting; accept the header as a
@@ -1344,9 +1484,9 @@ def _json_file_size(path: Path) -> int:
 def _transcript_cache_files() -> List[Path]:
     """Find renderer-owned transcript sidecars under the configured output."""
     files: List[Path] = []
-    if not _output_root.is_dir():
+    if not _jobs_dir.is_dir():
         return files
-    for item in _output_root.rglob("*"):
+    for item in _jobs_dir.rglob("*"):
         if not item.is_file():
             continue
         name = item.name.lower()
@@ -1529,7 +1669,11 @@ def _setup_report() -> Dict[str, Any]:
     local_modules = {name: bool(importlib.util.find_spec(name)) for name in ("yt_dlp", "faster_whisper", "cv2")}
     provider = str(LLM_PROVIDER or "openai").strip().lower()
     provider_key = (
-        bool(OPENAI_API_KEY) if provider == "openai" else bool(GEMINI_API_KEY) if provider == "gemini" else False
+        bool(OPENAI_API_KEY)
+        if provider == "openai"
+        else bool(GEMINI_API_KEY)
+        if provider == "gemini"
+        else provider == "ollama"
     )
     warnings = []
     if not ffmpeg:
@@ -1541,7 +1685,7 @@ def _setup_report() -> Dict[str, Any]:
         warnings.append("Local dependencies missing: " + ", ".join(missing_local) + ". Install requirements-local.txt before rendering.")
     if free_gb < _min_free_gb:
         warnings.append(f"Only {free_gb:.2f} GB of free disk space is available.")
-    if provider not in {"openai", "gemini"}:
+    if provider not in {"openai", "gemini", "ollama"}:
         warnings.append(f"Unknown LLM_PROVIDER={provider!r}; offline ranking will be used.")
     return {
         "first_run": not bool(state.get("setup_dismissed")),

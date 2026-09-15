@@ -13,7 +13,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
-from ..config import LOCAL_OUTPUT_DIR, LOCAL_WHISPER_DEVICE, LOCAL_WHISPER_MODEL, cancellation_requested
+from ..config import (
+    LOCAL_AUTO_SELECT_WHISPER_MODEL,
+    LOCAL_OUTPUT_DIR,
+    LOCAL_WHISPER_DEVICE,
+    LOCAL_WHISPER_MODEL,
+    cancellation_requested,
+)
 
 _MODEL_LOCK = threading.Lock()
 
@@ -196,8 +202,12 @@ def _load_srt_cache(cache_path: Path) -> Dict:
 
 def _resolve_device(requested: Optional[str] = None) -> str:
     requested = str(requested or LOCAL_WHISPER_DEVICE).strip().lower()
-    if requested not in {"auto", "cpu", "cuda"}:
-        raise ValueError("Whisper device must be auto, cpu, or cuda")
+    if requested not in {"auto", "cpu", "cuda", "mps", "directml", "rocm"}:
+        raise ValueError("Whisper device must be auto, cpu, cuda, mps, directml, or rocm")
+    if requested in {"mps", "directml", "rocm"}:
+        raise RuntimeError(
+            f"{requested.upper()} is detected as a host accelerator, but faster-whisper currently supports CPU/CUDA here; choose cpu or cuda."
+        )
     if requested == "cuda":
         if not _cuda_ready():
             raise RuntimeError(
@@ -209,6 +219,30 @@ def _resolve_device(requested: Optional[str] = None) -> str:
     if _cuda_ready():
         return "cuda"
     return "cpu"
+
+
+def _resolve_model_name(requested: Optional[str], device: str) -> str:
+    """Select a model conservatively from available accelerator memory."""
+    selected = str(requested or LOCAL_WHISPER_MODEL).strip().lower() or "base"
+    if selected not in {"auto", "tiny", "base", "small", "medium", "large-v3"}:
+        raise ValueError("Whisper model must be tiny, base, small, medium, large-v3, or auto")
+    if selected != "auto" and (requested is not None or not LOCAL_AUTO_SELECT_WHISPER_MODEL):
+        return selected
+    memory_gb = 0.0
+    if device == "cuda":
+        try:
+            import torch  # type: ignore
+
+            memory_gb = float(torch.cuda.get_device_properties(0).total_memory) / (1024**3)
+        except Exception:
+            memory_gb = 0.0
+    if memory_gb >= 12:
+        return "large-v3"
+    if memory_gb >= 8:
+        return "medium"
+    if memory_gb >= 4:
+        return "small"
+    return "base" if device == "cpu" else "tiny"
 
 
 @lru_cache(maxsize=3)
@@ -241,7 +275,7 @@ def transcribe_local(
     if not media_path or not Path(media_path).is_file():
         raise RuntimeError(f"Local media file does not exist: {media_path}")
     selected_device = _resolve_device(device)
-    selected_model = model_name or LOCAL_WHISPER_MODEL
+    selected_model = _resolve_model_name(model_name, selected_device)
     signature = _cache_signature(media_path, language, selected_model, selected_device)
     cache_key = signature[:32]
     cache_path = _transcript_cache_path(media_path, cache_dir=cache_dir, cache_key=cache_key)

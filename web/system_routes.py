@@ -11,6 +11,7 @@ from __future__ import annotations
 import hmac
 import importlib
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -24,10 +25,11 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from web.models import AuthLogin, OpenFolderRequest, SetupStateUpdate
-from web.security import authorized, auth_enabled, configured_token, error_response, redact_text
+from web.security import LoginAttemptLimiter, authorized, auth_enabled, client_key, configured_token, error_response, redact_text
 
 
 router = APIRouter()
+_login_attempts = LoginAttemptLimiter()
 
 
 def _studio() -> Any:
@@ -50,8 +52,19 @@ def auth_status(request: Request) -> Dict[str, Any]:
 def auth_login(request: Request, credentials: AuthLogin) -> JSONResponse:
     """Exchange the configured token for a short-lived HttpOnly session cookie."""
     expected = configured_token()
+    key = client_key(request)
+    retry_after = _login_attempts.blocked(key)
+    if retry_after:
+        response = error_response("Too many failed login attempts; try again later.", "auth_locked", 429)
+        response.headers["Retry-After"] = str(retry_after)
+        return response
     if not expected or not hmac.compare_digest(credentials.token, expected):
-        return error_response("Invalid access token", "auth_invalid", 401)
+        retry_after = _login_attempts.failed(key)
+        response = error_response("Invalid access token", "auth_invalid", 401)
+        if retry_after:
+            response.headers["Retry-After"] = str(retry_after)
+        return response
+    _login_attempts.success(key)
     response = JSONResponse({"status": "authenticated"})
     response.set_cookie(
         "shorts_token",
@@ -61,6 +74,7 @@ def auth_login(request: Request, credentials: AuthLogin) -> JSONResponse:
         secure=request.url.scheme == "https",
         samesite="strict",
     )
+    response.set_cookie("shorts_csrf", secrets.token_urlsafe(24), max_age=86400, httponly=False, secure=request.url.scheme == "https", samesite="strict")
     return response
 
 
@@ -68,6 +82,7 @@ def auth_login(request: Request, credentials: AuthLogin) -> JSONResponse:
 def auth_logout() -> JSONResponse:
     response = JSONResponse({"status": "logged_out"})
     response.delete_cookie("shorts_token")
+    response.delete_cookie("shorts_csrf")
     return response
 
 
@@ -175,8 +190,13 @@ def get_upload(filename: str) -> FileResponse:
 
 @router.get("/api/health")
 def health() -> Dict[str, str]:
-    studio = _studio()
-    return {"status": "ok", "output": str(Path(studio.LOCAL_OUTPUT_DIR).resolve())}
+    return {"status": "ok"}
+
+
+@router.get("/healthz", tags=["system"])
+def healthz() -> Dict[str, str]:
+    """Minimal probe for load balancers that must not disclose local paths."""
+    return {"status": "ok"}
 
 
 @router.get("/api/setup")
@@ -207,25 +227,28 @@ def dismiss_setup(update: Optional[SetupStateUpdate] = None) -> Dict[str, Any]:
 
 
 @router.post("/api/shutdown")
-def shutdown() -> Dict[str, str]:
+def shutdown() -> Dict[str, Any]:
     """Stop this local-only server (used by the portable launcher Quit button)."""
-    threading.Timer(0.25, lambda: os._exit(0)).start()
-    return {"status": "shutting_down"}
+    return _studio()._request_shutdown()
 
 
 @router.get("/api/system")
 def system_status() -> Dict[str, Any]:
     studio = _studio()
-    usage = shutil.disk_usage(studio._output_root)
+    try:
+        usage = shutil.disk_usage(studio._output_root)
+        free_disk_gb = round(usage.free / (1024**3), 2)
+    except OSError:
+        free_disk_gb = 0.0
     return {
         "ffmpeg": bool(shutil.which("ffmpeg")),
         "whisper_model": studio.LOCAL_WHISPER_MODEL,
         "whisper_device": studio.LOCAL_WHISPER_DEVICE,
         "gpu": studio.gpu_status(),
         "whisper_models": ["tiny", "base", "small", "medium", "large-v3"],
-        "whisper_devices": ["auto", "cpu", "cuda"],
+        "whisper_devices": ["auto", "cpu", "cuda", "mps", "directml", "rocm"],
         "captions_enabled": studio.LOCAL_BURN_CAPTIONS,
-        "free_disk_gb": round(usage.free / (1024**3), 2),
+        "free_disk_gb": free_disk_gb,
         "max_concurrent_jobs": studio._max_concurrent_jobs,
         "setup": studio._setup_report(),
     }

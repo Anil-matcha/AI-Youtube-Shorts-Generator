@@ -5,12 +5,14 @@ from __future__ import annotations
 import math
 import os
 from pathlib import Path
-from typing import Dict, List
+from typing import Callable, Dict, List, Optional
 
 from .face_detection import create_face_detector
 
 
-def analyze_video(media_path: str, sample_seconds: float = 1.0) -> List[Dict]:
+def analyze_video(
+    media_path: str, sample_seconds: float = 1.0, *, cancel_check: Optional[Callable[[], bool]] = None
+) -> List[Dict]:
     """Find scene-change and face/reaction signals without a second ML model."""
     try:
         import cv2  # type: ignore
@@ -48,6 +50,8 @@ def analyze_video(media_path: str, sample_seconds: float = 1.0) -> List[Dict]:
     frame_index = 0
     try:
         while True:
+            if cancel_check and cancel_check():
+                raise RuntimeError("Job cancelled")
             ok, frame = cap.read()
             if not ok:
                 break

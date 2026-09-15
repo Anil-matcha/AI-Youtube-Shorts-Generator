@@ -52,6 +52,16 @@ jobs:
           python -m pip_audit -r requirements-gpu.txt --progress-spinner off
           python -m pip_audit -r requirements-docker.txt --progress-spinner off
 
+      - name: Generate dependency SBOM
+        run: python -m pip_audit -r requirements.txt --format cyclonedx-json --output sbom-requirements.json --progress-spinner off
+
+      - name: Upload dependency SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-python-${{ matrix.python-version }}
+          path: sbom-requirements.json
+          if-no-files-found: error
+
   windows-smoke:
     name: Windows packaged-runtime smoke
     runs-on: windows-latest
@@ -90,6 +100,12 @@ jobs:
             $process.WaitForExit(10000)
             if (-not $process.HasExited) { throw "Packaged process did not stop after shutdown" }
           } finally { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+
+      - name: Verify package version source
+        shell: pwsh
+        run: |
+          $version = python -c "from shorts_generator import __version__; print(__version__)"
+          if ($version -ne "0.10.1") { throw "Unexpected package version: $version" }
 
   compose:
     name: Validate Docker Compose

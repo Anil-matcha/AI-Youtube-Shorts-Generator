@@ -17,7 +17,17 @@ import re
 from typing import Callable, Dict, List, Optional
 
 from . import muapi
-from .config import record_llm_usage
+from .config import (
+    HIGHLIGHT_CHUNK_OVERLAP_SECONDS,
+    HIGHLIGHT_CHUNK_SIZE_SECONDS,
+    HIGHLIGHT_DEDUPE_OVERLAP,
+    HIGHLIGHT_MAX_CLIPS,
+    HIGHLIGHT_MAX_API_ATTEMPTS,
+    HIGHLIGHT_MAX_DURATION_SECONDS,
+    HIGHLIGHT_MIN_DURATION_SECONDS,
+    LOCAL_LLM_TIMEOUT_SECONDS,
+    record_llm_usage,
+)
 
 
 LLMFn = Callable[[str], str]
@@ -65,11 +75,11 @@ Respond ONLY with valid JSON (no markdown, no explanation):
 {{"highlights":[{{"title":"string","start_time":float,"end_time":float,"score":int,"hook_sentence":"string","virality_reason":"string"}}]}}"""
 
 
-CHUNK_SIZE_SECONDS = 1200  # 20-min chunks for long videos
-LONG_VIDEO_THRESHOLD = 1800  # chunk videos longer than 30 min
-CHUNK_OVERLAP_SECONDS = 60
-GPT_CALL_TIMEOUT_SECONDS = 300  # cap LLM polls at 5 min — a wedged call should fail fast
-MAX_HIGHLIGHT_API_ATTEMPTS = 3
+CHUNK_SIZE_SECONDS = HIGHLIGHT_CHUNK_SIZE_SECONDS
+LONG_VIDEO_THRESHOLD = max(CHUNK_SIZE_SECONDS, 1800.0)
+CHUNK_OVERLAP_SECONDS = min(CHUNK_SIZE_SECONDS - 1, HIGHLIGHT_CHUNK_OVERLAP_SECONDS)
+GPT_CALL_TIMEOUT_SECONDS = LOCAL_LLM_TIMEOUT_SECONDS
+MAX_HIGHLIGHT_API_ATTEMPTS = HIGHLIGHT_MAX_API_ATTEMPTS
 
 
 def call_muapi_llm(prompt: str) -> str:
@@ -107,12 +117,24 @@ def _parse_json_loose(raw: str) -> Dict:
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return {"highlights": parsed}
+        if not isinstance(parsed, dict):
+            raise ValueError("model JSON must be an object or highlight array")
+        return parsed
     except json.JSONDecodeError:
         start = text.find("{")
         end = text.rfind("}")
         if start != -1 and end != -1:
-            return json.loads(text[start : end + 1])
+            parsed = json.loads(text[start : end + 1])
+            return parsed if isinstance(parsed, dict) else {"highlights": parsed}
+        array_start = text.find("[")
+        array_end = text.rfind("]")
+        if array_start != -1 and array_end != -1:
+            parsed = json.loads(text[array_start : array_end + 1])
+            if isinstance(parsed, list):
+                return {"highlights": parsed}
         raise
 
 
@@ -156,6 +178,14 @@ def _sanitize_highlights(raw_highlights: object, duration: float) -> List[Dict]:
             start = min(start, max_end)
             end = min(end, max_end)
             if end <= start:
+                continue
+
+        clip_duration = end - start
+        if clip_duration < HIGHLIGHT_MIN_DURATION_SECONDS:
+            continue
+        if clip_duration > HIGHLIGHT_MAX_DURATION_SECONDS:
+            end = min(start + HIGHLIGHT_MAX_DURATION_SECONDS, max_end)
+            if end - start < HIGHLIGHT_MIN_DURATION_SECONDS:
                 continue
 
         cleaned.append(
@@ -267,13 +297,13 @@ def call_highlight_api(
     focus: str = "balanced",
 ) -> Dict:
     duration = max(0.0, _coerce_float(duration, default=0.0))
-    num_clips = max(1, min(12, _coerce_int(num_clips, default=3)))
+    num_clips = max(1, min(HIGHLIGHT_MAX_CLIPS, _coerce_int(num_clips, default=3)))
     content_info = content_info if isinstance(content_info, dict) else {}
     # Ask for ~2× the user's target so dedupe has headroom, but cap so the model
     # doesn't have to generate a huge JSON payload (which times out gpt-5-mini).
     target = max(num_clips * 2, 5)
     natural_max = max(2 if is_chunk else 3, int(duration / 90))
-    min_clips = min(target, natural_max, 8)
+    min_clips = min(target, natural_max, HIGHLIGHT_MAX_CLIPS)
     focus_instructions = {
         "balanced": "balance hooks, emotion, novelty, conflict, and practical value",
         "educational": "favor clear teachable insights, steps, facts, and useful takeaways",
@@ -343,7 +373,7 @@ def dedupe_highlights(highlights: List[Dict]) -> List[Dict]:
             latest_start = max(h_start, _coerce_float(k.get("start_time"), default=-1.0))
             earliest_end = min(h_end, _coerce_float(k.get("end_time"), default=-1.0))
             overlap = earliest_end - latest_start
-            if overlap > 0 and overlap > 0.5 * h_dur:
+            if overlap > 0 and overlap > HIGHLIGHT_DEDUPE_OVERLAP * h_dur:
                 overlapping = True
                 break
         if not overlapping:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import os
 import re
 import threading
@@ -14,7 +15,6 @@ from typing import Any, Deque, Dict, Optional, Tuple
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-
 def error_response(message: str, code: str, status_code: int, **extra: Any) -> JSONResponse:
     payload: Dict[str, Any] = {"error": str(message), "code": str(code)}
     payload.update(extra)
@@ -22,7 +22,7 @@ def error_response(message: str, code: str, status_code: int, **extra: Any) -> J
 
 
 _SECRET_PATTERNS = (
-    re.compile(r"(?i)\b(?:sk-[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{8,}|mu_[A-Za-z0-9_-]{8,})\b"),
+    re.compile(r"(?i)\b(?:sk-[A-Za-z0-9_-]{8,}|sk-ant-[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{8,}|mu_[A-Za-z0-9_-]{8,}|co_[A-Za-z0-9_-]{8,}|hf_[A-Za-z0-9_-]{8,})\b"),
     re.compile(r"(?i)\b(?:bearer|token|api[_ -]?key|secret)[=: ]+[A-Za-z0-9._~+/=-]{8,}"),
 )
 
@@ -30,7 +30,7 @@ _SECRET_PATTERNS = (
 def _configured_secrets() -> Tuple[str, ...]:
     """Return runtime secrets that must never appear in API responses/logs."""
     values = []
-    for name in ("SHORTS_API_TOKEN", "MUAPI_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"):
+    for name in ("SHORTS_API_TOKEN", "MUAPI_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "OLLAMA_API_KEY"):
         value = os.getenv(name, "").strip()
         if len(value) >= 4:
             values.append(value)
@@ -83,6 +83,9 @@ def _candidate_tokens(request: Request) -> Tuple[str, ...]:
 
 
 def authorized(request: Request) -> bool:
+    # API tokens are compared using a constant-time SHA-256 digest; the token
+    # itself is never persisted, which is the appropriate boundary for a
+    # high-entropy bearer credential rather than a password.
     expected = configured_token()
     if not expected:
         return True
@@ -95,6 +98,9 @@ def authorized(request: Request) -> bool:
 
 class SlidingWindowLimiter:
     """Small process-local limiter; deployment docs recommend one worker."""
+
+    # This process-local limiter is intentionally bounded; multi-process
+    # deployments should put a shared gateway limiter in front of the app.
 
     def __init__(self, limit: int = 600, window_seconds: float = 60.0) -> None:
         self.limit = max(1, int(limit))
@@ -122,12 +128,70 @@ class SlidingWindowLimiter:
 
 
 def client_key(request: Request) -> str:
-    trust_proxy = os.getenv("SHORTS_TRUST_PROXY_HEADERS", "false").strip().lower() in {"1", "true", "yes", "on"}
-    if trust_proxy:
+    trusted = os.getenv("SHORTS_TRUSTED_PROXIES", "").strip()
+    remote = request.client.host if request.client else ""
+    trusted_remote = False
+    if trusted and remote:
+        try:
+            remote_ip = ipaddress.ip_address(remote)
+            trusted_remote = any(remote_ip in ipaddress.ip_network(item.strip(), strict=False) for item in trusted.split(",") if item.strip())
+        except ValueError:
+            trusted_remote = False
+    if trusted_remote:
         forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+        try:
+            ipaddress.ip_address(forwarded)
+        except ValueError:
+            forwarded = ""
         if forwarded:
             return forwarded
-    return request.client.host if request.client else "local"
+    return remote or "local"
+
+
+class LoginAttemptLimiter:
+    """Bounded exponential lockout for invalid login attempts."""
+
+    def __init__(self, limit: int = 5, window_seconds: float = 300.0) -> None:
+        self.limit = max(1, limit)
+        self.window_seconds = max(60.0, window_seconds)
+        self._lock = threading.Lock()
+        self._attempts: Dict[str, Deque[float]] = defaultdict(deque)
+
+    def blocked(self, key: str) -> int:
+        now = time.monotonic()
+        with self._lock:
+            bucket = self._attempts[key]
+            cutoff = now - self.window_seconds
+            while bucket and bucket[0] <= cutoff:
+                bucket.popleft()
+            if len(bucket) < self.limit:
+                return 0
+            exponent = min(6, len(bucket) - self.limit + 1)
+            return max(1, min(900, 2**exponent))
+
+    def failed(self, key: str) -> int:
+        now = time.monotonic()
+        with self._lock:
+            bucket = self._attempts[key]
+            cutoff = now - self.window_seconds
+            while bucket and bucket[0] <= cutoff:
+                bucket.popleft()
+            bucket.append(now)
+            if len(self._attempts) > 2048:
+                stale = [name for name, values in self._attempts.items() if not values or values[-1] <= cutoff]
+                for name in stale:
+                    self._attempts.pop(name, None)
+        return self.blocked(key)
+
+    def success(self, key: str) -> None:
+        with self._lock:
+            self._attempts.pop(key, None)
+
+
+def sign_webhook_payload(payload: bytes | str, secret: str) -> str:
+    """Create an interoperable HMAC-SHA256 webhook signature."""
+    raw = payload.encode("utf-8") if isinstance(payload, str) else bytes(payload)
+    return hmac.new(str(secret).encode("utf-8"), raw, hashlib.sha256).hexdigest()
 
 
 def rate_limit_response(retry_after: int) -> JSONResponse:
