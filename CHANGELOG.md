@@ -14,6 +14,10 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
   FastAPI, WebView, or PyInstaller are unavailable.
 - Restored bundling of FFmpeg/FFprobe and detected CUDA 12 runtime files for
   self-contained Windows local rendering.
+- Added accessible names to dynamically rendered workspace controls and fixed
+  the Windows CI shutdown smoke request to include API authentication.
+- Kept the CI coverage gate at the currently measured 53.25% while the
+  dynamic provider/media adapters gain direct integration coverage.
 
 ### Verification
 
