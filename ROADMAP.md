@@ -1,6 +1,6 @@
 # Shorts Studio Upgrade Roadmap
 
-**Current local tag:** v0.11.3 (release candidate; local gate passed)
+**Current local tag:** v0.11.3 (published; local and remote gates passed)
 **Next implementation target:** v1.0.0 (production-ready API and migration work)
 **Last updated:** 2026-09-15
 
@@ -12,8 +12,8 @@ unordered TODO list.
 
 ## v0.11.3 — Windows Local Runtime Hardening
 
-The v0.11.3 follow-up contains the packaged Local runtime hardening and is
-ready for the release-gate evidence below.
+The v0.11.3 follow-up contains the packaged Local runtime hardening and was
+published after the release-gate evidence below.
 
 - [x] **T-034 Packaged Local runtime completeness** — Require and collect the
       dynamically imported Whisper/CTranslate2, yt-dlp, OpenCV, and optional
@@ -24,7 +24,8 @@ ready for the release-gate evidence below.
 - [x] Record the certificate-backed signing decision: the owner certificate is
       not configured, so this release is explicitly unsigned and hash-verified.
 - [x] Verify the source repository is clean before tagging and publishing.
-- [ ] Publish v0.11.3 after the final remote CI checks are green.
+- [x] Publish v0.11.3 after the final remote CI checks are green; the stable
+      GitHub release and matching Docker tag are published.
 
 ---
 
