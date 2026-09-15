@@ -1,7 +1,7 @@
 # Shorts Studio Upgrade Roadmap
 
-**Current released version:** v0.10.0  
-**Implementation target:** v0.10.1 (complete locally; release intentionally pending)  
+**Current local tag:** v0.10.1 (not pushed or publicly released)
+**Next implementation target:** v0.10.2 (frontend refresh and maintainability)
 **Last updated:** 2026-09-15
 
 The actionable implementation list now lives in [TODO.md](TODO.md). This
@@ -32,10 +32,11 @@ unordered TODO list.
 
 ---
 
-## v0.10.1 — Quality, Safety & Stability (implemented locally)
+## v0.10.1 — Quality, Safety & Stability (tagged locally)
 
-The v0.10.1 code and validation work is complete in this checkout. No tag,
-GitHub release, asset upload, or public version switch has been performed.
+The v0.10.1 code and validation work is complete in this checkout and is
+tagged locally. No push, GitHub release, asset upload, or public version switch
+has been performed.
 
 ### Release gates
 - [x] Complete TODO items T-001 through T-005 (cancellation, SSRF, graceful
@@ -58,7 +59,11 @@ GitHub release, asset upload, or public version switch has been performed.
 
 ---
 
-## v0.10.2 — Frontend Refresh (after v0.10.1)
+## v0.10.2 — Frontend Refresh & Maintainability (next target)
+
+This is the active implementation target after the local v0.10.1 tag. Keep the
+work scoped to the remaining UX and maintainability items below; do not treat
+this planning milestone as released.
 
 ### Verified in v0.10.0
 - [x] Persist dark/light/system theme and accent choices in the browser

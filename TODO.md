@@ -1,14 +1,14 @@
 # Shorts Studio TODO
 
-**Current released version:** v0.10.0  
-**Implementation target:** v0.10.1 (complete locally; release intentionally pending)  
+**Current local tag:** v0.10.1 (not pushed or publicly released)
+**Implementation target:** v0.10.2 (next; planning only)
 **Last reviewed:** 2026-09-15
 
 This is the canonical implementation backlog. Inline `TODO` comments should
 point to an item here; completed capabilities belong in `ROADMAP.md` rather
 than remaining as open TODOs.
 
-## P0 - next patch release (v0.10.1)
+## v0.10.1 completion record
 
 - [x] **T-001 Cancellation UX and semantics** - Added queued/running Cancel
   controls, a distinct cancelled state, cancellation-aware worker admission,
@@ -63,7 +63,10 @@ than remaining as open TODOs.
   and enabled CI SBOM/provenance generation. Authenticode signing remains an
   opt-in release operation requiring the owner's certificate.
 
-## P2 - UX and maintainability
+## P2 - v0.10.2 UX and maintainability
+
+This is the active v0.10.2 scope. Implement these items with code, tests, and
+the relevant runtime smoke check before marking them complete.
 
 - [ ] **T-030 Frontend modularization** - Split `web/static/app.js` into state,
   API, UI, editor, and timeline modules; fix response encoding at the server;
