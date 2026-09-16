@@ -37,9 +37,8 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
 - Beta regression suite: 89 passed, 4 browser-only skips.
 - Ruff, strict mypy, compile checks, and Node syntax checks pass locally.
 - Final beta packaged smoke, unsigned signing decision, SHA-256 hashes, and
-  remote Quality Checks run `35045547870` are green. No v1.0.0 tag or public
-  release has been created; the final clean-HEAD check follows the evidence
-  commit.
+  remote Quality Checks run `35045809040` are green. No v1.0.0 tag or public
+  release has been created; the beta branch remains pre-release.
 
 ## [0.11.3] - 2026-09-15
 

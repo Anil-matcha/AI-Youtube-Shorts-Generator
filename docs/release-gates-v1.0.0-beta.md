@@ -57,10 +57,12 @@ any signed public release.
 
 ## Final remote/repository gates
 
-- Remote Quality Checks run `35045547870`: success. The four Python versions,
+- Remote Quality Checks run `35045809040`: success. The four Python versions,
   Windows packaged-runtime smoke, Docker runtime, Compose, Helm, arm64
   dependency, and Playwright/accessibility jobs all passed.
-- The beta implementation commit tested by that run is `b74b7d2`.
-- Final evidence commit, branch SHA comparison, and clean worktree: updated
-  after this evidence commit is pushed and its final CI pass completes.
+- The final beta branch commit tested by that run is `5c769b8`.
+- At the time of that run, the local and remote `beta/v1.0.0` branch SHA matched
+  `5c769b8`; the worktree was clean.
+- The tracking-doc update that follows is documentation-only and does not
+  change packaged runtime code or the recorded artifact hashes.
 - No `v1.0.0` tag or public release is permitted by this beta gate.
