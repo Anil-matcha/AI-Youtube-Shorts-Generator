@@ -16,6 +16,7 @@ import hashlib
 import shutil
 import time
 import zipfile
+import requests
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -24,11 +25,18 @@ from fastapi.responses import StreamingResponse
 
 from web.models import BrandPreset, CleanupRequest, ProviderCostRates, PublishRequest, TranscriptUpdate
 from web.security import redact_structure
+from web.migrations import CURRENT_SCHEMA_VERSION, PROJECT_FORMAT_VERSION, migrate_job_record
 from web.publishing import (
     PLATFORMS,
     build_publish_plan,
     complete_youtube_oauth,
+    complete_instagram_oauth,
+    complete_tiktok_oauth,
+    direct_platform_status,
     platform_specs,
+    publish_direct,
+    start_instagram_oauth,
+    start_tiktok_oauth,
     start_youtube_oauth,
     upload_youtube_video,
     youtube_oauth_status,
@@ -353,6 +361,8 @@ def backup_projects(include_media: bool = Query(default=False)) -> StreamingResp
             json.dumps(
                 {
                     "schema_version": studio._JOB_SCHEMA_VERSION,
+                    "project_format_version": PROJECT_FORMAT_VERSION,
+                    "migration_target": CURRENT_SCHEMA_VERSION,
                     "created_at": time.time(),
                     "include_media": bool(include_media),
                     "media_count": len(media_files),
@@ -364,6 +374,7 @@ def backup_projects(include_media: bool = Query(default=False)) -> StreamingResp
         bundle.writestr("jobs.json", json.dumps(records, ensure_ascii=False, indent=2, default=str))
         bundle.writestr("studio_state.json", json.dumps(studio._setup_state(), ensure_ascii=False, indent=2))
         bundle.writestr("brand_presets.json", json.dumps(studio._load_brand_presets(), ensure_ascii=False, indent=2))
+        bundle.writestr("provider_costs.json", json.dumps(studio._cost_rates_public(), ensure_ascii=False, indent=2))
         if include_media:
             manifest = []
             for arcname, media_path, size in media_files:
@@ -447,12 +458,19 @@ async def restore_projects(file: UploadFile = File(...), confirm: bool = Query(d
         archive.close()
         raise HTTPException(400, "jobs.json must contain an array")
     imported = 0
+    migrated_jobs = 0
     restored_media_files = 0
     include_media = bool(backup_meta.get("include_media"))
     with studio._lock:
         for raw in records:
             if not isinstance(raw, dict):
                 continue
+            try:
+                raw, migration_steps = migrate_job_record(raw, target=studio._JOB_SCHEMA_VERSION)
+            except ValueError as exc:
+                archive.close()
+                raise HTTPException(409, {"error": str(exc), "code": "migration_required"}) from exc
+            migrated_jobs += len(migration_steps)
             job_id = str(raw.get("id") or "")
             if not studio._job_id_pattern.fullmatch(job_id) or job_id in studio._jobs:
                 continue
@@ -503,6 +521,10 @@ async def restore_projects(file: UploadFile = File(...), confirm: bool = Query(d
             presets = json.loads(archive.read("brand_presets.json"))
             if isinstance(presets, dict):
                 studio._save_brand_presets({str(k): v for k, v in presets.items() if isinstance(v, dict)})
+        if "provider_costs.json" in names:
+            rates = json.loads(archive.read("provider_costs.json"))
+            if isinstance(rates, dict):
+                studio._save_cost_rates(ProviderCostRates.model_validate(rates))
     except (OSError, ValueError, TypeError) as exc:
         raise HTTPException(400, f"backup settings are invalid: {exc}") from exc
     finally:
@@ -512,6 +534,7 @@ async def restore_projects(file: UploadFile = File(...), confirm: bool = Query(d
         "imported_jobs": imported,
         "skipped_existing": len(records) - imported,
         "restored_media_files": restored_media_files,
+        "migrations_applied": migrated_jobs,
     }
 
 
@@ -610,7 +633,7 @@ def _publishing_payload(short: Dict[str, Any], platform: str) -> Dict[str, Any]:
     studio = _studio()
     metadata = studio._creator_metadata(short)
     spec = PLATFORMS[platform]
-    oauth_status = youtube_oauth_status() if platform == "youtube_shorts" else {"configured": False, "authorized": False}
+    oauth_status = direct_platform_status().get(platform, {"configured": False, "authorized": False})
     return {
         "platform": platform,
         "label": spec.label,
@@ -623,7 +646,9 @@ def _publishing_payload(short: Dict[str, Any], platform: str) -> Dict[str, Any]:
         "clip_url": short.get("play_url") or short.get("clip_url"),
         "upload_url": spec.upload_url,
         "authorization_url": spec.authorization_url,
-        "requires_manual_upload": True,
+        "requires_manual_upload": not bool(oauth_status.get("authorized")) or spec.requires_public_media,
+        "direct_api": spec.direct_api,
+        "requires_public_media_url": spec.requires_public_media,
         "oauth_status": oauth_status,
         "token_storage": "disabled",
     }
@@ -632,11 +657,13 @@ def _publishing_payload(short: Dict[str, Any], platform: str) -> Dict[str, Any]:
 @router.get("/publishing/platforms", tags=["projects"])
 def publishing_platforms() -> Dict[str, Any]:
     """List supported provider handoffs without requesting credentials."""
+    statuses = direct_platform_status()
     return {
         "platforms": platform_specs(),
-        "automatic_upload": True,
+        "automatic_upload": any(bool(item.get("authorized")) for item in statuses.values()),
         "approval_required": True,
-        "youtube": youtube_oauth_status(),
+        "youtube": statuses.get("youtube_shorts", youtube_oauth_status()),
+        "direct": statuses,
         "token_storage": "process_memory_only",
     }
 
@@ -656,8 +683,31 @@ def publishing_payloads(job_id: str, platform: Optional[str] = Query(default=Non
     return {
         "job_id": job_id,
         "items": {name: [_publishing_payload(short, name) for short in shorts] for name in selected},
-        "notice": "Shorts Studio prepares metadata and official upload links; upload and OAuth consent remain under your control.",
+        "notice": "Review every plan before publishing. Direct uploads use official platform APIs and keep tokens in process memory only.",
     }
+
+
+def _publish_selection(studio: Any, job: Dict[str, Any], request: PublishRequest) -> tuple[int, Dict[str, Any], Optional[Dict[str, Any]]]:
+    shorts = studio._dict_items(job.get("raw_shorts"))
+    variant: Optional[Dict[str, Any]] = None
+    if request.variant_id:
+        variant = next(
+            (item for item in studio._dict_items(job.get("variants")) if str(item.get("id")) == request.variant_id),
+            None,
+        )
+        if variant is None:
+            raise HTTPException(404, {"error": "variant not found", "code": "variant_not_found"})
+        try:
+            index = int(variant.get("clip_index") or 0)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise HTTPException(400, {"error": "variant clip index is invalid", "code": "validation_error"}) from exc
+        if request.clip_index is not None and request.clip_index != index:
+            raise HTTPException(400, {"error": "clip_index does not match variant", "code": "validation_error"})
+    else:
+        index = request.clip_index if request.clip_index is not None else 0
+    if index < 0 or index >= len(shorts):
+        raise HTTPException(404, {"error": "clip not found", "code": "clip_not_found"})
+    return index, shorts[index], variant
 
 
 @router.post("/jobs/{job_id}/publish", tags=["projects"])
@@ -666,21 +716,89 @@ def prepare_publish(job_id: str, request: PublishRequest) -> Dict[str, Any]:
     with studio._lock:
         job = studio._jobs.get(job_id)
         if not job:
-            raise HTTPException(404, "job not found")
+            raise HTTPException(404, {"error": "job not found", "code": "job_not_found"})
         shorts = studio._dict_items(job.get("raw_shorts"))
-    if request.clip_index is not None and request.clip_index >= len(shorts):
-        raise HTTPException(404, "clip not found")
-    selected = shorts if request.clip_index is None else shorts[request.clip_index : request.clip_index + 1]
+        index, short, variant = _publish_selection(studio, job, request)
+    selected = shorts if request.clip_index is None and request.variant_id is None else [short]
     plan = build_publish_plan(request.platform, [_publishing_payload(short, request.platform) for short in selected])
+    status = direct_platform_status().get(request.platform, {})
+    direct_ready = bool(status.get("authorized")) and not (
+        request.platform == "instagram_reels" and not request.media_url
+    )
+    if request.confirm:
+        if request.clip_index is None and request.variant_id is None:
+            raise HTTPException(400, {"error": "choose one clip for a direct upload", "code": "validation_error"})
+        if not status.get("authorized"):
+            raise HTTPException(
+                400,
+                {
+                    "error": f"Connect {plan['label']} before approving a direct upload",
+                    "code": "credentials_required",
+                },
+            )
+        if request.platform == "instagram_reels" and not request.media_url:
+            raise HTTPException(
+                400,
+                {
+                    "error": "Instagram Reels publishing requires a public media_url",
+                    "code": "validation_error",
+                },
+            )
+        if request.publish_at and request.platform != "youtube_shorts":
+            raise HTTPException(
+                400,
+                {
+                    "error": f"{plan['label']} direct publishing does not support scheduling yet",
+                    "code": "validation_error",
+                },
+            )
+        media = studio._job_media_path(job, short.get("clip_url"))
+        if not media or not media.is_file():
+            raise HTTPException(400, {"error": "clip media is unavailable", "code": "media_unavailable"})
+        metadata = variant or studio._creator_metadata(short)
+        title = request.title or str(metadata.get("title") or "Untitled highlight")
+        description = request.description or str(metadata.get("description") or "")
+        tags = request.tags or [tag for tag in str(metadata.get("hashtags") or "").split() if tag]
+        idempotency_key = hashlib.sha256(
+            f"{job_id}:{request.variant_id or index}:{title}:{request.publish_at or ''}:{request.privacy_status}".encode("utf-8")
+        ).hexdigest()[:32]
+        try:
+            uploaded = publish_direct(
+                request.platform,
+                media,
+                title=title,
+                description=description,
+                tags=tags,
+                privacy_status=request.privacy_status,
+                publish_at=request.publish_at,
+                idempotency_key=idempotency_key,
+                media_url=request.media_url,
+            )
+        except (ValueError, OSError, RuntimeError, requests.RequestException) as exc:
+            raise HTTPException(502, {"error": str(exc), "code": "publish_failed"}) from exc
+        with studio._lock:
+            current = studio._jobs.get(job_id)
+            if current is not None:
+                publishing = current.get("publishing")
+                if not isinstance(publishing, list):
+                    publishing = []
+                    current["publishing"] = publishing
+                publishing.append(
+                    {"platform": request.platform, "clip_index": index, "variant_id": request.variant_id, **uploaded, "approved_at": time.time()}
+                )
+                studio._append_job_log(current, "publish", f"Approved {request.platform} upload for clip {index + 1}")
+                studio._persist_job_locked(current)
+        return {"status": "uploaded", "message": f"{plan['label']} upload completed.", "plan": plan, "upload": uploaded}
     return {
-        "status": "ready_for_manual_upload",
+        "status": "approval_required" if direct_ready else "ready_for_manual_upload",
         "platform": request.platform,
         "label": plan["label"],
         "upload_url": plan["upload_url"],
         "authorization_url": plan["authorization_url"],
         "items": plan["items"],
-        "requires_manual_upload": True,
-        "oauth_status": youtube_oauth_status() if request.platform == "youtube_shorts" else {"configured": False, "authorized": False},
+        "requires_manual_upload": not direct_ready,
+        "direct_api": bool(PLATFORMS[request.platform].direct_api),
+        "oauth_status": status,
         "token_storage": "disabled",
     }
 
@@ -688,6 +806,52 @@ def prepare_publish(job_id: str, request: PublishRequest) -> Dict[str, Any]:
 @router.get("/youtube/oauth/status", tags=["projects"])
 def youtube_oauth_status_route() -> Dict[str, Any]:
     return youtube_oauth_status()
+
+
+@router.get("/tiktok/oauth/status", tags=["projects"])
+def tiktok_oauth_status_route() -> Dict[str, Any]:
+    return direct_platform_status()["tiktok"]
+
+
+@router.get("/tiktok/oauth/start", tags=["projects"])
+def tiktok_oauth_start() -> Dict[str, Any]:
+    try:
+        return start_tiktok_oauth()
+    except ValueError as exc:
+        raise HTTPException(400, {"error": str(exc), "code": "oauth_not_configured"}) from exc
+
+
+@router.get("/tiktok/oauth/callback", tags=["projects"])
+def tiktok_oauth_callback(code: Optional[str] = None, state: Optional[str] = None) -> Dict[str, Any]:
+    if not code or not state:
+        raise HTTPException(400, {"error": "TikTok OAuth callback requires code and state", "code": "oauth_invalid"})
+    try:
+        return {"status": "authorized", **complete_tiktok_oauth(code, state)}
+    except (ValueError, RuntimeError, requests.RequestException) as exc:
+        raise HTTPException(400, {"error": str(exc), "code": "oauth_invalid"}) from exc
+
+
+@router.get("/instagram/oauth/status", tags=["projects"])
+def instagram_oauth_status_route() -> Dict[str, Any]:
+    return direct_platform_status()["instagram_reels"]
+
+
+@router.get("/instagram/oauth/start", tags=["projects"])
+def instagram_oauth_start() -> Dict[str, Any]:
+    try:
+        return start_instagram_oauth()
+    except ValueError as exc:
+        raise HTTPException(400, {"error": str(exc), "code": "oauth_not_configured"}) from exc
+
+
+@router.get("/instagram/oauth/callback", tags=["projects"])
+def instagram_oauth_callback(code: Optional[str] = None, state: Optional[str] = None) -> Dict[str, Any]:
+    if not code or not state:
+        raise HTTPException(400, {"error": "Instagram OAuth callback requires code and state", "code": "oauth_invalid"})
+    try:
+        return {"status": "authorized", **complete_instagram_oauth(code, state)}
+    except (ValueError, RuntimeError, requests.RequestException) as exc:
+        raise HTTPException(400, {"error": str(exc), "code": "oauth_invalid"}) from exc
 
 
 @router.get("/youtube/oauth/start", tags=["projects"])

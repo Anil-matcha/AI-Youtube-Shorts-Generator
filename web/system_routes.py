@@ -24,8 +24,10 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+from shorts_generator.config import PipelineConfig
 from web.models import AuthLogin, OpenFolderRequest, SetupStateUpdate
 from web.security import LoginAttemptLimiter, authorized, auth_enabled, client_key, configured_token, error_response, redact_text
+from web.api_contract import API_VERSION, ERROR_CATALOG
 
 
 router = APIRouter()
@@ -194,6 +196,18 @@ def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
+@router.get("/api/errors", tags=["system"])
+def error_catalog() -> Dict[str, Any]:
+    """Return stable v1 error codes and their default status/messages."""
+    return {"api_version": API_VERSION, "errors": ERROR_CATALOG}
+
+
+@router.get("/api/migrations", tags=["system"])
+def migration_status() -> Dict[str, Any]:
+    """Report project migration state; startup applies safe migrations automatically."""
+    return _studio()._migration_status()
+
+
 @router.get("/healthz", tags=["system"])
 def healthz() -> Dict[str, str]:
     """Minimal probe for load balancers that must not disclose local paths."""
@@ -251,6 +265,8 @@ def system_status() -> Dict[str, Any]:
         "captions_enabled": studio.LOCAL_BURN_CAPTIONS,
         "free_disk_gb": free_disk_gb,
         "max_concurrent_jobs": studio._max_concurrent_jobs,
+        "render_workers": PipelineConfig.from_environment().max_ffmpeg_processes,
+        "response_cache_ttl_seconds": studio._response_cache_ttl,
         "setup": studio._setup_report(),
     }
 
@@ -272,6 +288,8 @@ def diagnostics() -> Dict[str, Any]:
         "free_disk_gb": round(shutil.disk_usage(studio._output_root).free / (1024**3), 2),
         "job_counts": counts,
         "captions_enabled": studio.LOCAL_BURN_CAPTIONS,
+        "render_workers": PipelineConfig.from_environment().max_ffmpeg_processes,
+        "response_cache_ttl_seconds": studio._response_cache_ttl,
         "setup": studio._setup_report(),
     }
 

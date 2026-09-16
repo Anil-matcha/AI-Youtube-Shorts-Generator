@@ -104,9 +104,27 @@ asset upload remain intentionally out of scope.
   token handling, approval-first plans, private-by-default/resumable uploads,
   future scheduling validation, idempotency keys, and an audit entry on upload.
 - [x] Explicit merge workflow for separate local highlights
-- [ ] Direct publishing integrations beyond the YouTube foundation, analytics
-  feedback, and A/B variants
+- [x] Direct publishing integrations beyond the YouTube foundation, analytics
+  feedback, and A/B variants - v1 beta now includes official TikTok file
+  uploads, Instagram Reels container publishing, process-memory OAuth,
+  approval/idempotency controls, durable metadata variants, and explainable
+  retention/engagement feedback.
 - [ ] Plugin, mobile, collaboration, and cloud-rendering systems
+
+## v1.0.0 beta production-readiness implementation
+
+- [x] Version all API routes under `/api/v1/` while retaining a deprecated
+  `/api/` compatibility surface with `Sunset` and successor `Link` headers.
+- [x] Publish a stable error catalog and `{error, code}` response contract.
+- [x] Add pure project migrations, startup recovery, dry-run/apply CLI tooling,
+  and versioned metadata/media backup restore.
+- [x] Add OpenAPI aliases, the screenshot-backed user guide, contributing
+  policy, and four accepted ADRs.
+- [x] Add bounded parallel FFmpeg rendering, Whisper progress streaming through
+  SSE, and mutation-invalidated response caching for read-only catalogs.
+- [ ] Before any v1.0.0 release: run a fresh authenticated packaged smoke,
+  record the certificate-backed signing decision, verify remote CI/assets, and
+  confirm a clean repository. This beta branch is not released.
 
 ## Game-changing future bets (v2+)
 

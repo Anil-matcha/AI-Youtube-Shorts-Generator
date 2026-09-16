@@ -15,6 +15,8 @@ import subprocess
 import time
 import math
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from functools import lru_cache
 from importlib import import_module
 from pathlib import Path
@@ -1620,21 +1622,24 @@ def crop_highlights_local(
     transition_duration: float = 0.25,
     *,
     cancel_check: Optional[Callable[[], bool]] = None,
+    max_workers: Optional[int] = None,
+    progress: Optional[Callable[[str, str], None]] = None,
 ) -> List[Dict]:
     out_dir = out_dir or LOCAL_OUTPUT_DIR
     os.makedirs(out_dir, exist_ok=True)
-    results: List[Dict] = []
     items = highlights if isinstance(highlights, (list, tuple)) else []
     caption_offset = _media_duration(intro) if intro else 0.0
-    for i, h in enumerate(items, 1):
+
+    def render_one(index: int, highlight: Any) -> Dict[str, Any]:
+        i = index + 1
+        h = highlight
         if cancellation_requested() or (cancel_check and cancel_check()):
             raise RuntimeError("Job cancelled")
         out_path = os.path.join(out_dir, _output_filename(i))
         if not isinstance(h, dict):
             message = "highlight must be a JSON object"
             print(f"[clip/local] {i} failed: {message}", flush=True)
-            results.append({"clip_url": None, "error": message})
-            continue
+            return {"clip_url": None, "error": message}
         print(f"[clip/local] {i}/{len(items)}: {h.get('title', '(untitled)')}", flush=True)
         preexisting_output = os.path.isfile(out_path)
         try:
@@ -1643,13 +1648,11 @@ def crop_highlights_local(
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
             message = f"invalid highlight timestamps: {exc}"
             print(f"[clip/local] {i} failed: {message}", flush=True)
-            results.append({**h, "clip_url": None, "error": message})
-            continue
+            return {**h, "clip_url": None, "error": message}
         if not math.isfinite(start_time) or not math.isfinite(end_time) or end_time <= start_time:
             message = "invalid highlight timestamps: end_time must be after start_time"
             print(f"[clip/local] {i} failed: {message}", flush=True)
-            results.append({**h, "clip_url": None, "error": message})
-            continue
+            return {**h, "clip_url": None, "error": message}
         captions_for_clip = burn_captions and _has_caption_window(start_time, end_time, caption_segments)
         try:
             timeline_map: List[Tuple[float, float]] = []
@@ -1717,7 +1720,7 @@ def crop_highlights_local(
                 print(f"[thumbnail/local] {i} skipped: {exc}", flush=True)
             if captions_for_clip:
                 item["captions_burned"] = True
-            results.append(item)
+            return item
         except RuntimeError as e:
             if str(e) == "Job cancelled":
                 raise
@@ -1727,7 +1730,7 @@ def crop_highlights_local(
                     _remove_with_retry(out_path)
                 except OSError:
                     pass
-            results.append({**h, "clip_url": None, "error": str(e)})
+            return {**h, "clip_url": None, "error": str(e)}
         except Exception as e:
             print(f"[clip/local] {i} failed: {e}", flush=True)
             if not preexisting_output and os.path.isfile(out_path):
@@ -1735,5 +1738,30 @@ def crop_highlights_local(
                     _remove_with_retry(out_path)
                 except OSError:
                     pass
-            results.append({**h, "clip_url": None, "error": str(e)})
-    return results
+            return {**h, "clip_url": None, "error": str(e)}
+
+    try:
+        workers = int(max_workers if max_workers is not None else os.getenv("SHORTS_RENDER_WORKERS", str(LOCAL_MAX_FFMPEG_PROCS)))
+    except (TypeError, ValueError, OverflowError):
+        workers = LOCAL_MAX_FFMPEG_PROCS
+    workers = max(1, min(len(items) or 1, workers))
+    results: List[Optional[Dict[str, Any]]] = [None] * len(items)
+    if workers == 1 or len(items) <= 1:
+        for index, highlight in enumerate(items):
+            results[index] = render_one(index, highlight)
+            if progress:
+                progress("crop", f"Rendered {index + 1}/{len(items)} clips")
+    else:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="shorts-studio-render") as executor:
+            futures = {
+                executor.submit(copy_context().run, render_one, index, highlight): index
+                for index, highlight in enumerate(items)
+            }
+            completed = 0
+            for future in as_completed(futures):
+                index = futures[future]
+                results[index] = future.result()
+                completed += 1
+                if progress:
+                    progress("crop", f"Rendered {completed}/{len(items)} clips")
+    return [item if item is not None else {"clip_url": None, "error": "clip render did not return a result"} for item in results]

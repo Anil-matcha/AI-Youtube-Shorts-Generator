@@ -11,12 +11,26 @@
   &nbsp; | &nbsp;
   <a href="CHANGELOG.md">Changelog</a>
   &nbsp; | &nbsp;
+  <a href="docs/USER_GUIDE.md">Beta user guide</a>
+  &nbsp; | &nbsp;
+  <a href="CONTRIBUTING.md">Contributing</a>
+  &nbsp; | &nbsp;
   <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases">Downloads</a>
   &nbsp; | &nbsp;
   <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/issues">Support</a>
 </p>
 
 Shorts Studio is an independent desktop and web workspace maintained by **wiifhub**. It takes a YouTube URL or a local video, finds strong moments, gives you control over the framing and captions, and renders ready-to-publish clips. Local mode keeps source media and rendered files on your computer; API mode is available when you prefer hosted processing.
+
+## v1.0.0 beta branch
+
+The production-readiness work is developed on [`beta/v1.0.0`](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/tree/beta/v1.0.0).
+Read the [beta user guide](docs/USER_GUIDE.md) for the versioned API,
+project migrations, optional media backups, direct TikTok/Instagram publishing,
+analytics feedback, and A/B variants.  The interactive OpenAPI/Swagger surface
+is available at `/docs` when the server is running; new integrations should
+use `/api/v1/`.  The older `/api/` routes remain available during the
+deprecation window and advertise their v1 successor in response headers.
 
 ## Windows installation
 
@@ -137,8 +151,10 @@ The theme switch applies to the entire interface. The light Settings view is sho
 - **Review before committing** with a low-resolution preview that uses the same crop, captions, layout, and timestamps as the final render.
 - **Manage projects** with SQLite-backed durable jobs, checkpoints, batch sources, cancellation that terminates active FFmpeg children, retry, resume-after-restart, rename, duplicate, archive, recoverable delete, and Undo last delete.
 - **Export creator assets** as a ZIP containing clips, thumbnails, caption files, `metadata.json`, publishing text, and a manifest.
-- **Reuse and recover work** with named brand presets, storage usage reporting, conservative cache cleanup, and metadata-only backup/restore. Source media and completed clips are preserved by default.
-- **Prepare publishing handoffs** from the Export tab for YouTube Shorts, TikTok, and Instagram Reels, or connect YouTube through PKCE OAuth for a visible approval plan, private-by-default resumable upload, idempotency, and scheduling. Tokens remain in process memory only.
+- **Reuse and recover work** with named brand presets, storage usage reporting, conservative cache cleanup, versioned migrations, and metadata or optional media-inclusive backup/restore. Source media and completed clips are preserved by default.
+- **Publish safely** to YouTube Shorts, TikTok, and Instagram Reels through approval-first official APIs. YouTube and TikTok accept local media; Instagram Reels requires a public HTTPS media URL. Tokens remain in process memory only.
+- **Run experiments** with per-clip A/B metadata variants, append-only platform analytics observations, and explainable retention/engagement feedback.
+- **Render efficiently** with bounded parallel FFmpeg workers, live Whisper progress in the existing SSE stream, and short-lived caching for read-only catalogs.
 - **Use platform export contracts** for YouTube Shorts, TikTok, Instagram Reels, Instagram 4:5, and YouTube 16:9 presets that validate canvas and duration before rendering.
 - **Use GPU controls** to choose Whisper model and Auto/CPU/CUDA device. CUDA is detected at runtime and safely falls back to CPU.
 - **Use dark or light mode** from the top-bar switch. Your choice is saved locally and applies to panels, forms, previews, captions, timelines, dialogs, status states, and the closed screen.
@@ -200,16 +216,18 @@ Copy `.env.example` to `.env` and edit only the settings you need. Never commit 
 | Setting | Purpose | Default |
 | --- | --- | --- |
 | `MUAPI_API_KEY` | Persistent API mode authentication (Settings can supply a session-only key instead) | empty |
-| `LLM_PROVIDER` | Local ranking provider: `openai` or `gemini` | `openai` |
+| `LLM_PROVIDER` | Local ranking provider: `openai`, `gemini`, or `ollama` | `openai` |
 | `OPENAI_API_KEY` / `GEMINI_API_KEY` | Optional persistent local ranking keys (Settings can supply session-only keys instead) | empty |
 | `LOCAL_WHISPER_MODEL` | `tiny`, `base`, `small`, `medium`, or `large-v3` | `base` |
-| `LOCAL_WHISPER_DEVICE` | `auto`, `cpu`, or `cuda` | `auto` |
+| `LOCAL_WHISPER_DEVICE` | `auto`, `cpu`, `cuda`, `mps`, `directml`, or `rocm` | `auto` |
 | `SHORTS_FACE_DETECTOR` | Face tracking mode: `auto`, `dnn`, `haar`, or `off` | `auto` |
 | `SHORTS_FACE_DNN_MODEL` / `SHORTS_FACE_DNN_CONFIG` | Optional OpenCV SSD model/config paths used by the DNN detector | empty (Haar fallback) |
 | `LOCAL_OUTPUT_DIR` | Source-mode project/output root | `output` |
 | `SHORTS_STUDIO_DATA_DIR` | Container/user data root for projects, caches, and update state | unset (Docker: `/data`) |
 | `LOCAL_BURN_CAPTIONS` | Burn captions into local MP4 files | `true` |
 | `LOCAL_HEURISTIC_FALLBACK` | Rank locally without a provider key | `true` |
+| `SHORTS_RENDER_WORKERS` | Maximum parallel local FFmpeg clip workers (`LOCAL_MAX_FFMPEG_PROCS` remains a compatibility alias) | `2` |
+| `SHORTS_RESPONSE_CACHE_SECONDS` | TTL for read-only API catalog responses; `0` disables caching | `10` |
 | `SHORTS_STUDIO_BROWSER` | Force browser fallback instead of WebView2 | `false` |
 | `SHORTS_PORT` | Preferred loopback port | `7860` |
 | `SHORTS_AUTO_RESUME` | Recover interrupted projects on start | `true` |
@@ -226,6 +244,11 @@ Copy `.env.example` to `.env` and edit only the settings you need. Never commit 
 | `SHORTS_TRUST_PROXY_HEADERS` | Use `X-Forwarded-For` for rate-limit identity only behind a trusted proxy | `false` |
 | `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET` | Optional OAuth client for approval-first YouTube uploads; keep secrets in the deployment manager | empty |
 | `YOUTUBE_OAUTH_REDIRECT_URI` | OAuth callback registered in Google Cloud | `http://127.0.0.1:7860/api/youtube/oauth/callback` |
+| `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET` | Optional TikTok Content Posting API OAuth client | empty |
+| `TIKTOK_ACCESS_TOKEN` | Optional pre-authorized TikTok token for a managed deployment; never commit it | empty |
+| `INSTAGRAM_APP_ID` / `INSTAGRAM_APP_SECRET` / `INSTAGRAM_USER_ID` | Optional Meta Graph credentials for Instagram Reels | empty |
+| `INSTAGRAM_ACCESS_TOKEN` | Optional pre-authorized Instagram token for a managed deployment; never commit it | empty |
+| `INSTAGRAM_GRAPH_VERSION` | Meta Graph API version used for Reels | `v25.0` |
 | `SHORTS_REQUIRE_SIGNED_UPDATES` | Require GitHub release digests for in-app updates | `true` |
 | `SHORTS_MAX_UPDATE_MB` | Maximum in-app update asset size | `4096` |
 
@@ -284,18 +307,30 @@ The loopback FastAPI service powers the desktop shell and can be used by local t
 | `GET /api/export-presets` | List platform canvas, frame-rate, and duration contracts |
 | `GET /api/jobs/{id}/export` | Download a project ZIP |
 | `GET /api/storage` / `POST /api/storage/cleanup` | Inspect usage and remove only confirmed, expired generated caches |
-| `GET /api/backup` / `POST /api/restore` | Download or merge a metadata-only project backup |
+| `GET /api/backup` / `POST /api/restore` | Download or merge a versioned metadata backup; `include_media=true` carries bounded generated media |
 | `GET/POST/DELETE /api/brand-presets` | Manage reusable local brand presets |
 | `GET /api/publishing/platforms` | List supported platform handoff adapters |
-| `GET/POST /api/jobs/{id}/publishing` | Generate metadata and official manual-upload links for supported platforms |
+| `GET /api/jobs/{id}/publishing` | Generate metadata and official manual-upload links for supported platforms |
 | `GET /api/youtube/oauth/status` / `GET /api/youtube/oauth/start` / `GET /api/youtube/oauth/callback` | Start and complete the optional PKCE YouTube connection |
+| `GET /api/tiktok/oauth/status` / `GET /api/tiktok/oauth/start` / `GET /api/tiktok/oauth/callback` | Connect the TikTok Content Posting API |
+| `GET /api/instagram/oauth/status` / `GET /api/instagram/oauth/start` / `GET /api/instagram/oauth/callback` | Connect the Instagram Graph API for Reels |
+| `POST /api/jobs/{id}/publish` | Return an approval plan or execute a confirmed direct upload for a selected clip/variant |
 | `POST /api/jobs/{id}/youtube/publish` | Return an approval plan or execute a confirmed private/resumable YouTube upload |
+| `GET/POST/PATCH /api/jobs/{id}/variants` | Create and update A/B metadata variants for a clip |
+| `GET/POST /api/jobs/{id}/analytics` / `POST /api/jobs/{id}/variants/{variant_id}/analytics` | Record platform observations and receive feedback |
+| `GET /api/analytics/summary` | Aggregate feedback across the project library |
+| `GET /api/errors` / `GET /api/migrations` | Read the v1 error catalog and current project migration status |
 | `GET /api/auth/status` / `POST /api/auth/login` / `POST /api/auth/logout` | Inspect and manage the optional API-token session |
 | `GET /api/update` | Check the latest wiifhub release |
 | `POST /api/update/apply` | Download and apply a packaged update |
 | `POST /api/shutdown` | Stop the local server |
 
 All routes bind to `127.0.0.1` by default. When `SHORTS_API_TOKEN` is set, every API route other than health/auth status/login requires the token as `Authorization: Bearer ...`, `X-Shorts-Token`, or the HttpOnly cookie returned by login. Keep TLS and an upstream reverse proxy for internet-facing use; choose the SQLite limiter for same-host multi-worker deployments and a gateway limiter for multi-host deployments.
+
+Every path above also exists under `/api/v1/`. Versioned errors use the
+stable `{error, code}` contract documented by `/api/v1/errors`. Legacy calls
+receive `Deprecation: true`, `Sunset: 2027-09-15`, and a successor `Link`
+header.
 
 ## Project layout
 
@@ -306,12 +341,18 @@ web/                   FastAPI coordinator, typed models, security, SQLite queue
   job_routes.py        Project library, queue control, retry, and log endpoints
   editor_routes.py     Clip editing, timeline, waveform, export, and media endpoints
   feature_routes.py    Storage, backup, transcript, presets, and publishing endpoints
+  experiment_routes.py A/B variants and analytics feedback endpoints
+  migrations.py        Pure project-format migrations shared by startup, restore, and CLI
+  analytics.py         Local analytics ledger aggregation and recommendations
   system_routes.py     Auth, uploads, diagnostics, setup, and update endpoints
 assets/                Original icon and project artwork
 tests/                 Network-free API, pipeline, ranking, transcript, clipping, and security tests
 installer/             Inno Setup definition
 deploy/helm/           CPU-only Kubernetes 1.28+ Helm chart
 docs/deployment/       arm64 dependency proof and Kubernetes target
+docs/adr/              Accepted v1 design decisions
+docs/USER_GUIDE.md     Beta workflow guide with screenshots
+CONTRIBUTING.md        Development, testing, and review policy
 launcher.py            Browser-free desktop launcher
 main.py                CLI entry point
 scripts/build.py       Cross-platform portable/installer build entry point
@@ -359,6 +400,18 @@ The CI workflow also validates the Docker Compose file, the arm64 dependency
 lock, and the Helm chart. `pre-commit install` enables the Ruff and mypy hooks
 locally. Mypy runs strict mode across `shorts_generator`, `web`, `launcher.py`,
 and `main.py`; optional SDKs are isolated behind dynamic runtime adapters.
+
+For an existing data directory, the migration tool is safe to inspect first:
+
+```powershell
+.\venv\Scripts\python.exe scripts\migrate_data.py --data-dir C:\path\to\shorts-data
+.\venv\Scripts\python.exe scripts\migrate_data.py --data-dir C:\path\to\shorts-data --apply
+```
+
+The apply mode writes a timestamped `.migration-backups` copy before updating
+JSON mirrors and SQLite records.  The CPU Dockerfile uses a dependency stage,
+BuildKit pip caching, and a non-root runtime stage; generated media and model
+caches stay on `/data` rather than in the image layer.
 
 Build from a clean Windows checkout with the local dependencies installed:
 

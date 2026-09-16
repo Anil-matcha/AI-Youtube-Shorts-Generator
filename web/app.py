@@ -7,6 +7,7 @@ python -m web.app
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import math
 import os
@@ -18,6 +19,7 @@ import threading
 import time
 import uuid
 import importlib.util
+import copy
 from urllib.parse import unquote, urlparse
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
@@ -33,7 +35,8 @@ from contextlib import asynccontextmanager, contextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from fastapi.openapi.utils import get_openapi
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
@@ -78,8 +81,11 @@ from web.feature_routes import router as feature_router  # noqa: E402
 from web.editor_routes import router as editor_router  # noqa: E402
 from web.job_routes import router as job_router  # noqa: E402
 from web.system_routes import router as system_router  # noqa: E402
+from web.experiment_routes import router as experiment_router  # noqa: E402
 from web.update_service import UpdateService  # noqa: E402
 from web.job_store import JobStore  # noqa: E402
+from web.api_contract import API_VERSION, LEGACY_SUNSET, code_for_error, is_versioned_path, legacy_api_path  # noqa: E402
+from web.migrations import CURRENT_SCHEMA_VERSION, migration_summary, migrate_job_record  # noqa: E402
 
 
 @asynccontextmanager
@@ -111,6 +117,7 @@ app = FastAPI(
         {"name": "logs", "description": "Browse bounded, credential-redacted project activity."},
         {"name": "media", "description": "Upload and stream source or generated media."},
         {"name": "updates", "description": "Check and apply releases from the wiifhub repository."},
+        {"name": "experiments", "description": "A/B variants and platform analytics feedback."},
     ],
     lifespan=lifespan,
 )
@@ -119,6 +126,45 @@ app.include_router(system_router)
 app.include_router(feature_router, prefix="/api")
 app.include_router(job_router)
 app.include_router(editor_router)
+app.include_router(experiment_router)
+
+
+def _openapi_with_v1_aliases() -> Dict[str, Any]:
+    """Expose the stable v1 aliases while retaining the legacy paths."""
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=API_VERSION,
+        description=(
+            f"{app.description} New clients should use /api/{API_VERSION}; the unversioned /api "
+            f"surface is retained until {LEGACY_SUNSET}."
+        ),
+        routes=app.routes,
+        tags=app.openapi_tags,
+    )
+    for path, operations in list(schema.get("paths", {}).items()):
+        if not path.startswith("/api/"):
+            continue
+        versioned_path = f"/api/{API_VERSION}{path[len('/api'):]}"
+        if versioned_path in schema["paths"]:
+            continue
+        cloned = copy.deepcopy(operations)
+        for operation in cloned.values():
+            if isinstance(operation, dict):
+                operation_id = operation.get("operationId")
+                if operation_id:
+                    operation["operationId"] = f"{operation_id}_v1"
+                operation["x-legacy-path"] = path
+        schema["paths"][versioned_path] = cloned
+    schema.setdefault("info", {})["x-api-version"] = API_VERSION
+    schema["info"]["x-legacy-api-sunset"] = LEGACY_SUNSET
+    schema["info"]["x-error-catalog"] = "/api/v1/errors"
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = _openapi_with_v1_aliases  # type: ignore[method-assign]
 
 _cors_origins = [
     origin.strip().rstrip("/")
@@ -143,12 +189,17 @@ async def http_exception_handler(_request: Request, exc: StarletteHTTPException)
     detail = exc.detail
     if isinstance(detail, dict):
         message = detail.get("error") or detail.get("message") or detail.get("detail") or "Request failed"
-        code = detail.get("code") or f"http_{exc.status_code}"
+        code = detail.get("code")
         extra = {key: value for key, value in detail.items() if key not in {"error", "message", "detail", "code"}}
     else:
         message = str(detail or "Request failed")
-        code = f"http_{exc.status_code}"
+        code = None
         extra = {}
+    versioned = bool(_request.scope.get("_shorts_api_version")) or is_versioned_path(
+        str(_request.scope.get("_shorts_api_original_path") or _request.url.path)
+    )
+    if not code:
+        code = code_for_error(message, exc.status_code) if versioned else f"http_{exc.status_code}"
     return error_response(redact_text(message), code, exc.status_code, **redact_structure(extra))
 
 
@@ -228,7 +279,7 @@ _job_processes: Dict[str, Dict[int, Any]] = {}
 _shutdown_requested = threading.Event()
 _bound_server: Any = None
 _media_slots = threading.Semaphore(_positive_int_env("SHORTS_MAX_MEDIA_OPERATIONS", 2))
-_JOB_SCHEMA_VERSION = 3
+_JOB_SCHEMA_VERSION = CURRENT_SCHEMA_VERSION
 
 _APP_VERSION = os.getenv("SHORTS_STUDIO_VERSION", __version__).strip().lstrip("v") or __version__
 _GITHUB_REPO = "wiifhub/AI-Youtube-Shorts-Generator"
@@ -264,6 +315,87 @@ def _nonnegative_float_env(name: str, default: float) -> float:
 
 
 _min_free_gb = _nonnegative_float_env("SHORTS_MIN_FREE_GB", 0.5)
+
+_response_cache_lock = threading.RLock()
+_response_cache: Dict[str, tuple[float, bytes, int, Dict[str, str]]] = {}
+_response_cache_ttl = _nonnegative_float_env("SHORTS_RESPONSE_CACHE_SECONDS", 10.0)
+_response_cache_paths = {
+    "/api/provider-costs",
+    "/api/brand-presets",
+    "/api/export-presets",
+    "/api/publishing/platforms",
+    "/api/migrations",
+    "/api/analytics/summary",
+}
+
+
+def _clear_response_cache() -> None:
+    with _response_cache_lock:
+        _response_cache.clear()
+
+
+def _response_cache_key(request: Request, path: str) -> str:
+    # Include a digest of the bearer/session credential so a cached public
+    # response can never be replayed across authenticated identities.
+    authorization = request.headers.get("authorization", "")
+    token_header = request.headers.get("x-shorts-token", "")
+    cookie = request.cookies.get("shorts_token", "")
+    identity = hashlib.sha256(f"{authorization}|{token_header}|{cookie}".encode("utf-8")).hexdigest()
+    query = request.scope.get("query_string", b"").decode("utf-8", "replace")
+    return f"{path}?{query}|{identity}"
+
+
+def _cacheable_path(path: str) -> str | None:
+    if path.startswith("/api/v1/"):
+        path = "/api" + path[len("/api/v1") :]
+    return path if path in _response_cache_paths else None
+
+
+@app.middleware("http")
+async def response_cache_middleware(request: Request, call_next: Any):
+    """Cache small, read-only JSON catalogs for a short configurable TTL."""
+    method = request.method.upper()
+    cache_control = request.headers.get("cache-control", "").lower()
+    bypass_cache = any(item.strip().split(";", 1)[0] == "no-cache" for item in cache_control.split(","))
+    if method != "GET" or bypass_cache:
+        if method != "GET":
+            _clear_response_cache()
+        return await call_next(request)
+    original_path = str(request.scope.get("path") or request.url.path)
+    normalized_path = _cacheable_path(original_path)
+    if not normalized_path or _response_cache_ttl <= 0:
+        return await call_next(request)
+    # Keep legacy and versioned surfaces in separate entries: their payloads
+    # are shared, but the response headers intentionally differ.
+    key = _response_cache_key(request, original_path)
+    now = time.monotonic()
+    with _response_cache_lock:
+        cached = _response_cache.get(key)
+        if cached and now - cached[0] < _response_cache_ttl:
+            _, body, status_code, headers = cached
+            response = Response(content=body, status_code=status_code, headers=dict(headers), media_type="application/json")
+            if is_versioned_path(original_path):
+                response.headers["X-API-Version"] = API_VERSION
+            return response
+        if cached:
+            _response_cache.pop(key, None)
+    response = await call_next(request)
+    content_type = response.headers.get("content-type", "")
+    if response.status_code >= 400 or "application/json" not in content_type:
+        return response
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    headers = {
+        name: value
+        for name, value in response.headers.items()
+        if name.lower() not in {"content-length", "transfer-encoding"}
+    }
+    with _response_cache_lock:
+        _response_cache[key] = (now, body, response.status_code, headers)
+        if len(_response_cache) > 256:
+            oldest = sorted(_response_cache.items(), key=lambda item: item[1][0])[:64]
+            for old_key, _ in oldest:
+                _response_cache.pop(old_key, None)
+    return Response(content=body, status_code=response.status_code, headers=headers, media_type="application/json")
 
 
 @app.middleware("http")
@@ -355,6 +487,31 @@ async def security_middleware(request: Request, call_next: Any):
     )
     if os.getenv("SHORTS_STRUCTURED_LOGS", "false").strip().lower() in {"1", "true", "yes", "on"}:
         _logger.info("request method=%s path=%s status=%s", request.method, path, response.status_code)
+    return response
+
+
+@app.middleware("http")
+async def api_versioning_middleware(request: Request, call_next: Any):
+    """Route /api/v1 requests through the shared handlers and mark legacy API use."""
+    original_path = str(request.scope.get("path") or request.url.path)
+    request.scope["_shorts_api_original_path"] = original_path
+    versioned = is_versioned_path(original_path)
+    if versioned:
+        suffix = original_path[len("/api/v1") :]
+        rewritten = "/api" + (suffix or "")
+        request.scope["path"] = rewritten
+        request.scope["raw_path"] = rewritten.encode("ascii", "ignore")
+        request.scope["_shorts_api_version"] = API_VERSION
+    response = await call_next(request)
+    if versioned:
+        response.headers["X-API-Version"] = API_VERSION
+    elif legacy_api_path(original_path):
+        response.headers.setdefault("Deprecation", "true")
+        response.headers.setdefault("Sunset", LEGACY_SUNSET)
+        response.headers.setdefault(
+            "Link",
+            f'<{request.url.scheme}://{request.url.netloc}/api/{API_VERSION}{original_path[len("/api"): ]}>; rel="successor-version"',
+        )
     return response
 
 
@@ -610,6 +767,11 @@ def _load_persisted_jobs() -> None:
     for _, job in sorted(records.values(), key=lambda item: item[0], reverse=True):
         job_id = str(job["id"])
         job["id"] = job_id
+        try:
+            job, _migration_steps = migrate_job_record(job, target=_JOB_SCHEMA_VERSION)
+        except ValueError as exc:
+            _logger.error("Could not migrate persisted job %s: %s", job_id, exc)
+            continue
         # A JSON/SQLite record is user-editable state, not an authorization
         # boundary. Normalize directories and local sources before any media
         # endpoint or recovery worker can use them.
@@ -663,6 +825,13 @@ def _load_persisted_jobs() -> None:
             _persist_job_locked(job)
         except (OSError, ValueError, TypeError):
             _logger.exception("Could not migrate persisted job %s", job_id)
+
+
+def _migration_status() -> Dict[str, Any]:
+    """Report project-format readiness without exposing project contents."""
+    with _lock:
+        records = [dict(job) for job in _jobs.values() if isinstance(job, dict)]
+    return migration_summary(records, target=_JOB_SCHEMA_VERSION)
 
 
 _load_persisted_jobs()
@@ -1405,6 +1574,7 @@ def _enqueue_job(
         _jobs[job_id] = {
             "id": job_id,
             "schema_version": _JOB_SCHEMA_VERSION,
+            "project_format_version": "1.0",
             "name": default_name,
             "status": "queued",
             "stage": "queued",
@@ -1419,6 +1589,10 @@ def _enqueue_job(
             "raw_shorts": [],
             "raw_transcript": {},
             "raw_source_video_url": None,
+            "variants": [],
+            "analytics": [],
+            "publishing": [],
+            "migration_history": [],
             "created_at": time.time(),
             "updated_at": time.time(),
             "archived": False,

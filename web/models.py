@@ -28,6 +28,8 @@ WhisperDevice = Literal["auto", "cpu", "cuda", "mps", "directml", "rocm"]
 LLMProvider = Literal["openai", "gemini", "ollama"]
 Transition = Literal["none", "fade", "slide", "zoom"]
 PrivacyStatus = Literal["private", "unlisted", "public"]
+PublishPlatform = Literal["youtube_shorts", "tiktok", "instagram_reels"]
+AnalyticsSource = Literal["manual", "youtube", "tiktok", "instagram", "import"]
 
 _HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 _MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$")
@@ -356,10 +358,12 @@ class BrandPreset(StrictModel):
 
 
 class PublishRequest(StrictModel):
-    platform: Literal["youtube_shorts", "tiktok", "instagram_reels"]
+    platform: PublishPlatform
     clip_index: Optional[int] = Field(default=None, ge=0, le=1000)
+    variant_id: Optional[str] = Field(default=None, min_length=1, max_length=80)
     title: Optional[str] = Field(default=None, max_length=150)
     description: Optional[str] = Field(default=None, max_length=5000)
+    media_url: Optional[str] = Field(default=None, max_length=4096)
     tags: List[str] = Field(default_factory=list, max_length=30)
     privacy_status: PrivacyStatus = "private"
     publish_at: Optional[str] = Field(default=None, max_length=80)
@@ -373,6 +377,16 @@ class PublishRequest(StrictModel):
             return None
         return str(value).replace("\x00", "").strip() or None
 
+    @field_validator("variant_id", "media_url", mode="before")
+    @classmethod
+    def clean_optional_metadata(cls, value: object) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = str(value).replace("\x00", "").strip()
+        if "\r" in cleaned or "\n" in cleaned:
+            raise ValueError("metadata contains invalid line breaks")
+        return cleaned or None
+
     @field_validator("tags", mode="before")
     @classmethod
     def clean_tags(cls, value: object) -> List[str]:
@@ -385,7 +399,7 @@ class PublishRequest(StrictModel):
         if self.privacy_status == "public" and not self.allow_public:
             raise ValueError("public uploads require allow_public=true")
         if self.publish_at and self.privacy_status != "private":
-            raise ValueError("scheduled YouTube uploads must remain private until publish time")
+            raise ValueError("scheduled uploads must remain private until publish time")
         if self.publish_at:
             raw = self.publish_at.strip()
             try:
@@ -416,3 +430,69 @@ class MergeRequest(StrictModel):
 
 class RestoreRequest(StrictModel):
     confirm: bool = False
+
+
+class AnalyticsUpdate(StrictModel):
+    """A platform observation used by the beta performance feedback loop."""
+
+    platform: PublishPlatform
+    variant_id: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    source: AnalyticsSource = "manual"
+    recorded_at: Optional[str] = Field(default=None, max_length=80)
+    impressions: int = Field(0, ge=0, le=2_000_000_000)
+    views: int = Field(0, ge=0, le=2_000_000_000)
+    likes: int = Field(0, ge=0, le=2_000_000_000)
+    comments: int = Field(0, ge=0, le=2_000_000_000)
+    shares: int = Field(0, ge=0, le=2_000_000_000)
+    saves: int = Field(0, ge=0, le=2_000_000_000)
+    watch_time_seconds: float = Field(0.0, ge=0.0, le=10_000_000_000.0)
+    average_watch_time_seconds: float = Field(0.0, ge=0.0, le=172800.0)
+    completion_rate: float = Field(0.0, ge=0.0, le=1.0)
+    notes: Optional[str] = Field(default=None, max_length=1000)
+
+    @field_validator("variant_id", "recorded_at", "notes", mode="before")
+    @classmethod
+    def clean_optional_fields(cls, value: object) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = str(value).replace("\x00", "").strip()
+        if "\r" in cleaned or "\n" in cleaned:
+            raise ValueError("analytics text contains invalid line breaks")
+        return cleaned or None
+
+
+class VariantCreate(StrictModel):
+    """Metadata variant for a rendered clip; media is shared by clip index."""
+
+    clip_index: int = Field(..., ge=0, le=1000)
+    name: str = Field(..., min_length=1, max_length=80)
+    platform: Optional[PublishPlatform] = None
+    title: Optional[str] = Field(default=None, max_length=150)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    hook: Optional[str] = Field(default=None, max_length=500)
+    thumbnail_text: Optional[str] = Field(default=None, max_length=120)
+
+    @field_validator("name", "title", "description", "hook", "thumbnail_text", mode="before")
+    @classmethod
+    def clean_variant_text(cls, value: object) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = " ".join(str(value).replace("\x00", "").split())
+        return cleaned or None
+
+
+class VariantUpdate(StrictModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    title: Optional[str] = Field(default=None, max_length=150)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    hook: Optional[str] = Field(default=None, max_length=500)
+    thumbnail_text: Optional[str] = Field(default=None, max_length=120)
+    status: Optional[Literal["draft", "active", "paused", "archived"]] = None
+
+    @field_validator("name", "title", "description", "hook", "thumbnail_text", mode="before")
+    @classmethod
+    def clean_update_text(cls, value: object) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = " ".join(str(value).replace("\x00", "").split())
+        return cleaned or None

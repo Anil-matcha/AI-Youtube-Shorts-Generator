@@ -132,6 +132,7 @@ def _run_local(
         model_name=whisper_model,
         device=whisper_device,
         cancel_check=cancel_check,
+        progress=(lambda message: _emit(progress, "transcribe", message)) if progress else None,
     )
     transcript["visual_events"] = visual_events
     merged_chapters = list(download_metadata.get("chapters") or []) if isinstance(download_metadata, dict) else []
@@ -212,6 +213,8 @@ def _run_local(
         transition=transition,
         transition_duration=transition_duration,
         cancel_check=cancel_check,
+        max_workers=PipelineConfig.from_environment().max_ffmpeg_processes,
+        progress=progress,
     )
 
     usage_record = current_llm_usage().get(provider)

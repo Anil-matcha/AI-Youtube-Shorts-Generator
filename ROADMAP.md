@@ -200,24 +200,47 @@ No push, GitHub release, or asset upload has been performed.
 
 ## v1.0.0 — Production Ready
 
+### v1.0.0 Beta implementation (`beta/v1.0.0`)
+
+The implementation items below are complete on the beta branch. A public
+release is intentionally separate: it still requires the fresh authenticated
+packaged-runtime smoke, the certificate-backed signing decision, final remote
+CI, and a clean repository at release time.
+
+- [x] Add direct TikTok and Instagram Reels publishing through official APIs,
+      with approval-first private defaults, OAuth state expiry, idempotency,
+      and a safe manual-upload fallback.
+- [x] Add append-only platform analytics observations, aggregate retention and
+      engagement metrics, and explainable feedback for A/B variants.
+- [x] Add durable per-clip metadata variants with publish and analytics links.
+- [x] Add regression coverage for API aliases, migrations, backups, direct
+      adapter mocks, variants/analytics, parallel rendering, and streaming
+      Whisper progress.
+
 ### Stability
-- [ ] Complete API versioning (`/api/v1/`) with deprecation policy
-- [ ] Add comprehensive error codes and user-facing error messages
-- [ ] Add data migration tooling (project file format upgrades)
+- [x] Complete API versioning (`/api/v1/`) with deprecation policy
+- [x] Add comprehensive error codes and user-facing error messages
+- [x] Add data migration tooling (project file format upgrades)
 - [x] Add metadata backup/restore for projects and settings
-- [ ] Add optional media-inclusive backup/restore with versioned migrations
+- [x] Add optional media-inclusive backup/restore with versioned migrations
 
 ### Documentation
-- [ ] Add OpenAPI/Swagger documentation for all endpoints
-- [ ] Add user guide with screenshots for each feature
-- [ ] Add developer contributing guide
-- [ ] Add architecture decision records (ADRs) for key design choices
+- [x] Add OpenAPI/Swagger documentation for all endpoints
+- [x] Add user guide with screenshots for each feature
+- [x] Add developer contributing guide
+- [x] Add architecture decision records (ADRs) for key design choices
 
 ### Performance
-- [ ] Add concurrent clip rendering (parallel FFmpeg workers)
-- [ ] Add streaming transcription (real-time Whisper output)
-- [ ] Add response caching for repeated API calls
-- [ ] Optimize Docker image size (multi-stage build, layer caching)
+- [x] Add concurrent clip rendering (parallel FFmpeg workers)
+- [x] Add streaming transcription (real-time Whisper output)
+- [x] Add response caching for repeated API calls
+- [x] Optimize Docker image size (multi-stage build, layer caching)
+
+### Release gates (not a beta implementation claim)
+- [ ] Fresh authenticated packaged-runtime smoke test against the beta build
+- [ ] Certificate-backed signing decision recorded for the beta artifact
+- [ ] Final remote CI, hashes, and clean repository state verified before any
+      v1.0.0 tag or public release
 
 ---
 

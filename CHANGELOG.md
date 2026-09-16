@@ -4,10 +4,30 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
 
 ## [Unreleased]
 
-### Development
+### Added
 
-- Started the `beta/v1.0.0` branch for the production-ready API, migration,
-  documentation, and performance work tracked in the roadmap.
+- Started the `beta/v1.0.0` branch with direct TikTok Content Posting API and
+  Instagram Reels Graph API adapters, process-memory OAuth, approval-first
+  idempotent uploads, durable A/B metadata variants, and analytics feedback.
+- Added the `/api/v1/` contract, stable error catalog, project migrations and
+  migration CLI, optional media-inclusive backups, generated OpenAPI aliases,
+  beta user guide, contributing guide, and four ADRs.
+- Added bounded parallel clip rendering and real-time Whisper progress through
+  the existing SSE stream.
+
+### Changed
+
+- Added short-lived, identity-aware response caching for read-only API
+  catalogs; mutations invalidate the cache.
+- Rebuilt the CPU Docker image as a cached multi-stage, non-root runtime while
+  preserving the existing data volume contract.
+
+### Verification
+
+- Beta regression suite: 86 passed, 4 browser-only skips.
+- Ruff, strict mypy, compile checks, and Node syntax checks pass locally.
+- No v1.0.0 tag or public release was created; packaged smoke and signing are
+  intentionally release gates.
 
 ## [0.11.3] - 2026-09-15
 
