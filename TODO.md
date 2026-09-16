@@ -134,6 +134,15 @@ asset upload remain intentionally out of scope.
   record the certificate-backed signing decision, verify remote CI/assets, and
   confirm a clean repository (remote run `35046498312`; the beta and main
   gates passed before production publication).
+- [x] Production gate evidence: main Quality Checks run `35049226780`, Docker
+  publish run `35049226814`, and tag-triggered Docker publish run `35050190484`
+  all passed on production commit `0bbf638`.
+- [x] Fresh production packaged-runtime smoke served UI version `1.0.0` and
+  passed authenticated system, API-version, YouTube OAuth, error catalog, and
+  shutdown/process-exit checks.
+- [x] Production Windows artifacts are explicitly unsigned because the owner
+  certificate is not configured; the release ZIP and installer match the
+  attached SHA-256 manifest.
 - [x] Publish the separate `beta` prerelease with the verified ZIP, installer,
   and SHA-256 manifest.
 - [x] Merge the gated beta branch into `main` and publish production `v1.0.0`.

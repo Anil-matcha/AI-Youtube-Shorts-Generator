@@ -44,6 +44,16 @@ No unreleased changes.
   remote Quality Checks run `35046498312` were green. The separate `beta`
   prerelease channel was published with the verified ZIP, installer, and hash
   manifest before this production release.
+- Production commit `0bbf638` was merged to `main` and tagged `v1.0.0` only
+  after main Quality Checks run `35049226780` and Docker publish run
+  `35049226814` passed; the tag-triggered Docker publish run `35050190484`
+  also passed.
+- A fresh production packaged-runtime smoke served UI version `1.0.0` and
+  passed health, authenticated system, API-version, YouTube OAuth, error
+  catalog, and authenticated shutdown/process-exit checks.
+- The production ZIP and installer were rebuilt from `0bbf638`, matched the
+  attached SHA-256 manifest, and remain explicitly unsigned because the owner
+  certificate is not configured.
 
 ## [0.11.3] - 2026-09-15
 

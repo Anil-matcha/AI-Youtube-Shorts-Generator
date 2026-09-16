@@ -241,15 +241,24 @@ available for testing.
 - [x] Add response caching for repeated API calls
 - [x] Optimize Docker image size (multi-stage build, layer caching)
 
-### Release gates (verified; beta prerelease published)
+### Release gates (verified; beta and production releases published)
 - [x] Fresh authenticated packaged-runtime smoke test against the beta build
 - [x] Certificate-backed signing decision recorded for the beta artifact
 - [x] Final remote CI, hashes, and clean repository state verified before any
       production v1.0.0 tag or release (remote run `35046498312`; no
-      production tag or release was created)
+      production tag or release existed at beta-gate time)
 - [x] Publish the separate beta prerelease channel at tag `beta` from the
       gated branch snapshot, with the verified ZIP, installer, and hash manifest
+- [x] Main Quality Checks run `35049226780` and Docker publish run
+      `35049226814` passed on `0bbf638`; the tag-triggered Docker publish run
+      `35050190484` passed as well.
+- [x] Fresh authenticated packaged-runtime smoke against the production build
+      served UI version `1.0.0` and passed API, OAuth, error, and shutdown checks.
+- [x] Record the production signing decision: the owner certificate is not
+      configured, so the ZIP and installer are explicitly unsigned and
+      hash-verified.
 - [x] Merge the gated beta branch into `main` and publish production `v1.0.0`
+      from `0bbf638` with the verified ZIP, installer, and SHA-256 manifest.
 
 ---
 
