@@ -129,9 +129,10 @@ asset upload remain intentionally out of scope.
   resumable uploads with category/privacy/scheduling controls, thumbnails,
   captions, bounded quota-aware retries, idempotency, and a credential-free
   audit log.
-- [ ] Before any v1.0.0 release: run a fresh authenticated packaged smoke,
+- [x] Before any v1.0.0 release: run a fresh authenticated packaged smoke,
   record the certificate-backed signing decision, verify remote CI/assets, and
-  confirm a clean repository. This beta branch is not released.
+  confirm a clean repository (remote run `35045547870`; this beta branch still
+  has no v1.0.0 tag or public release).
 
 ## Game-changing future bets (v2+)
 

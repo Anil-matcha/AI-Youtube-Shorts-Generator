@@ -32,7 +32,9 @@ TikTok/Instagram publishing, analytics feedback, and A/B variants. The
 interactive OpenAPI/Swagger surface is available at `/docs` when the server is
 running; new integrations should use `/api/v1/`. The older `/api/` routes
 remain available during the deprecation window and advertise their v1
-successor in response headers.
+successor in response headers. Beta artifact and release-gate evidence is
+tracked in [docs/release-gates-v1.0.0-beta.md](docs/release-gates-v1.0.0-beta.md);
+no v1.0.0 tag or public release has been created.
 
 ## Windows installation
 

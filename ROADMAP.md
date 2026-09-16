@@ -242,11 +242,12 @@ CI, and a clean repository at release time.
 - [x] Add response caching for repeated API calls
 - [x] Optimize Docker image size (multi-stage build, layer caching)
 
-### Release gates (not a beta implementation claim)
-- [ ] Fresh authenticated packaged-runtime smoke test against the beta build
-- [ ] Certificate-backed signing decision recorded for the beta artifact
-- [ ] Final remote CI, hashes, and clean repository state verified before any
-      v1.0.0 tag or public release
+### Release gates (verified for beta; no release created)
+- [x] Fresh authenticated packaged-runtime smoke test against the beta build
+- [x] Certificate-backed signing decision recorded for the beta artifact
+- [x] Final remote CI, hashes, and clean repository state verified before any
+      v1.0.0 tag or public release (remote run `35045547870`; no tag or public
+      release was created)
 
 ---
 
