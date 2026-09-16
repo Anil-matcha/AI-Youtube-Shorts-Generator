@@ -131,7 +131,7 @@ asset upload remain intentionally out of scope.
   audit log.
 - [x] Before any v1.0.0 release: run a fresh authenticated packaged smoke,
   record the certificate-backed signing decision, verify remote CI/assets, and
-  confirm a clean repository (remote run `35046196358`; this beta branch still
+  confirm a clean repository (remote run `35046498312`; this beta branch still
   has no v1.0.0 tag or public release).
 
 ## Game-changing future bets (v2+)
