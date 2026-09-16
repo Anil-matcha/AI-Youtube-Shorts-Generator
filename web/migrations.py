@@ -94,13 +94,20 @@ def migrate_job_record(record: Dict[str, Any], target: int = CURRENT_SCHEMA_VERS
         applied.append("v2_to_v3")
         current = 3
 
-    # v4: the beta project format adds experiments, analytics, and an explicit
-    # format marker.  These fields are intentionally local metadata and never
-    # contain runtime credentials.
+    # v4: the beta project format adds experiments, analytics, factory review,
+    # and an explicit format marker.  These fields are intentionally local
+    # metadata and never contain runtime credentials.
     if current < 4 <= target_version:
         for field in ("variants", "analytics", "publishing"):
             if not isinstance(job.get(field), list):
                 job[field] = []
+        if not isinstance(job.get("factory"), dict):
+            job["factory"] = {
+                "package_version": "1.0",
+                "enabled": False,
+                "status": "not_requested",
+                "approvals": [],
+            }
         job.setdefault("project_format_version", PROJECT_FORMAT_VERSION)
         applied.append("v3_to_v4")
         current = 4
@@ -119,6 +126,15 @@ def migrate_job_record(record: Dict[str, Any], target: int = CURRENT_SCHEMA_VERS
         for field in ("variants", "analytics", "publishing"):
             if not isinstance(job.get(field), list):
                 job[field] = []
+        factory = job.get("factory")
+        if not isinstance(factory, dict):
+            factory = {}
+            job["factory"] = factory
+        factory.setdefault("package_version", "1.0")
+        factory.setdefault("enabled", False)
+        factory.setdefault("status", "not_requested")
+        if not isinstance(factory.get("approvals"), list):
+            factory["approvals"] = []
 
     job["schema_version"] = target_version
     job.setdefault("project_format_version", PROJECT_FORMAT_VERSION)

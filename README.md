@@ -26,11 +26,13 @@ Shorts Studio is an independent desktop and web workspace maintained by **wiifhu
 
 The production-readiness work is developed on [`beta/v1.0.0`](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/tree/beta/v1.0.0).
 Read the [beta user guide](docs/USER_GUIDE.md) for the versioned API,
-project migrations, optional media backups, direct TikTok/Instagram publishing,
-analytics feedback, and A/B variants.  The interactive OpenAPI/Swagger surface
-is available at `/docs` when the server is running; new integrations should
-use `/api/v1/`.  The older `/api/` routes remain available during the
-deprecation window and advertise their v1 successor in response headers.
+project migrations, optional media backups, Shorts Factory review packages,
+Google/YouTube sign-in, approval-first YouTube publishing, direct
+TikTok/Instagram publishing, analytics feedback, and A/B variants. The
+interactive OpenAPI/Swagger surface is available at `/docs` when the server is
+running; new integrations should use `/api/v1/`. The older `/api/` routes
+remain available during the deprecation window and advertise their v1
+successor in response headers.
 
 ## Windows installation
 
@@ -150,9 +152,10 @@ The theme switch applies to the entire interface. The light Settings view is sho
 - **Start quickly with project presets** for Podcast / interview, Educational, Reaction / gaming, Story / emotional, Kids / family, or fully custom settings. Presets are starting points and remain editable.
 - **Review before committing** with a low-resolution preview that uses the same crop, captions, layout, and timestamps as the final render.
 - **Manage projects** with SQLite-backed durable jobs, checkpoints, batch sources, cancellation that terminates active FFmpeg children, retry, resume-after-restart, rename, duplicate, archive, recoverable delete, and Undo last delete.
-- **Export creator assets** as a ZIP containing clips, thumbnails, caption files, `metadata.json`, publishing text, and a manifest.
+- **Export creator assets** as a ZIP containing clips, thumbnails, caption files, `metadata.json`, publishing text, and a factory review manifest.
 - **Reuse and recover work** with named brand presets, storage usage reporting, conservative cache cleanup, versioned migrations, and metadata or optional media-inclusive backup/restore. Source media and completed clips are preserved by default.
-- **Publish safely** to YouTube Shorts, TikTok, and Instagram Reels through approval-first official APIs. YouTube and TikTok accept local media; Instagram Reels requires a public HTTPS media URL. Tokens remain in process memory only.
+- **Publish safely** to YouTube Shorts, TikTok, and Instagram Reels through approval-first official APIs. Google sign-in uses PKCE and process-memory tokens; YouTube supports resumable video transfer, category/privacy/scheduling controls, custom thumbnails, and SRT/VTT captions. Unattended publishing is disabled unless explicitly enabled in deployment settings, and public unattended uploads require a second opt-in.
+- **Run the Shorts Factory** by submitting one upload or URL to `/api/v1/factory/jobs`. Completed work exposes clips, hooks, captions, thumbnails, metadata, and platform export plans at `/api/v1/jobs/{id}/factory`; every direct upload still requires a recorded human approval checkpoint.
 - **Run experiments** with per-clip A/B metadata variants, append-only platform analytics observations, and explainable retention/engagement feedback.
 - **Render efficiently** with bounded parallel FFmpeg workers, live Whisper progress in the existing SSE stream, and short-lived caching for read-only catalogs.
 - **Use platform export contracts** for YouTube Shorts, TikTok, Instagram Reels, Instagram 4:5, and YouTube 16:9 presets that validate canvas and duration before rendering.
@@ -244,6 +247,9 @@ Copy `.env.example` to `.env` and edit only the settings you need. Never commit 
 | `SHORTS_TRUST_PROXY_HEADERS` | Use `X-Forwarded-For` for rate-limit identity only behind a trusted proxy | `false` |
 | `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET` | Optional OAuth client for approval-first YouTube uploads; keep secrets in the deployment manager | empty |
 | `YOUTUBE_OAUTH_REDIRECT_URI` | OAuth callback registered in Google Cloud | `http://127.0.0.1:7860/api/youtube/oauth/callback` |
+| `YOUTUBE_OAUTH_SCOPES` | Space-separated Google scopes; captions require `youtube.force-ssl` | `youtube.upload youtube.force-ssl` |
+| `SHORTS_YOUTUBE_AUTO_PUBLISH` | Explicit deployment opt-in for unattended YouTube uploads after approval | `false` |
+| `SHORTS_YOUTUBE_ALLOW_PUBLIC_AUTOPUBLISH` | Separate opt-in required for unattended public YouTube uploads | `false` |
 | `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET` | Optional TikTok Content Posting API OAuth client | empty |
 | `TIKTOK_ACCESS_TOKEN` | Optional pre-authorized TikTok token for a managed deployment; never commit it | empty |
 | `INSTAGRAM_APP_ID` / `INSTAGRAM_APP_SECRET` / `INSTAGRAM_USER_ID` | Optional Meta Graph credentials for Instagram Reels | empty |
@@ -311,7 +317,9 @@ The loopback FastAPI service powers the desktop shell and can be used by local t
 | `GET/POST/DELETE /api/brand-presets` | Manage reusable local brand presets |
 | `GET /api/publishing/platforms` | List supported platform handoff adapters |
 | `GET /api/jobs/{id}/publishing` | Generate metadata and official manual-upload links for supported platforms |
-| `GET /api/youtube/oauth/status` / `GET /api/youtube/oauth/start` / `GET /api/youtube/oauth/callback` | Start and complete the optional PKCE YouTube connection |
+| `POST /api/factory/jobs` | Queue a URL or local upload for a reviewable Shorts Factory package |
+| `GET /api/jobs/{id}/factory` / `POST /api/jobs/{id}/factory/approve` | Inspect the generated factory package and record per-clip human decisions |
+| `GET /api/youtube/oauth/status` / `GET /api/youtube/oauth/start` / `GET /api/youtube/oauth/callback` / `POST /api/youtube/oauth/disconnect` | Start, complete, inspect, or clear the optional PKCE Google/YouTube connection |
 | `GET /api/tiktok/oauth/status` / `GET /api/tiktok/oauth/start` / `GET /api/tiktok/oauth/callback` | Connect the TikTok Content Posting API |
 | `GET /api/instagram/oauth/status` / `GET /api/instagram/oauth/start` / `GET /api/instagram/oauth/callback` | Connect the Instagram Graph API for Reels |
 | `POST /api/jobs/{id}/publish` | Return an approval plan or execute a confirmed direct upload for a selected clip/variant |
@@ -340,7 +348,8 @@ web/                   FastAPI coordinator, typed models, security, SQLite queue
   app.py               Worker lifecycle, persistence, shared render state, and error policy
   job_routes.py        Project library, queue control, retry, and log endpoints
   editor_routes.py     Clip editing, timeline, waveform, export, and media endpoints
-  feature_routes.py    Storage, backup, transcript, presets, and publishing endpoints
+  feature_routes.py    Storage, backup, transcript, presets, factory, and publishing endpoints
+  factory.py           Reviewable Shorts Factory manifests and approval state
   experiment_routes.py A/B variants and analytics feedback endpoints
   migrations.py        Pure project-format migrations shared by startup, restore, and CLI
   analytics.py         Local analytics ledger aggregation and recommendations

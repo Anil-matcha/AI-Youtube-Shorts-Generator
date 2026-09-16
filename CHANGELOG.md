@@ -6,6 +6,13 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
 
 ### Added
 
+- Added the beta Shorts Factory workflow: one upload or URL now creates a
+  reviewable package with clip-safe URLs, hooks, captions, thumbnails, creator
+  metadata, platform export plans, and durable per-clip approval checkpoints.
+- Added Google/YouTube sign-in status and disconnect controls, expanded OAuth
+  scopes for caption tracks, and YouTube uploads for category metadata,
+  thumbnails, SRT/VTT captions, resumable transfer, quota-aware retries, and a
+  credential-free audit record.
 - Started the `beta/v1.0.0` branch with direct TikTok Content Posting API and
   Instagram Reels Graph API adapters, process-memory OAuth, approval-first
   idempotent uploads, durable A/B metadata variants, and analytics feedback.
@@ -17,6 +24,9 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
 
 ### Changed
 
+- Direct YouTube publishing now requires an explicit human confirmation;
+  unattended publishing is disabled by default and public unattended uploads
+  require a separate deployment opt-in.
 - Added short-lived, identity-aware response caching for read-only API
   catalogs; mutations invalidate the cache.
 - Rebuilt the CPU Docker image as a cached multi-stage, non-root runtime while
@@ -24,10 +34,11 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
 
 ### Verification
 
-- Beta regression suite: 86 passed, 4 browser-only skips.
+- Beta regression suite: 89 passed, 4 browser-only skips.
 - Ruff, strict mypy, compile checks, and Node syntax checks pass locally.
-- No v1.0.0 tag or public release was created; packaged smoke and signing are
-  intentionally release gates.
+- Final beta packaged smoke, signing decision, remote CI, hashes, and clean
+  repository evidence remain release gates; no v1.0.0 tag or public release
+  has been created.
 
 ## [0.11.3] - 2026-09-15
 

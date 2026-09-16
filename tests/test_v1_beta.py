@@ -14,6 +14,7 @@ from shorts_generator.local import clipper
 from shorts_generator.local import transcriber
 from web import publishing
 from web.analytics import aggregate
+from web.factory import initial_factory_state
 from web.migrations import CURRENT_SCHEMA_VERSION, migrate_job_record
 
 
@@ -200,6 +201,107 @@ def test_direct_publish_requires_authorized_provider(monkeypatch) -> None:
         )
         assert response.status_code == 400
         assert response.json()["code"] == "credentials_required"
+
+
+def test_factory_manifest_and_human_approval_gate(monkeypatch, tmp_path: Path) -> None:
+    """Factory output is reviewable, path-safe, and blocks direct uploads until approved."""
+    monkeypatch.setattr(studio, "_output_root", tmp_path)
+    monkeypatch.setattr(studio, "_jobs_dir", tmp_path / "jobs")
+    monkeypatch.setattr(studio, "_allow_external_paths", False)
+    output_dir = tmp_path / "factory-job"
+    output_dir.mkdir(parents=True)
+    source = tmp_path / "source.mp4"
+    clip = output_dir / "short_01.mp4"
+    thumbnail = output_dir / "short_01.png"
+    source.write_bytes(b"source")
+    clip.write_bytes(b"clip")
+    thumbnail.write_bytes(b"png")
+    with _client() as client:
+        with studio._lock:
+            studio._jobs["factory-job"] = {
+                "id": "factory-job",
+                "name": "Factory project",
+                "status": "done",
+                "stage": "done",
+                "request": {"url": str(source), "mode": "local"},
+                "output_dir": str(output_dir),
+                "raw_shorts": [
+                    {
+                        "title": "A strong hook",
+                        "hook_sentence": "Watch this",
+                        "virality_reason": "Clear payoff",
+                        "score": 0.9,
+                        "start_time": 0,
+                        "end_time": 8,
+                        "clip_url": str(clip),
+                        "thumbnail_path": str(thumbnail),
+                    }
+                ],
+                "raw_transcript": {"duration": 8, "segments": [{"start": 0, "end": 2, "text": "Watch this"}]},
+                "result": {"mode": "local", "shorts": []},
+                "factory": initial_factory_state(True),
+                "publishing": [],
+                "logs": [],
+                "created_at": time.time(),
+            }
+            studio._persist_job_locked(studio._jobs["factory-job"])
+
+        package = client.get("/api/v1/jobs/factory-job/factory")
+        assert package.status_code == 200
+        body = package.json()
+        assert body["status"] == "ready_for_review"
+        assert body["clips"][0]["clip_url"] == "/api/jobs/factory-job/clip/0"
+        assert body["clips"][0]["thumbnail_url"] == "/api/jobs/factory-job/thumbnail/0"
+        assert body["clips"][0]["captions"]["available"] is True
+        assert str(output_dir) not in package.text
+
+        publishing._youtube_tokens.clear()
+        publishing._youtube_tokens.update({"access_token": "access", "expires_at": time.time() + 3600})
+        blocked = client.post(
+            "/api/v1/jobs/factory-job/youtube/publish",
+            json={"platform": "youtube_shorts", "clip_index": 0, "confirm": True},
+        )
+        assert blocked.status_code == 409
+        assert blocked.json()["code"] == "factory_approval_required"
+
+        approved = client.post(
+            "/api/v1/jobs/factory-job/factory/approve",
+            json={"clip_indices": [0], "decision": "approved", "note": "Looks good"},
+        )
+        assert approved.status_code == 200
+        assert approved.json()["package"]["status"] == "approved"
+
+        monkeypatch.setattr(
+            "web.feature_routes.publish_direct",
+            lambda *args, **kwargs: {"video_id": "video-1", "status": "uploaded"},
+        )
+        uploaded = client.post(
+            "/api/v1/jobs/factory-job/youtube/publish",
+            json={"platform": "youtube_shorts", "clip_index": 0, "confirm": True},
+        )
+        assert uploaded.status_code == 200
+        assert uploaded.json()["upload"]["video_id"] == "video-1"
+        assert studio._jobs["factory-job"]["publishing"][0]["clip_index"] == 0
+
+
+def test_factory_job_route_marks_job_for_review(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(studio, "_output_root", tmp_path)
+    monkeypatch.setattr(studio, "_jobs_dir", tmp_path / "jobs")
+    monkeypatch.setattr(studio, "_allow_external_paths", False)
+    source = tmp_path / "upload.mp4"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"source")
+    monkeypatch.setattr(studio, "_start_job_thread", lambda *args, **kwargs: None)
+    with _client() as client:
+        response = client.post(
+            "/api/v1/factory/jobs",
+            json={"url": str(source), "mode": "local", "num_clips": 1},
+        )
+        assert response.status_code == 200
+        assert response.json()["factory"]["enabled"] is True
+        job_id = response.json()["id"]
+        with studio._lock:
+            assert studio._jobs[job_id]["factory"]["status"] == "processing"
 
 
 def test_parallel_local_render_preserves_order(monkeypatch, tmp_path: Path) -> None:

@@ -86,6 +86,7 @@ from web.update_service import UpdateService  # noqa: E402
 from web.job_store import JobStore  # noqa: E402
 from web.api_contract import API_VERSION, LEGACY_SUNSET, code_for_error, is_versioned_path, legacy_api_path  # noqa: E402
 from web.migrations import CURRENT_SCHEMA_VERSION, migration_summary, migrate_job_record  # noqa: E402
+from web.factory import initial_factory_state  # noqa: E402
 
 
 @asynccontextmanager
@@ -956,6 +957,7 @@ def _job_snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
         "elapsed_seconds": job.get("elapsed_seconds"),
         "eta_seconds": job.get("eta_seconds"),
         "checkpoint": redact_structure(job.get("checkpoint")),
+        "factory": redact_structure(job.get("factory")),
         "schema_version": schema_version,
         "logs": [
             safe
@@ -1495,6 +1497,10 @@ def _run_job(
             job["raw_shorts"] = raw_shorts
             job["raw_transcript"] = transcript
             job["raw_source_video_url"] = result.get("source_video_url")
+            factory = job.get("factory")
+            if isinstance(factory, dict) and factory.get("enabled"):
+                factory["status"] = "ready_for_review"
+                factory["ready_at"] = time.time()
             _append_job_log(job, "done", job["message"])
             _persist_job_locked(job)
     except Exception as exc:
@@ -1532,6 +1538,8 @@ def _run_job(
 def _enqueue_job(
     req: JobRequest,
     credentials: Optional[Dict[str, str]] = None,
+    *,
+    factory_mode: bool = False,
 ) -> Dict[str, Any]:
     if req.mode not in ("api", "local"):
         raise HTTPException(400, "mode must be api or local")
@@ -1592,6 +1600,7 @@ def _enqueue_job(
             "variants": [],
             "analytics": [],
             "publishing": [],
+            "factory": initial_factory_state(factory_mode),
             "migration_history": [],
             "created_at": time.time(),
             "updated_at": time.time(),

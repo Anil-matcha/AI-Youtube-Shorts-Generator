@@ -56,6 +56,22 @@ def create_job(
     return _studio()._enqueue_job(req, _credentials(x_muapi_key, x_openai_key, x_gemini_key, x_llm_provider))
 
 
+@router.post("/api/factory/jobs", tags=["projects"])
+def create_factory_job(
+    req: JobRequest,
+    x_muapi_key: Optional[str] = Header(default=None, alias="X-MuAPI-Key"),
+    x_openai_key: Optional[str] = Header(default=None, alias="X-OpenAI-Key"),
+    x_gemini_key: Optional[str] = Header(default=None, alias="X-Gemini-Key"),
+    x_llm_provider: Optional[str] = Header(default=None, alias="X-LLM-Provider"),
+) -> Dict[str, Any]:
+    """Queue one URL or uploaded file for a reviewable factory package."""
+    return _studio()._enqueue_job(
+        req,
+        _credentials(x_muapi_key, x_openai_key, x_gemini_key, x_llm_provider),
+        factory_mode=True,
+    )
+
+
 @router.post("/api/jobs/batch")
 def create_batch_jobs(
     req: BatchRequest,

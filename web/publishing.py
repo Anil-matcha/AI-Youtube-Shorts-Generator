@@ -9,6 +9,7 @@ the API caller before it is invoked.
 from __future__ import annotations
 
 import base64
+from email.utils import parsedate_to_datetime
 import hashlib
 import os
 import secrets
@@ -17,7 +18,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
-from urllib.parse import urlencode, urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 import requests
 
@@ -110,7 +111,10 @@ class YouTubeOAuthConfig:
     client_id: str
     client_secret: str
     redirect_uri: str
-    scopes: str = "https://www.googleapis.com/auth/youtube.upload"
+    scopes: str = (
+        "https://www.googleapis.com/auth/youtube.upload "
+        "https://www.googleapis.com/auth/youtube.force-ssl"
+    )
 
     @property
     def configured(self) -> bool:
@@ -125,7 +129,33 @@ _OAUTH_STATE_TTL = 600.0
 _TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 _AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 _UPLOAD_ENDPOINT = "https://www.googleapis.com/upload/youtube/v3/videos"
+_THUMBNAIL_ENDPOINT = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set"
+_CAPTIONS_ENDPOINT = "https://www.googleapis.com/upload/youtube/v3/captions"
 _CHUNK_SIZE = 8 * 1024 * 1024
+
+
+class YouTubePublishError(RuntimeError):
+    """Safe, machine-readable failure returned by the YouTube API."""
+
+    def __init__(self, message: str, *, code: str = "publish_failed", status_code: int = 502) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status_code = int(status_code)
+
+
+def youtube_auto_publish_enabled() -> bool:
+    """Return the explicit opt-in for unattended YouTube publishing."""
+    return os.getenv("SHORTS_YOUTUBE_AUTO_PUBLISH", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def youtube_public_auto_publish_enabled() -> bool:
+    """Return the separate opt-in required before unattended public uploads."""
+    return os.getenv("SHORTS_YOUTUBE_ALLOW_PUBLIC_AUTOPUBLISH", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def youtube_oauth_config() -> YouTubeOAuthConfig:
@@ -135,8 +165,11 @@ def youtube_oauth_config() -> YouTubeOAuthConfig:
         redirect_uri=os.getenv(
             "YOUTUBE_OAUTH_REDIRECT_URI", "http://127.0.0.1:7860/api/youtube/oauth/callback"
         ).strip(),
-        scopes=os.getenv("YOUTUBE_OAUTH_SCOPES", "https://www.googleapis.com/auth/youtube.upload").strip()
-        or "https://www.googleapis.com/auth/youtube.upload",
+        scopes=os.getenv(
+            "YOUTUBE_OAUTH_SCOPES",
+            "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.force-ssl",
+        ).strip()
+        or "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.force-ssl",
     )
 
 
@@ -153,6 +186,10 @@ def youtube_oauth_status() -> Dict[str, Any]:
         "token_storage": "process_memory_only",
         "approval_required": True,
         "privacy_default": "private",
+        "redirect_uri": config.redirect_uri,
+        "scopes": config.scopes.split(),
+        "auto_publish_enabled": youtube_auto_publish_enabled(),
+        "public_auto_publish_enabled": youtube_public_auto_publish_enabled(),
     }
 
 
@@ -165,22 +202,26 @@ def _pkce_challenge(verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
 
-def start_youtube_oauth() -> Dict[str, Any]:
+def start_youtube_oauth(*, redirect_uri: Optional[str] = None) -> Dict[str, Any]:
     config = youtube_oauth_config()
     if not config.configured:
         raise ValueError("Set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET before connecting YouTube")
+    callback = str(redirect_uri or config.redirect_uri).strip() or config.redirect_uri
+    parsed_callback = urlparse(callback)
+    if parsed_callback.scheme not in {"http", "https"} or not parsed_callback.netloc or "\n" in callback or "\r" in callback:
+        raise ValueError("YOUTUBE_OAUTH_REDIRECT_URI must be an absolute http(s) URL")
     state = secrets.token_urlsafe(32)
     verifier = _pkce_verifier()
     with _oauth_lock:
         now = time.time()
-        _oauth_states[state] = {"verifier": verifier, "created_at": now}
+        _oauth_states[state] = {"verifier": verifier, "created_at": now, "redirect_uri": callback}
         for key, value in list(_oauth_states.items()):
             if now - float(value.get("created_at") or 0) > _OAUTH_STATE_TTL:
                 _oauth_states.pop(key, None)
     query = urlencode(
         {
             "client_id": config.client_id,
-            "redirect_uri": config.redirect_uri,
+            "redirect_uri": callback,
             "response_type": "code",
             "scope": config.scopes,
             "access_type": "offline",
@@ -207,7 +248,7 @@ def complete_youtube_oauth(code: str, state: str) -> Dict[str, Any]:
             "code": str(code or ""),
             "client_id": config.client_id,
             "client_secret": config.client_secret,
-            "redirect_uri": config.redirect_uri,
+            "redirect_uri": str(session.get("redirect_uri") or config.redirect_uri),
             "grant_type": "authorization_code",
             "code_verifier": session["verifier"],
         },
@@ -226,6 +267,14 @@ def complete_youtube_oauth(code: str, state: str) -> Dict[str, Any]:
                 "expires_at": time.time() + float(payload.get("expires_in") or 3600),
             }
         )
+    return youtube_oauth_status()
+
+
+def disconnect_youtube_oauth() -> Dict[str, Any]:
+    """Forget the in-process YouTube tokens and pending OAuth states."""
+    with _oauth_lock:
+        _youtube_tokens.clear()
+        _oauth_states.clear()
     return youtube_oauth_status()
 
 
@@ -259,17 +308,170 @@ def _youtube_access_token() -> str:
     return access
 
 
+def _retry_after_seconds(response: Any, attempt: int, *, cap: float = 30.0) -> float:
+    """Honor a provider Retry-After value while keeping retries bounded."""
+    headers = getattr(response, "headers", {}) or {}
+    raw = str(headers.get("Retry-After") or "").strip()
+    if raw:
+        try:
+            return min(cap, max(0.0, float(raw)))
+        except (TypeError, ValueError, OverflowError):
+            try:
+                parsed = parsedate_to_datetime(raw)
+                delay = parsed.timestamp() - time.time()
+                return min(cap, max(0.0, delay))
+            except (TypeError, ValueError, OverflowError, OSError):
+                pass
+    return min(cap, 0.5 * (2**attempt))
+
+
 def _upload_request_with_retry(method: str, url: str, **kwargs: Any) -> requests.Response:
     last: Optional[requests.Response] = None
+    last_error: Optional[BaseException] = None
+    retriable_statuses = {408, 425, 429, 500, 502, 503, 504}
     for attempt in range(5):
-        response = requests.request(method, url, **kwargs)
+        try:
+            response = requests.request(method, url, **kwargs)
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt >= 4:
+                break
+            time.sleep(min(30.0, 0.5 * (2**attempt)))
+            continue
         last = response
-        if response.status_code not in {429, 500, 502, 503, 504}:
+        if response.status_code not in retriable_statuses:
             return response
-        time.sleep(min(8.0, 0.5 * (2**attempt)))
-    if last is None:
-        raise RuntimeError("YouTube upload request did not return a response")
-    return last
+        if attempt < 4:
+            time.sleep(_retry_after_seconds(response, attempt))
+    if last is not None:
+        return last
+    if last_error is not None:
+        raise YouTubePublishError(
+            f"YouTube upload request failed after retries: {last_error}",
+            code="dependency_failure",
+            status_code=502,
+        ) from last_error
+    raise YouTubePublishError("YouTube upload request did not return a response", code="dependency_failure", status_code=502)
+
+
+def _youtube_response_payload(response: Any) -> Dict[str, Any]:
+    try:
+        payload = response.json()
+    except (ValueError, TypeError, AttributeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _raise_youtube_for_status(response: requests.Response, operation: str) -> None:
+    status_code = int(getattr(response, "status_code", 502) or 502)
+    if status_code < 400:
+        return
+    payload = _youtube_response_payload(response)
+    error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+    reasons: List[str] = []
+    raw_errors = error.get("errors") if isinstance(error, dict) else []
+    if isinstance(raw_errors, list):
+        reasons.extend(
+            str(item.get("reason") or "")
+            for item in raw_errors
+            if isinstance(item, dict) and item.get("reason")
+        )
+    reason = str(error.get("status") or "") if isinstance(error, dict) else ""
+    if reason:
+        reasons.append(reason)
+    lowered = " ".join(reasons).casefold()
+    if status_code == 429 or any(token in lowered for token in ("quota", "dailylimit", "ratelimit")):
+        code = "quota_exceeded"
+        message = "YouTube API quota exceeded; wait for the quota window or request more quota."
+        status = 429
+    elif status_code in {401, 403} and any(token in lowered for token in ("auth", "forbidden", "permission")):
+        code = "credentials_required"
+        message = "YouTube authorization does not permit this operation; reconnect the Google account."
+        status = status_code
+    else:
+        code = "publish_failed"
+        message = f"YouTube {operation} failed (HTTP {status_code})."
+        status = 502 if status_code >= 500 else status_code
+    raise YouTubePublishError(message, code=code, status_code=status)
+
+
+def _upload_youtube_thumbnail(token: str, video_id: str, path: Path) -> Dict[str, Any]:
+    """Set a custom thumbnail after the video resource has been created."""
+    suffix = path.suffix.lower()
+    if suffix not in {".png", ".jpg", ".jpeg"}:
+        raise ValueError("YouTube thumbnails must be PNG or JPEG files")
+    if path.stat().st_size > 50 * 1024 * 1024:
+        raise ValueError("YouTube thumbnails exceed the 50 MB limit")
+    content_type = "image/png" if suffix == ".png" else "image/jpeg"
+    response = _upload_request_with_retry(
+        "POST",
+        f"{_THUMBNAIL_ENDPOINT}?videoId={quote(video_id, safe='')}",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": content_type},
+        data=path.read_bytes(),
+        timeout=(15, 60),
+    )
+    _raise_youtube_for_status(response, "thumbnail upload")
+    payload = _youtube_response_payload(response)
+    thumbnail_id = str(payload.get("id") or video_id)
+    return {"thumbnail_id": thumbnail_id, "status": "uploaded"}
+
+
+def _upload_youtube_captions(
+    token: str,
+    video_id: str,
+    path: Path,
+    *,
+    language: str,
+    name: str,
+    draft: bool,
+) -> Dict[str, Any]:
+    """Upload a timed SRT/VTT track through a resumable captions request."""
+    suffix = path.suffix.lower()
+    if suffix not in {".srt", ".vtt"}:
+        raise ValueError("YouTube captions must be SRT or VTT files")
+    content_type = "text/vtt" if suffix == ".vtt" else "application/x-subrip"
+    size = path.stat().st_size
+    metadata = {
+        "snippet": {
+            "videoId": video_id,
+            "language": language,
+            "name": name,
+            "isDraft": bool(draft),
+        }
+    }
+    session = _upload_request_with_retry(
+        "POST",
+        f"{_CAPTIONS_ENDPOINT}?uploadType=resumable&part=snippet",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "X-Upload-Content-Length": str(size),
+            "X-Upload-Content-Type": content_type,
+            "Content-Type": "application/json; charset=UTF-8",
+        },
+        json=metadata,
+        timeout=(15, 30),
+    )
+    _raise_youtube_for_status(session, "caption session initialization")
+    location = str(session.headers.get("Location") or "")
+    if not location:
+        raise YouTubePublishError("YouTube did not return a caption upload URL")
+    response = _upload_request_with_retry(
+        "PUT",
+        location,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Length": str(size),
+            "Content-Type": content_type,
+        },
+        data=path.read_bytes(),
+        timeout=(15, 120),
+    )
+    _raise_youtube_for_status(response, "caption upload")
+    payload = _youtube_response_payload(response)
+    caption_id = str(payload.get("id") or "")
+    if not caption_id:
+        raise YouTubePublishError("YouTube returned an invalid caption response")
+    return {"caption_id": caption_id, "language": language, "name": name, "draft": bool(draft), "status": "uploaded"}
 
 
 def upload_youtube_video(
@@ -278,11 +480,17 @@ def upload_youtube_video(
     title: str,
     description: str,
     tags: Optional[List[str]] = None,
+    category_id: str = "22",
     privacy_status: str = "private",
     publish_at: Optional[str] = None,
     idempotency_key: Optional[str] = None,
+    thumbnail_path: Optional[str | Path] = None,
+    captions_path: Optional[str | Path] = None,
+    caption_language: str = "en",
+    caption_name: str = "Shorts Studio captions",
+    captions_draft: bool = False,
 ) -> Dict[str, Any]:
-    """Upload one clip through YouTube's resumable upload protocol."""
+    """Upload one clip and optional thumbnail/caption assets via YouTube."""
     path = Path(media_path).expanduser().resolve()
     if not path.is_file():
         raise ValueError("clip media is unavailable")
@@ -299,13 +507,28 @@ def upload_youtube_video(
             previous = _upload_results.get(f"key:{request_key}")
         if previous:
             return dict(previous)
+    thumbnail = Path(thumbnail_path).expanduser().resolve() if thumbnail_path else None
+    captions = Path(captions_path).expanduser().resolve() if captions_path else None
+    if thumbnail is not None and (not thumbnail.is_file() or thumbnail.stat().st_size <= 0):
+        raise ValueError("YouTube thumbnail is unavailable")
+    if captions is not None and (not captions.is_file() or captions.stat().st_size <= 0):
+        raise ValueError("YouTube captions are unavailable")
+    if captions is not None and captions.stat().st_size > 100 * 1024 * 1024:
+        raise ValueError("YouTube captions exceed the 100 MB limit")
+    language = str(caption_language or "en").strip().lower().replace("_", "-")
+    if not language or any(char not in "abcdefghijklmnopqrstuvwxyz-" for char in language):
+        raise ValueError("caption_language must be an ISO language code")
+    name = " ".join(str(caption_name or "Shorts Studio captions").split())[:150] or "Shorts Studio captions"
     token = _youtube_access_token()
+    normalized_category = str(category_id or "22").strip()
+    if not normalized_category.isdigit() or int(normalized_category) < 1:
+        raise ValueError("category_id must be a positive numeric YouTube category id")
     body: Dict[str, Any] = {
         "snippet": {
             "title": str(title or "Untitled highlight")[:100],
             "description": str(description or "")[:5000],
             "tags": [str(tag)[:100] for tag in (tags or [])[:30]],
-            "categoryId": "22",
+            "categoryId": normalized_category,
         },
         "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False},
     }
@@ -325,7 +548,7 @@ def upload_youtube_video(
         json=body,
         timeout=(15, 30),
     )
-    session.raise_for_status()
+    _raise_youtube_for_status(session, "resumable session initialization")
     location = str(session.headers.get("Location") or "")
     if not location:
         raise RuntimeError("YouTube did not return a resumable upload URL")
@@ -351,17 +574,49 @@ def upload_youtube_video(
                 timeout=(15, 120),
             )
             if response.status_code == 308:
+                retry_after = _retry_after_seconds(response, 0)
+                if retry_after > 0 and response.headers.get("Retry-After"):
+                    time.sleep(retry_after)
                 range_header = str(response.headers.get("Range") or "")
                 try:
                     offset = int(range_header.rsplit("-", 1)[-1]) + 1 if range_header else end + 1
                 except ValueError:
                     offset = end + 1
                 continue
-            response.raise_for_status()
-            payload = response.json()
+            _raise_youtube_for_status(response, "video upload")
+            payload = _youtube_response_payload(response)
             if not isinstance(payload, dict) or not payload.get("id"):
-                raise RuntimeError("YouTube returned an invalid upload response")
-            result = {"video_id": str(payload["id"]), "url": f"https://youtu.be/{payload['id']}", "privacy_status": privacy}
+                raise YouTubePublishError("YouTube returned an invalid upload response")
+            result: Dict[str, Any] = {
+                "video_id": str(payload["id"]),
+                "url": f"https://youtu.be/{payload['id']}",
+                "privacy_status": privacy,
+                "category_id": normalized_category,
+                "thumbnail": None,
+                "captions": None,
+                "asset_errors": [],
+            }
+            if thumbnail is not None:
+                try:
+                    result["thumbnail"] = _upload_youtube_thumbnail(token, str(payload["id"]), thumbnail)
+                except (OSError, ValueError, RuntimeError, YouTubePublishError) as exc:
+                    result["asset_errors"].append({"asset": "thumbnail", "error": str(exc)[:400]})
+            if captions is not None:
+                try:
+                    result["captions"] = _upload_youtube_captions(
+                        token,
+                        str(payload["id"]),
+                        captions,
+                        language=language,
+                        name=name,
+                        draft=bool(captions_draft),
+                    )
+                except (OSError, ValueError, RuntimeError, YouTubePublishError) as exc:
+                    result["asset_errors"].append({"asset": "captions", "error": str(exc)[:400]})
+            if result["asset_errors"]:
+                result["status"] = "uploaded_with_warnings"
+            else:
+                result["status"] = "uploaded"
             with _oauth_lock:
                 _upload_results[str(path)] = result
                 if request_key:
@@ -782,10 +1037,16 @@ def publish_direct(
     publish_at: Optional[str] = None,
     idempotency_key: Optional[str] = None,
     media_url: Optional[str] = None,
+    category_id: str = "22",
+    thumbnail_path: Optional[str | Path] = None,
+    captions_path: Optional[str | Path] = None,
+    caption_language: str = "en",
+    caption_name: str = "Shorts Studio captions",
+    captions_draft: bool = False,
 ) -> Dict[str, Any]:
     """Dispatch an approval-approved upload to a supported direct adapter."""
     key = str(platform or "").strip().lower()
-    if publish_at:
+    if publish_at and key != "youtube_shorts":
         raise ValueError(f"{key} does not support scheduled direct publishing yet; schedule it in the platform studio")
     if key == "youtube_shorts":
         return upload_youtube_video(
@@ -793,8 +1054,15 @@ def publish_direct(
             title=title,
             description=description,
             tags=tags,
+            category_id=category_id,
             privacy_status=privacy_status,
+            publish_at=publish_at,
             idempotency_key=idempotency_key,
+            thumbnail_path=thumbnail_path,
+            captions_path=captions_path,
+            caption_language=caption_language,
+            caption_name=caption_name,
+            captions_draft=captions_draft,
         )
     if key == "tiktok":
         return publish_tiktok_video(media_path, title=title, privacy_status=privacy_status, idempotency_key=idempotency_key)

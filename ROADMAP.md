@@ -213,6 +213,12 @@ CI, and a clean repository at release time.
 - [x] Add append-only platform analytics observations, aggregate retention and
       engagement metrics, and explainable feedback for A/B variants.
 - [x] Add durable per-clip metadata variants with publish and analytics links.
+- [x] **G-001 beta slice** — Add the Shorts Factory queue and reviewable package
+      containing clips, captions, hooks, thumbnails, metadata, platform export
+      plans, and durable per-clip approval checkpoints.
+- [x] **G-010 beta slice** — Add Google/YouTube PKCE sign-in, approval-first
+      resumable uploads with category/privacy/scheduling controls, thumbnails,
+      captions, bounded quota-aware retries, idempotency, and an audit log.
 - [x] Add regression coverage for API aliases, migrations, backups, direct
       adapter mocks, variants/analytics, parallel rendering, and streaming
       Whisper progress.
@@ -252,9 +258,9 @@ These bets define the long-term differentiation of Shorts Studio. They are
 future exploration items, not commitments for v0.10.x; each needs a measured
 prototype, a clear privacy boundary, and a human approval path before rollout.
 
-- [ ] **G-001 Autonomous Shorts Factory** — From one upload or URL, produce a
-      reviewable package of clips, captions, hooks, thumbnails, metadata, and
-      platform exports with approval checkpoints.
+- [ ] **G-001 full autonomy** — Extend the beta factory package with unattended
+      scheduling, compliance checks, batch-channel processing, and policy-safe
+      automation after measured production gates.
 - [ ] **G-002 Creator Style Memory** — Learn approved pacing, hooks, caption
       language, framing, and brand rules across projects in an exportable local
       profile.
@@ -272,10 +278,10 @@ prototype, a clear privacy boundary, and a human approval path before rollout.
       comments, approvals, roles, and version history without sharing secrets.
 - [ ] **G-009 Open Extension Ecosystem** — Ship a versioned, sandboxed plugin
       SDK for pipeline stages, caption packs, exporters, and integrations.
-- [ ] **G-010 YouTube Auto-Publish** — Integrate YouTube Data API OAuth for
-      approval-first uploads, resumable transfer, metadata/thumbnails/captions,
-      privacy and scheduling controls, quota-aware retries, idempotency, and an
-      audit log. Public auto-publish must be an explicit opt-in.
+- [ ] **G-010 production distribution** — Extend the beta YouTube adapter with
+      a hosted scheduler, operational quota dashboards, live authenticated
+      deployment coverage, and policy/compliance controls. Public auto-publish
+      remains an explicit opt-in.
 
 ### Autonomous Clip Factory
 - [ ] **Fully autonomous pipeline** — Upload a video, walk away. The system selects the best clips, applies captions, music, transitions, and branding without human intervention.

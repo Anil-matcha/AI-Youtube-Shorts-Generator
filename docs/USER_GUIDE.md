@@ -48,7 +48,50 @@ python scripts/migrate_data.py --data-dir C:\path\to\shorts-data
 python scripts/migrate_data.py --data-dir C:\path\to\shorts-data --apply
 ```
 
-## 4. Publish and measure
+## 4. Build a Shorts Factory package
+
+For a reviewable end-to-end package, submit the same local path or YouTube URL
+to `POST /api/v1/factory/jobs` (the request body is the normal job request).
+When the job reaches **done**, open `GET /api/v1/jobs/{id}/factory` or download
+the project export. The package contains safe clip URLs, hooks, generated
+captions, thumbnails, creator metadata, and handoff plans for each supported
+platform. Local absolute paths and credentials are never placed in the
+manifest.
+
+Record a decision for one or more clips with
+`POST /api/v1/jobs/{id}/factory/approve`:
+
+```json
+{"clip_indices": [0], "decision": "approved", "note": "Ready for review"}
+```
+
+An approved checkpoint only makes the clip eligible for the normal publishing
+confirmation; it never starts an upload by itself. Rejected clips remain in the
+package for auditability and cannot be published until a later approval.
+
+## 5. Sign in with Google and publish to YouTube
+
+Set `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, and the matching redirect URI
+from your Google Cloud OAuth client. In the Export panel, choose **Sign in
+with Google**, complete consent in the Google window, and return to Shorts
+Studio. The status endpoint is `GET /api/v1/youtube/oauth/status`; tokens are
+kept only in this process and can be cleared with
+`POST /api/v1/youtube/oauth/disconnect`. Existing connections should be
+reauthorized after changing scopes.
+
+YouTube publishing remains approval-first. Select a completed clip, review the
+title, description, clip, privacy, schedule, thumbnail, and captions, check the
+review confirmation, and then submit the publish request with `confirm=true`.
+Uploads use the resumable API and can attach an image thumbnail plus an SRT or
+VTT caption track. Scheduled uploads remain private until the scheduled time.
+
+Unattended publishing is off by default. It requires both the request's
+`auto_publish=true` and `SHORTS_YOUTUBE_AUTO_PUBLISH=true`; an unattended public
+upload additionally requires `allow_public=true` and
+`SHORTS_YOUTUBE_ALLOW_PUBLIC_AUTOPUBLISH=true`. Every completed attempt is
+recorded in the project's credential-free publishing audit log.
+
+## 6. Publish and measure
 
 Publishing is approval-first and private by default.  The **Publishing**
 catalog shows whether YouTube, TikTok, or Instagram credentials are connected.
@@ -66,7 +109,7 @@ Record views, likes, comments, and completion percentage in the analytics
 controls. The feedback response compares retention and engagement and gives an
 explainable next step; it never changes a project automatically.
 
-## 5. Versioned API
+## 7. Versioned API
 
 New integrations should use `/api/v1/`.  The older `/api` paths remain as a
 compatibility surface and return `Deprecation: true`, a `Sunset` date, and a
