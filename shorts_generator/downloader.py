@@ -1,4 +1,5 @@
 """YouTube source video download via MuAPI /youtube-download."""
+
 from typing import Dict
 
 from . import muapi
@@ -6,6 +7,8 @@ from . import muapi
 
 def _extract_video_url(result: Dict) -> str:
     """MuAPI result shapes vary by endpoint — try common keys."""
+    if not isinstance(result, dict):
+        raise RuntimeError(f"Could not find downloaded video URL in MuAPI response: {result!r}")
     for key in ("video_url", "url", "output_url", "result_url"):
         v = result.get(key)
         if isinstance(v, str) and v.startswith("http"):
@@ -25,6 +28,9 @@ def _extract_video_url(result: Dict) -> str:
 
 def download_youtube(video_url: str, fmt: str = "720") -> str:
     """Hand a YouTube URL to MuAPI; return a hosted mp4 URL we can read from."""
+    if not video_url or not str(video_url).strip():
+        raise ValueError("A YouTube URL is required.")
+    video_url = str(video_url).strip()
     print(f"[download] requesting {video_url} @ {fmt}p", flush=True)
     result = muapi.run(
         "youtube-download",

@@ -1,0 +1,9 @@
+Shorts Studio is available inside the cluster at:
+
+  http://{{ include "shorts-studio.fullname" . }}:{{ .Values.service.port }}
+
+The chart targets a single CPU Deployment with durable /data storage. Set
+SHORTS_API_TOKEN and provider credentials through --set-string
+'secretEnv.SHORTS_API_TOKEN=...' (or an externally managed Secret). The
+published CPU image supports amd64 and arm64; CUDA/GPU is not part of this
+chart.

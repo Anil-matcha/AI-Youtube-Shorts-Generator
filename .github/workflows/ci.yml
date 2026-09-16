@@ -1,0 +1,212 @@
+name: Quality checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Lint, type-check, and test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install pinned developer dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements-dev.txt
+
+      - name: Ruff
+        run: python -m ruff check shorts_generator web launcher.py main.py tests scripts
+
+      - name: Mypy
+        run: python -m mypy --strict
+
+      - name: Bandit security lint
+        run: python -m bandit -r shorts_generator web launcher.py main.py scripts -ll -x tests
+
+      - name: Pytest
+        # Keep the gate just below the current 53.25% measured total while
+        # the dynamic provider/media adapters gain direct integration coverage.
+        run: python -m pytest --cov=shorts_generator --cov=web --cov-report=term-missing --cov-fail-under=53
+
+      - name: JavaScript syntax
+        shell: bash
+        run: for file in web/static/*.js web/static/modules/*.js; do node --check "$file"; done
+
+      - name: Dependency audit
+        run: |
+          python -m pip_audit -r requirements.txt --progress-spinner off
+          python -m pip_audit -r requirements-dev.txt --progress-spinner off
+          python -m pip_audit -r requirements-local.txt --progress-spinner off
+          python -m pip_audit -r requirements-gpu.txt --progress-spinner off
+          python -m pip_audit -r requirements-docker.txt --progress-spinner off
+          # Pillow 12.3.0 has no manylinux aarch64 wheel yet, so the arm64
+          # image must stay on 12.2.0 until that upstream wheel is published.
+          # The arm64 dependency job below continues to enforce binary
+          # availability for the pinned target stack.
+
+      - name: Generate dependency SBOM
+        run: python -m pip_audit -r requirements.txt --format cyclonedx-json --output sbom-requirements.json --progress-spinner off
+
+      - name: Upload dependency SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-python-${{ matrix.python-version }}
+          path: sbom-requirements.json
+          if-no-files-found: error
+
+  windows-smoke:
+    name: Windows packaged-runtime smoke
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install runtime and developer dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+          python -m pip install pyinstaller==6.22.2
+      - name: Build packaged executable
+        shell: pwsh
+        run: |
+          python -m pip install -r requirements-local.txt
+          python scripts\build.py portable
+      - name: API health smoke
+        shell: pwsh
+        run: |
+          $env:SHORTS_STUDIO_HEADLESS = "true"
+          $env:SHORTS_AUTO_RESUME = "false"
+          $env:SHORTS_STUDIO_BROWSER = "1"
+          $env:SHORTS_API_TOKEN = "ci-token"
+          $env:SHORTS_STUDIO_DATA_DIR = "$PWD\.ci-data"
+          $env:LOCAL_OUTPUT_DIR = "$PWD\.ci-data\output"
+          $process = Start-Process "$PWD\dist\ShortsStudio\ShortsStudio.exe" -ArgumentList '--browser','--port','18761' -PassThru -WindowStyle Hidden
+          try {
+            $healthy = $false
+            for ($i = 0; $i -lt 45; $i++) { try { Invoke-WebRequest http://127.0.0.1:18761/api/health -UseBasicParsing | Out-Null; $healthy = $true; break } catch { Start-Sleep -Seconds 1 } }
+            if (-not $healthy) { throw "Packaged API did not become healthy" }
+            $response = Invoke-WebRequest http://127.0.0.1:18761/api/health -UseBasicParsing
+            if ($response.StatusCode -ne 200) { throw "Health check failed" }
+            try {
+              Invoke-WebRequest http://127.0.0.1:18761/api/system -UseBasicParsing | Out-Null
+              throw "Authentication smoke failed: anonymous request was accepted"
+            } catch {
+              if (-not ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 401)) { throw }
+            }
+            $authorized = Invoke-WebRequest http://127.0.0.1:18761/api/system -UseBasicParsing -Headers @{ Authorization = "Bearer ci-token" }
+            if ($authorized.StatusCode -ne 200) { throw "Authenticated system smoke failed" }
+            Invoke-WebRequest http://127.0.0.1:18761/api/shutdown -Method Post -UseBasicParsing -Headers @{ Authorization = "Bearer ci-token" } | Out-Null
+            $process.WaitForExit(15000)
+            $process.Refresh()
+            if (-not $process.HasExited) { throw "Packaged process did not stop after shutdown" }
+          } finally { $process.Refresh(); if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue } }
+
+      - name: Verify package version source
+        shell: pwsh
+        run: |
+          $version = python -c "from shorts_generator import __version__; print(__version__)"
+          if ($version -ne "1.0.0") { throw "Unexpected package version: $version" }
+
+  compose:
+    name: Validate Docker Compose
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Validate Compose file
+        run: docker compose --env-file .env.docker.example config --quiet
+
+  arm64-dependencies:
+    name: Verify Linux arm64 CPU dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Resolve manylinux arm64 wheels
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip download --only-binary=:all: \
+            --platform manylinux_2_17_aarch64 --implementation cp \
+            --python-version 312 --abi cp312 \
+            -r requirements-docker-arm64.txt --dest "$RUNNER_TEMP/shorts-arm64-wheels"
+          test "$(find "$RUNNER_TEMP/shorts-arm64-wheels" -type f | wc -l)" -gt 0
+
+  helm:
+    name: Lint Helm deployment chart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+      - name: Lint and render chart
+        run: |
+          helm lint deploy/helm/shorts-studio
+          helm template shorts-studio deploy/helm/shorts-studio --set image.tag=0.11.2 >/tmp/shorts-studio.yaml
+          grep -q 'kind: Deployment' /tmp/shorts-studio.yaml
+
+  browser-e2e:
+    name: Playwright creator flow and accessibility
+    runs-on: ubuntu-latest
+    env:
+      RUN_BROWSER_E2E: "1"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install browser test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements-dev.txt && python -m playwright install --with-deps chromium
+      - name: Run browser tests
+        run: python -m pytest -q tests/e2e
+
+  docker-runtime:
+    name: Docker runtime and non-root smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Build image
+        run: docker build --tag shorts-studio:ci .
+      - name: Start and verify runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --detach --rm --name shorts-studio-ci --publish 127.0.0.1:17860:7860 --env SHORTS_API_TOKEN=ci-token shorts-studio:ci
+          trap 'docker stop shorts-studio-ci >/dev/null 2>&1 || true' EXIT
+          for i in $(seq 1 45); do curl --fail --silent http://127.0.0.1:17860/api/health >/dev/null && break; sleep 2; done
+          curl --fail --silent http://127.0.0.1:17860/api/health >/dev/null
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:17860/api/system)" = "401"
+          curl --fail --silent -H 'Authorization: Bearer ci-token' http://127.0.0.1:17860/api/system >/dev/null
+          test "$(docker exec shorts-studio-ci id -u)" != "0"

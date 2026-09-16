@@ -1,0 +1,29 @@
+name-template: 'Shorts Studio $RESOLVED_VERSION'
+tag-template: 'v$RESOLVED_VERSION'
+change-template: '- $TITLE (#$NUMBER)'
+no-changes-template: '- Maintenance and documentation updates.'
+categories:
+  - title: 'Features'
+    labels: ['feature', 'enhancement']
+  - title: 'Fixes'
+    labels: ['fix', 'bug']
+  - title: 'Developer experience'
+    labels: ['build', 'ci', 'documentation']
+  - title: 'Other'
+    labels: ['*']
+version-resolver:
+  major:
+    labels: ['breaking']
+  minor:
+    labels: ['feature', 'enhancement']
+  patch:
+    labels: ['fix', 'bug', 'build', 'ci', 'documentation']
+  default: patch
+template: |
+  ## What's changed
+
+  $CHANGES
+
+  ## Verification
+
+  - Python tests, lint, type checks, security lint, and package smoke checks run in CI.

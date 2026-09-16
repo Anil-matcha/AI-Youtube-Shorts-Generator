@@ -1,0 +1,167 @@
+name: shorts-studio
+
+services:
+  shorts-studio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/wiifhub/shorts-studio:latest
+    init: true
+    ports:
+      - "127.0.0.1:${SHORTS_PORT:-7860}:7860"
+    environment:
+      LOCAL_OUTPUT_DIR: /data/output
+      SHORTS_STUDIO_DATA_DIR: /data
+      HF_HOME: /data/models
+      HUGGINGFACE_HUB_CACHE: /data/models/hub
+      XDG_CACHE_HOME: /data/cache
+      SHORTS_STUDIO_HEADLESS: "true"
+      SHORTS_STUDIO_BROWSER: "true"
+      SHORTS_PORT: "7860"
+      SHORTS_RENDER_WORKERS: ${SHORTS_RENDER_WORKERS:-2}
+      SHORTS_RESPONSE_CACHE_SECONDS: ${SHORTS_RESPONSE_CACHE_SECONDS:-10}
+      LOCAL_WHISPER_MODEL: ${LOCAL_WHISPER_MODEL:-base}
+      LOCAL_WHISPER_DEVICE: ${LOCAL_WHISPER_DEVICE:-auto}
+      LOCAL_BURN_CAPTIONS: ${LOCAL_BURN_CAPTIONS:-true}
+      LOCAL_HEURISTIC_FALLBACK: ${LOCAL_HEURISTIC_FALLBACK:-true}
+      SHORTS_FACE_DETECTOR: ${SHORTS_FACE_DETECTOR:-auto}
+      SHORTS_FACE_DNN_MODEL: ${SHORTS_FACE_DNN_MODEL:-}
+      SHORTS_FACE_DNN_CONFIG: ${SHORTS_FACE_DNN_CONFIG:-}
+      SHORTS_MAX_UPLOAD_MB: ${SHORTS_MAX_UPLOAD_MB:-2048}
+      SHORTS_MAX_JSON_MB: ${SHORTS_MAX_JSON_MB:-2}
+      SHORTS_MIN_FREE_GB: ${SHORTS_MIN_FREE_GB:-0.5}
+      SHORTS_ALLOW_EXTERNAL_PATHS: ${SHORTS_ALLOW_EXTERNAL_PATHS:-false}
+      SHORTS_AUTO_RESUME: ${SHORTS_AUTO_RESUME:-true}
+      SHORTS_API_TOKEN: ${SHORTS_API_TOKEN:-}
+      SHORTS_RATE_LIMIT_PER_MINUTE: ${SHORTS_RATE_LIMIT_PER_MINUTE:-600}
+      SHORTS_UPLOAD_RATE_LIMIT_PER_MINUTE: ${SHORTS_UPLOAD_RATE_LIMIT_PER_MINUTE:-10}
+      SHORTS_JOB_RATE_LIMIT_PER_MINUTE: ${SHORTS_JOB_RATE_LIMIT_PER_MINUTE:-30}
+      SHORTS_RATE_LIMIT_BACKEND: ${SHORTS_RATE_LIMIT_BACKEND:-sqlite}
+      SHORTS_RATE_LIMIT_STORE: ${SHORTS_RATE_LIMIT_STORE:-/data/rate_limits.sqlite3}
+      SHORTS_TRUST_PROXY_HEADERS: ${SHORTS_TRUST_PROXY_HEADERS:-false}
+      SHORTS_REQUIRE_SIGNED_UPDATES: ${SHORTS_REQUIRE_SIGNED_UPDATES:-true}
+      MUAPI_API_KEY: ${MUAPI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:-}
+      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:-}
+      YOUTUBE_OAUTH_REDIRECT_URI: ${YOUTUBE_OAUTH_REDIRECT_URI:-http://127.0.0.1:7860/api/youtube/oauth/callback}
+      YOUTUBE_OAUTH_SCOPES: ${YOUTUBE_OAUTH_SCOPES:-https://www.googleapis.com/auth/youtube.upload}
+      TIKTOK_CLIENT_KEY: ${TIKTOK_CLIENT_KEY:-}
+      TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET:-}
+      TIKTOK_ACCESS_TOKEN: ${TIKTOK_ACCESS_TOKEN:-}
+      TIKTOK_OAUTH_REDIRECT_URI: ${TIKTOK_OAUTH_REDIRECT_URI:-http://127.0.0.1:7860/api/tiktok/oauth/callback}
+      INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID:-}
+      INSTAGRAM_APP_SECRET: ${INSTAGRAM_APP_SECRET:-}
+      INSTAGRAM_ACCESS_TOKEN: ${INSTAGRAM_ACCESS_TOKEN:-}
+      INSTAGRAM_USER_ID: ${INSTAGRAM_USER_ID:-}
+      INSTAGRAM_GRAPH_VERSION: ${INSTAGRAM_GRAPH_VERSION:-v25.0}
+      INSTAGRAM_OAUTH_REDIRECT_URI: ${INSTAGRAM_OAUTH_REDIRECT_URI:-http://127.0.0.1:7860/api/instagram/oauth/callback}
+      SHORTS_OPENAI_INPUT_USD_PER_MILLION: ${SHORTS_OPENAI_INPUT_USD_PER_MILLION:-0}
+      SHORTS_OPENAI_OUTPUT_USD_PER_MILLION: ${SHORTS_OPENAI_OUTPUT_USD_PER_MILLION:-0}
+      SHORTS_GEMINI_INPUT_USD_PER_MILLION: ${SHORTS_GEMINI_INPUT_USD_PER_MILLION:-0}
+      SHORTS_GEMINI_OUTPUT_USD_PER_MILLION: ${SHORTS_GEMINI_OUTPUT_USD_PER_MILLION:-0}
+      SHORTS_MUAPI_INPUT_USD_PER_MILLION: ${SHORTS_MUAPI_INPUT_USD_PER_MILLION:-0}
+      SHORTS_MUAPI_OUTPUT_USD_PER_MILLION: ${SHORTS_MUAPI_OUTPUT_USD_PER_MILLION:-0}
+    volumes:
+      - shorts_studio_data:/data
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=512m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/api/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  # Requires Docker Desktop/Engine with the NVIDIA Container Toolkit. It is
+  # opt-in so a normal CPU install never attempts to reserve a GPU.  CPU and
+  # GPU profiles intentionally share the same data volume so projects/models
+  # remain available when switching profiles.
+  shorts-studio-gpu:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    image: ghcr.io/wiifhub/shorts-studio:gpu
+    init: true
+    ports:
+      - "127.0.0.1:${SHORTS_GPU_PORT:-7861}:7860"
+    environment:
+      LOCAL_OUTPUT_DIR: /data/output
+      SHORTS_STUDIO_DATA_DIR: /data
+      HF_HOME: /data/models
+      HUGGINGFACE_HUB_CACHE: /data/models/hub
+      XDG_CACHE_HOME: /data/cache
+      SHORTS_STUDIO_HEADLESS: "true"
+      SHORTS_STUDIO_BROWSER: "true"
+      SHORTS_PORT: "7860"
+      SHORTS_RENDER_WORKERS: ${SHORTS_RENDER_WORKERS:-2}
+      SHORTS_RESPONSE_CACHE_SECONDS: ${SHORTS_RESPONSE_CACHE_SECONDS:-10}
+      LOCAL_WHISPER_MODEL: ${LOCAL_WHISPER_MODEL:-base}
+      LOCAL_WHISPER_DEVICE: ${LOCAL_WHISPER_DEVICE:-cuda}
+      LOCAL_BURN_CAPTIONS: ${LOCAL_BURN_CAPTIONS:-true}
+      LOCAL_HEURISTIC_FALLBACK: ${LOCAL_HEURISTIC_FALLBACK:-true}
+      SHORTS_FACE_DETECTOR: ${SHORTS_FACE_DETECTOR:-auto}
+      SHORTS_FACE_DNN_MODEL: ${SHORTS_FACE_DNN_MODEL:-}
+      SHORTS_FACE_DNN_CONFIG: ${SHORTS_FACE_DNN_CONFIG:-}
+      SHORTS_MAX_UPLOAD_MB: ${SHORTS_MAX_UPLOAD_MB:-2048}
+      SHORTS_MAX_JSON_MB: ${SHORTS_MAX_JSON_MB:-2}
+      SHORTS_MIN_FREE_GB: ${SHORTS_MIN_FREE_GB:-0.5}
+      SHORTS_ALLOW_EXTERNAL_PATHS: ${SHORTS_ALLOW_EXTERNAL_PATHS:-false}
+      SHORTS_AUTO_RESUME: ${SHORTS_AUTO_RESUME:-true}
+      SHORTS_API_TOKEN: ${SHORTS_API_TOKEN:-}
+      SHORTS_RATE_LIMIT_PER_MINUTE: ${SHORTS_RATE_LIMIT_PER_MINUTE:-600}
+      SHORTS_UPLOAD_RATE_LIMIT_PER_MINUTE: ${SHORTS_UPLOAD_RATE_LIMIT_PER_MINUTE:-10}
+      SHORTS_JOB_RATE_LIMIT_PER_MINUTE: ${SHORTS_JOB_RATE_LIMIT_PER_MINUTE:-30}
+      SHORTS_RATE_LIMIT_BACKEND: ${SHORTS_RATE_LIMIT_BACKEND:-sqlite}
+      SHORTS_RATE_LIMIT_STORE: ${SHORTS_RATE_LIMIT_STORE:-/data/rate_limits.sqlite3}
+      SHORTS_TRUST_PROXY_HEADERS: ${SHORTS_TRUST_PROXY_HEADERS:-false}
+      SHORTS_REQUIRE_SIGNED_UPDATES: ${SHORTS_REQUIRE_SIGNED_UPDATES:-true}
+      MUAPI_API_KEY: ${MUAPI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:-}
+      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:-}
+      YOUTUBE_OAUTH_REDIRECT_URI: ${YOUTUBE_OAUTH_REDIRECT_URI:-http://127.0.0.1:7860/api/youtube/oauth/callback}
+      YOUTUBE_OAUTH_SCOPES: ${YOUTUBE_OAUTH_SCOPES:-https://www.googleapis.com/auth/youtube.upload}
+      TIKTOK_CLIENT_KEY: ${TIKTOK_CLIENT_KEY:-}
+      TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET:-}
+      TIKTOK_ACCESS_TOKEN: ${TIKTOK_ACCESS_TOKEN:-}
+      TIKTOK_OAUTH_REDIRECT_URI: ${TIKTOK_OAUTH_REDIRECT_URI:-http://127.0.0.1:7860/api/tiktok/oauth/callback}
+      INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID:-}
+      INSTAGRAM_APP_SECRET: ${INSTAGRAM_APP_SECRET:-}
+      INSTAGRAM_ACCESS_TOKEN: ${INSTAGRAM_ACCESS_TOKEN:-}
+      INSTAGRAM_USER_ID: ${INSTAGRAM_USER_ID:-}
+      INSTAGRAM_GRAPH_VERSION: ${INSTAGRAM_GRAPH_VERSION:-v25.0}
+      INSTAGRAM_OAUTH_REDIRECT_URI: ${INSTAGRAM_OAUTH_REDIRECT_URI:-http://127.0.0.1:7860/api/instagram/oauth/callback}
+      SHORTS_OPENAI_INPUT_USD_PER_MILLION: ${SHORTS_OPENAI_INPUT_USD_PER_MILLION:-0}
+      SHORTS_OPENAI_OUTPUT_USD_PER_MILLION: ${SHORTS_OPENAI_OUTPUT_USD_PER_MILLION:-0}
+      SHORTS_GEMINI_INPUT_USD_PER_MILLION: ${SHORTS_GEMINI_INPUT_USD_PER_MILLION:-0}
+      SHORTS_GEMINI_OUTPUT_USD_PER_MILLION: ${SHORTS_GEMINI_OUTPUT_USD_PER_MILLION:-0}
+      SHORTS_MUAPI_INPUT_USD_PER_MILLION: ${SHORTS_MUAPI_INPUT_USD_PER_MILLION:-0}
+      SHORTS_MUAPI_OUTPUT_USD_PER_MILLION: ${SHORTS_MUAPI_OUTPUT_USD_PER_MILLION:-0}
+    gpus: all
+    volumes:
+      - shorts_studio_data:/data
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=512m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/api/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 45s
+      retries: 3
+
+volumes:
+  shorts_studio_data:

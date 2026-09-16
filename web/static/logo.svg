@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Shorts Studio</title>
+  <desc id="desc">A luminous cut-ribbon S mark for Shorts Studio.</desc>
+  <defs>
+    <linearGradient id="shell" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1d2d52"/>
+      <stop offset="1" stop-color="#0b1220"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5ee7ef"/>
+      <stop offset="0.52" stop-color="#73c9ff"/>
+      <stop offset="1" stop-color="#9677ff"/>
+    </linearGradient>
+    <linearGradient id="ribbon" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#eaffff"/>
+      <stop offset="0.45" stop-color="#8eeeff"/>
+      <stop offset="1" stop-color="#b7a6ff"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="124" fill="url(#shell)" stroke="#31466f" stroke-width="4"/>
+  <rect x="42" y="42" width="428" height="428" rx="104" fill="url(#accent)" opacity="0.94"/>
+  <rect x="72" y="72" width="368" height="368" rx="82" fill="#091221" stroke="#ffffff" stroke-opacity="0.16" stroke-width="3"/>
+  <path d="M347 151C321 128 278 118 238 123C191 129 159 156 159 193C159 235 196 249 249 263C310 279 352 295 352 337C352 383 307 408 251 408C207 408 163 392 136 367" fill="none" stroke="#5ee7ef" stroke-opacity="0.28" stroke-width="58" stroke-linecap="round" filter="url(#glow)"/>
+  <path d="M347 151C321 128 278 118 238 123C191 129 159 156 159 193C159 235 196 249 249 263C310 279 352 295 352 337C352 383 307 408 251 408C207 408 163 392 136 367" fill="none" stroke="url(#ribbon)" stroke-width="38" stroke-linecap="round"/>
+  <path d="M347 151C321 128 278 118 238 123C191 129 159 156 159 193C159 235 196 249 249 263C310 279 352 295 352 337C352 383 307 408 251 408C207 408 163 392 136 367" fill="none" stroke="#ffffff" stroke-opacity="0.42" stroke-width="7" stroke-linecap="round"/>
+  <rect x="111" y="107" width="62" height="12" rx="6" fill="#ffffff" opacity="0.94"/>
+  <rect x="339" y="393" width="62" height="12" rx="6" fill="#5ee7ef" opacity="0.94"/>
+  <path d="M327 351L377 380L327 409Z" fill="url(#accent)" stroke="#ffffff" stroke-opacity="0.72" stroke-width="4" stroke-linejoin="round"/>
+</svg>

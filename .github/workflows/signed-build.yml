@@ -1,0 +1,57 @@
+name: Signed release build
+
+on:
+  workflow_dispatch:
+    inputs:
+      require_signing:
+        description: Fail if the owner signing certificate is not configured
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows Authenticode package
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt -r requirements-local.txt pyinstaller==6.22.2
+      - name: Build portable package
+        run: python scripts\build.py portable
+      - name: Import owner certificate (when configured)
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_CERT_B64: ${{ secrets.WINDOWS_CODESIGN_CERT_B64 }}
+        run: |
+          if ($env:WINDOWS_CODESIGN_CERT_B64) {
+            $cert = Join-Path $env:RUNNER_TEMP 'shorts-studio-signing.pfx'
+            [IO.File]::WriteAllBytes($cert, [Convert]::FromBase64String($env:WINDOWS_CODESIGN_CERT_B64))
+            "WINDOWS_CODESIGN_CERT=$cert" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+      - name: Sign package or record unsigned status
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PASSWORD }}
+        run: |
+          $args = @('dist\ShortsStudio\ShortsStudio.exe', '--report', 'release\signing-report.json')
+          if ('${{ inputs.require_signing }}' -eq 'true') { $args += '--required' }
+          python scripts\sign_artifacts.py @args
+      - name: Upload package and signing report
+        uses: actions/upload-artifact@v4
+        with:
+          name: shorts-studio-signed-windows
+          path: |
+            dist/ShortsStudio
+            release/signing-report.json
+          if-no-files-found: error

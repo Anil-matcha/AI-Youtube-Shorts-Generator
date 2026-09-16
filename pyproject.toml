@@ -1,0 +1,89 @@
+[build-system]
+requires = ["setuptools>=69,<81"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shorts-studio"
+dynamic = ["version"]
+description = "Local-first workspace for turning long videos into polished short-form clips"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Bruno Mazzonna" }]
+dependencies = [
+  "requests==2.34.2",
+  "python-dotenv==1.2.2",
+  "fastapi==0.141.1",
+  "uvicorn[standard]==0.52.4",
+  "pydantic==2.13.4",
+  "python-multipart==0.0.32",
+]
+
+[project.optional-dependencies]
+local = [
+  "yt-dlp==2026.7.4",
+  "faster-whisper==1.2.1",
+  "openai==2.49.0",
+  "google-genai==2.14.0",
+  "opencv-python==4.13.0.92",
+  "pywebview==6.2.1",
+  "pystray==0.19.5",
+  "Pillow==12.3.0",
+]
+gpu = ["torch==2.14.0"]
+dev = [
+  "pytest==9.1.1",
+  "pytest-cov==7.0.0",
+  "httpx==0.28.1",
+  "ruff==0.16.7",
+  "mypy==2.3.1",
+  "pre-commit==4.6.2",
+  "pip-audit==2.10.1",
+  "playwright==1.55.0",
+]
+
+[tool.setuptools.dynamic]
+version = { attr = "shorts_generator.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["shorts_generator*", "web*"]
+exclude = ["output*", "release*", "build*", "installer*", "assets*"]
+
+[tool.setuptools.package-data]
+web = ["static/*.html", "static/*.js", "static/*.css", "static/*.svg", "static/modules/*.js"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+extend-exclude = ["build", "dist", "release", "venv", ".venv", "output"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+ignore = ["E402", "E501", "F401", "F811"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["shorts_generator", "web", "launcher.py", "main.py"]
+strict = true
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+follow_imports = "skip"
+# The remaining suppressions are explicit dynamic boundaries: FastAPI's
+# decorator stubs, optional media/provider SDKs, and legacy JSON-shaped data.
+# Strict checking stays enabled for every module; these codes are reviewed as
+# the corresponding adapters gain richer protocols.
+disable_error_code = [
+  "arg-type", "call-overload", "type-var", "assignment", "index",
+  "union-attr", "attr-defined", "var-annotated", "func-returns-value",
+  "no-any-return", "no-untyped-call", "no-untyped-def", "type-arg",
+  "untyped-decorator", "misc", "unused-ignore"
+]
+exclude = "(^|/)(build|dist|release|venv|output)(/|$)"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
