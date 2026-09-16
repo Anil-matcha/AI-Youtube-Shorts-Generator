@@ -1,8 +1,8 @@
 # Shorts Studio TODO
 
-**Published baseline:** v0.11.3 (local and remote gates passed)
-**Current development branch:** `beta/v1.0.0` (production-readiness work)
-**Implementation target:** v1.0.0 Beta (production-ready API and migration work)
+**Published baseline:** v1.0.0 (local and remote gates passed)
+**Current development branch:** `main` (v1.0.0 production release)
+**Implementation target:** v2.0.0 (next production roadmap)
 **Beta channel:** `beta` prerelease published from the gated branch snapshot
 **Last reviewed:** 2026-09-15
 
@@ -130,13 +130,13 @@ asset upload remain intentionally out of scope.
   resumable uploads with category/privacy/scheduling controls, thumbnails,
   captions, bounded quota-aware retries, idempotency, and a credential-free
   audit log.
-- [x] Before any v1.0.0 release: run a fresh authenticated packaged smoke,
+- [x] Before the v1.0.0 release: run a fresh authenticated packaged smoke,
   record the certificate-backed signing decision, verify remote CI/assets, and
-  confirm a clean repository (remote run `35046498312`; this beta branch still
-  has no production v1.0.0 tag or release; the separate `beta` prerelease is
-  published).
+  confirm a clean repository (remote run `35046498312`; the beta and main
+  gates passed before production publication).
 - [x] Publish the separate `beta` prerelease with the verified ZIP, installer,
-  and SHA-256 manifest; keep production v1.0.0 unreleased.
+  and SHA-256 manifest.
+- [x] Merge the gated beta branch into `main` and publish production `v1.0.0`.
 
 ## Game-changing future bets (v2+)
 

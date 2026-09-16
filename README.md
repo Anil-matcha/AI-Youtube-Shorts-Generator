@@ -7,7 +7,7 @@
 <p align="center"><strong>A local-first workspace for turning long videos into polished short-form clips.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v0.11.3">Latest release: v0.11.3</a>
+  <a href="https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/v1.0.0">Latest release: v1.0.0</a>
   &nbsp; | &nbsp;
   <a href="CHANGELOG.md">Changelog</a>
   &nbsp; | &nbsp;
@@ -22,9 +22,9 @@
 
 Shorts Studio is an independent desktop and web workspace maintained by **wiifhub**. It takes a YouTube URL or a local video, finds strong moments, gives you control over the framing and captions, and renders ready-to-publish clips. Local mode keeps source media and rendered files on your computer; API mode is available when you prefer hosted processing.
 
-## v1.0.0 beta branch
+## v1.0.0 production release
 
-The production-readiness work is developed on [`beta/v1.0.0`](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/tree/beta/v1.0.0).
+The production-readiness work was developed on [`beta/v1.0.0`](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/tree/beta/v1.0.0) and is now merged into `main`.
 Read the [beta user guide](docs/USER_GUIDE.md) for the versioned API,
 project migrations, optional media backups, Shorts Factory review packages,
 Google/YouTube sign-in, approval-first YouTube publishing, direct
@@ -34,16 +34,17 @@ running; new integrations should use `/api/v1/`. The older `/api/` routes
 remain available during the deprecation window and advertise their v1
 successor in response headers. Beta artifact and release-gate evidence is
 tracked in [docs/release-gates-v1.0.0-beta.md](docs/release-gates-v1.0.0-beta.md).
-The separate beta prerelease is published at the [`beta` release channel](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/beta);
-no production `v1.0.0` tag or release has been created.
+The separate beta prerelease remains available at the [`beta` release channel](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/tag/beta),
+and the production `v1.0.0` release contains the same gated runtime with the
+versioned package metadata below.
 
 ## Windows installation
 
-The latest packaged Windows desktop binaries are v0.11.3, released alongside the Docker distribution below.
+The latest packaged Windows desktop binaries are v1.0.0, released alongside the Docker distribution below.
 
 ### Recommended: installer
 
-1. Download [ShortsStudio-Setup-v0.11.3.exe](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.11.3/ShortsStudio-Setup-v0.11.3.exe).
+1. Download [ShortsStudio-Setup-v1.0.0.exe](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v1.0.0/ShortsStudio-Setup-v1.0.0.exe).
 2. Run the installer and choose whether to create a desktop shortcut.
 3. Start **Shorts Studio** from the Start menu or desktop.
 
@@ -53,7 +54,7 @@ Windows may show SmartScreen for an unsigned build. Select **More info -> Run an
 
 ### Portable ZIP
 
-1. Download [ShortsStudio-v0.11.3-windows.zip](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v0.11.3/ShortsStudio-v0.11.3-windows.zip).
+1. Download [ShortsStudio-v1.0.0-windows.zip](https://github.com/wiifhub/AI-Youtube-Shorts-Generator/releases/download/v1.0.0/ShortsStudio-v1.0.0-windows.zip).
 2. Extract the entire ZIP to a folder (do not run the EXE inside the archive).
 3. Run `unblock_and_start.bat`, or double-click `ShortsStudio.exe` after Windows has unblocked the files.
 
@@ -75,7 +76,7 @@ Settings also includes:
 
 ## Docker deployment
 
-Release `v0.11.3` bundles the Windows desktop app and the reproducible Docker server image in one release. Docker supports Linux hosts, Docker Desktop, NAS machines, and home servers; the container serves the same FastAPI workspace over HTTP and does not need the Windows desktop shell or a separate Python installation on the host.
+Release `v1.0.0` bundles the Windows desktop app and the reproducible Docker server image in one release. Docker supports Linux hosts, Docker Desktop, NAS machines, and home servers; the container serves the same FastAPI workspace over HTTP and does not need the Windows desktop shell or a separate Python installation on the host.
 
 ### Quick start (CPU)
 
@@ -89,13 +90,13 @@ docker compose --env-file .env.docker up --build
 
 Then open <http://127.0.0.1:7860>. Projects, uploads, transcripts, Whisper models, and rendered clips live in the named `shorts_studio_data` volume and survive container restarts. `docker compose down` keeps that data; `docker compose down -v` removes it.
 
-The published CPU image is also available at `ghcr.io/wiifhub/shorts-studio:v0.11.3` (the `latest` tag tracks the newest release) and is built for `linux/amd64` and `linux/arm64`:
+The published CPU image is also available at `ghcr.io/wiifhub/shorts-studio:v1.0.0` (the `latest` tag tracks the newest release) and is built for `linux/amd64` and `linux/arm64`:
 
 ```bash
 docker run --rm -p 127.0.0.1:7860:7860 \
   -v shorts_studio_data:/data \
   --env-file .env.docker \
-  ghcr.io/wiifhub/shorts-studio:v0.11.3
+  ghcr.io/wiifhub/shorts-studio:v1.0.0
 ```
 
 ### NVIDIA GPU mode
@@ -438,7 +439,7 @@ To sign release artifacts, configure the owner-controlled certificate/Apple
 credentials in the environment and run:
 
 ```powershell
-.\venv\Scripts\python.exe scripts\sign_artifacts.py release\ShortsStudio-Setup-v0.11.3.exe --report release\signing-report-v0.11.3.json
+.\venv\Scripts\python.exe scripts\sign_artifacts.py release\ShortsStudio-Setup-v1.0.0.exe --report release\signing-report-v1.0.0.json
 ```
 
 Without those credentials the tool records an explicit unsigned report and

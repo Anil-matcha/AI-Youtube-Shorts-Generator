@@ -4,6 +4,10 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
 
 ## [Unreleased]
 
+No unreleased changes.
+
+## [1.0.0] - 2026-09-15
+
 ### Added
 
 - Added the beta Shorts Factory workflow: one upload or URL now creates a
@@ -37,9 +41,9 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
 - Beta regression suite: 89 passed, 4 browser-only skips.
 - Ruff, strict mypy, compile checks, and Node syntax checks pass locally.
 - Final beta packaged smoke, unsigned signing decision, SHA-256 hashes, and
-  remote Quality Checks run `35046498312` are green. The separate `beta`
-  prerelease channel is published with the verified ZIP, installer, and hash
-  manifest; no production `v1.0.0` tag or release has been created.
+  remote Quality Checks run `35046498312` were green. The separate `beta`
+  prerelease channel was published with the verified ZIP, installer, and hash
+  manifest before this production release.
 
 ## [0.11.3] - 2026-09-15
 
@@ -205,7 +209,8 @@ kept as the stable baseline for v0.10.2 work.
 - Added persistent project library, logs, previews, exports, and in-app
   update checks.
 
-[Unreleased]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v0.11.3...HEAD
+[Unreleased]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v0.11.3...v1.0.0
 [0.11.3]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v0.11.2...v0.11.3
 [0.11.2]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v0.10.2...v0.11.1

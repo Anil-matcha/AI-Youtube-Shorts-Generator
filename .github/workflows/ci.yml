@@ -126,7 +126,7 @@ jobs:
         shell: pwsh
         run: |
           $version = python -c "from shorts_generator import __version__; print(__version__)"
-          if ($version -ne "0.11.3") { throw "Unexpected package version: $version" }
+          if ($version -ne "1.0.0") { throw "Unexpected package version: $version" }
 
   compose:
     name: Validate Docker Compose

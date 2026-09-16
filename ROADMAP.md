@@ -1,8 +1,8 @@
 # Shorts Studio Upgrade Roadmap
 
-**Published baseline:** v0.11.3 (local and remote gates passed)
-**Current development branch:** `beta/v1.0.0` (production-readiness work)
-**Next implementation target:** v1.0.0 Beta
+**Published baseline:** v1.0.0 (local and remote gates passed)
+**Current development branch:** `main` (v1.0.0 production release)
+**Next implementation target:** v2.0.0
 **Last updated:** 2026-09-15
 
 The actionable implementation list now lives in [TODO.md](TODO.md). This
@@ -202,10 +202,9 @@ No push, GitHub release, or asset upload has been performed.
 
 ### v1.0.0 Beta implementation (`beta/v1.0.0`)
 
-The implementation items below are complete on the beta branch. The separate
-`beta` prerelease channel is published from the gated branch snapshot. A
-production release remains intentionally separate and still requires its own
-release authorization.
+The implementation items below were completed on the beta branch, merged into
+`main`, and released as v1.0.0. The separate `beta` prerelease channel remains
+available for testing.
 
 - [x] Add direct TikTok and Instagram Reels publishing through official APIs,
       with approval-first private defaults, OAuth state expiry, idempotency,
@@ -242,7 +241,7 @@ release authorization.
 - [x] Add response caching for repeated API calls
 - [x] Optimize Docker image size (multi-stage build, layer caching)
 
-### Release gates (verified for beta; beta prerelease published)
+### Release gates (verified; beta prerelease published)
 - [x] Fresh authenticated packaged-runtime smoke test against the beta build
 - [x] Certificate-backed signing decision recorded for the beta artifact
 - [x] Final remote CI, hashes, and clean repository state verified before any
@@ -250,6 +249,7 @@ release authorization.
       production tag or release was created)
 - [x] Publish the separate beta prerelease channel at tag `beta` from the
       gated branch snapshot, with the verified ZIP, installer, and hash manifest
+- [x] Merge the gated beta branch into `main` and publish production `v1.0.0`
 
 ---
 
