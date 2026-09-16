@@ -246,7 +246,7 @@ CI, and a clean repository at release time.
 - [x] Fresh authenticated packaged-runtime smoke test against the beta build
 - [x] Certificate-backed signing decision recorded for the beta artifact
 - [x] Final remote CI, hashes, and clean repository state verified before any
-      v1.0.0 tag or public release (remote run `35045809040`; no tag or public
+      v1.0.0 tag or public release (remote run `35046196358`; no tag or public
       release was created)
 
 ---
