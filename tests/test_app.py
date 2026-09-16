@@ -60,6 +60,7 @@ def test_health_and_static_assets(client: TestClient) -> None:
     assert "charset=utf-8" in client.get("/static/styles.css").headers["content-type"].lower()
     assert "charset=utf-8" in client.get("/static/app.js").headers["content-type"].lower()
     assert "charset=utf-8" in client.get("/static/modules/state.js").headers["content-type"].lower()
+    assert client.get("/static/modules/beta.js").status_code == 200
     assert client.get("/static/theme-init.js").status_code == 200
 
 
@@ -377,7 +378,7 @@ def test_backup_restore_and_storage_cleanup_are_scoped(
     backup = client.get("/api/backup")
     assert backup.status_code == 200
     with zipfile.ZipFile(io.BytesIO(backup.content)) as archive:
-        assert {"backup.json", "jobs.json", "studio_state.json", "brand_presets.json"}.issubset(archive.namelist())
+        assert {"backup.json", "jobs.json", "studio_state.json", "brand_presets.json", "provider_costs.json"}.issubset(archive.namelist())
         assert "should-not-export" not in archive.read("jobs.json").decode("utf-8")
         assert str(media_root).encode() not in archive.read("jobs.json")
 

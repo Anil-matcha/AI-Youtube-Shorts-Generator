@@ -1,7 +1,8 @@
 # Shorts Studio Upgrade Roadmap
 
-**Current local tag:** v0.11.3 (published; local and remote gates passed)
-**Next implementation target:** v1.0.0 (production-ready API and migration work)
+**Published baseline:** v0.11.3 (local and remote gates passed)
+**Current development branch:** `beta/v1.0.0` (production-readiness work)
+**Next implementation target:** v1.0.0 Beta
 **Last updated:** 2026-09-15
 
 The actionable implementation list now lives in [TODO.md](TODO.md). This
@@ -199,24 +200,56 @@ No push, GitHub release, or asset upload has been performed.
 
 ## v1.0.0 — Production Ready
 
+### v1.0.0 Beta implementation (`beta/v1.0.0`)
+
+The implementation items below are complete on the beta branch. The separate
+`beta` prerelease channel is published from the gated branch snapshot. A
+production release remains intentionally separate and still requires its own
+release authorization.
+
+- [x] Add direct TikTok and Instagram Reels publishing through official APIs,
+      with approval-first private defaults, OAuth state expiry, idempotency,
+      and a safe manual-upload fallback.
+- [x] Add append-only platform analytics observations, aggregate retention and
+      engagement metrics, and explainable feedback for A/B variants.
+- [x] Add durable per-clip metadata variants with publish and analytics links.
+- [x] **G-001 beta slice** — Add the Shorts Factory queue and reviewable package
+      containing clips, captions, hooks, thumbnails, metadata, platform export
+      plans, and durable per-clip approval checkpoints.
+- [x] **G-010 beta slice** — Add Google/YouTube PKCE sign-in, approval-first
+      resumable uploads with category/privacy/scheduling controls, thumbnails,
+      captions, bounded quota-aware retries, idempotency, and an audit log.
+- [x] Add regression coverage for API aliases, migrations, backups, direct
+      adapter mocks, variants/analytics, parallel rendering, and streaming
+      Whisper progress.
+
 ### Stability
-- [ ] Complete API versioning (`/api/v1/`) with deprecation policy
-- [ ] Add comprehensive error codes and user-facing error messages
-- [ ] Add data migration tooling (project file format upgrades)
+- [x] Complete API versioning (`/api/v1/`) with deprecation policy
+- [x] Add comprehensive error codes and user-facing error messages
+- [x] Add data migration tooling (project file format upgrades)
 - [x] Add metadata backup/restore for projects and settings
-- [ ] Add optional media-inclusive backup/restore with versioned migrations
+- [x] Add optional media-inclusive backup/restore with versioned migrations
 
 ### Documentation
-- [ ] Add OpenAPI/Swagger documentation for all endpoints
-- [ ] Add user guide with screenshots for each feature
-- [ ] Add developer contributing guide
-- [ ] Add architecture decision records (ADRs) for key design choices
+- [x] Add OpenAPI/Swagger documentation for all endpoints
+- [x] Add user guide with screenshots for each feature
+- [x] Add developer contributing guide
+- [x] Add architecture decision records (ADRs) for key design choices
 
 ### Performance
-- [ ] Add concurrent clip rendering (parallel FFmpeg workers)
-- [ ] Add streaming transcription (real-time Whisper output)
-- [ ] Add response caching for repeated API calls
-- [ ] Optimize Docker image size (multi-stage build, layer caching)
+- [x] Add concurrent clip rendering (parallel FFmpeg workers)
+- [x] Add streaming transcription (real-time Whisper output)
+- [x] Add response caching for repeated API calls
+- [x] Optimize Docker image size (multi-stage build, layer caching)
+
+### Release gates (verified for beta; beta prerelease published)
+- [x] Fresh authenticated packaged-runtime smoke test against the beta build
+- [x] Certificate-backed signing decision recorded for the beta artifact
+- [x] Final remote CI, hashes, and clean repository state verified before any
+      production v1.0.0 tag or release (remote run `35046498312`; no
+      production tag or release was created)
+- [x] Publish the separate beta prerelease channel at tag `beta` from the
+      gated branch snapshot, with the verified ZIP, installer, and hash manifest
 
 ---
 
@@ -228,9 +261,9 @@ These bets define the long-term differentiation of Shorts Studio. They are
 future exploration items, not commitments for v0.10.x; each needs a measured
 prototype, a clear privacy boundary, and a human approval path before rollout.
 
-- [ ] **G-001 Autonomous Shorts Factory** — From one upload or URL, produce a
-      reviewable package of clips, captions, hooks, thumbnails, metadata, and
-      platform exports with approval checkpoints.
+- [ ] **G-001 full autonomy** — Extend the beta factory package with unattended
+      scheduling, compliance checks, batch-channel processing, and policy-safe
+      automation after measured production gates.
 - [ ] **G-002 Creator Style Memory** — Learn approved pacing, hooks, caption
       language, framing, and brand rules across projects in an exportable local
       profile.
@@ -248,10 +281,10 @@ prototype, a clear privacy boundary, and a human approval path before rollout.
       comments, approvals, roles, and version history without sharing secrets.
 - [ ] **G-009 Open Extension Ecosystem** — Ship a versioned, sandboxed plugin
       SDK for pipeline stages, caption packs, exporters, and integrations.
-- [ ] **G-010 YouTube Auto-Publish** — Integrate YouTube Data API OAuth for
-      approval-first uploads, resumable transfer, metadata/thumbnails/captions,
-      privacy and scheduling controls, quota-aware retries, idempotency, and an
-      audit log. Public auto-publish must be an explicit opt-in.
+- [ ] **G-010 production distribution** — Extend the beta YouTube adapter with
+      a hosted scheduler, operational quota dashboards, live authenticated
+      deployment coverage, and policy/compliance controls. Public auto-publish
+      remains an explicit opt-in.
 
 ### Autonomous Clip Factory
 - [ ] **Fully autonomous pipeline** — Upload a video, walk away. The system selects the best clips, applies captions, music, transitions, and branding without human intervention.

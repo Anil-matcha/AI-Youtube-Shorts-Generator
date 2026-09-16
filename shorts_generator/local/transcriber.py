@@ -279,6 +279,7 @@ def transcribe_local(
     device: Optional[str] = None,
     *,
     cancel_check: Optional[Callable[[], bool]] = None,
+    progress: Optional[Callable[[str], None]] = None,
 ) -> Dict:
     """Run faster-whisper on a local file path, caching the result as .srt."""
     media_path = str(media_path) if media_path is not None else ""
@@ -336,6 +337,8 @@ def transcribe_local(
                     f"[transcribe/local] {len(cached['segments'])} cached segments, {cached['duration']:.0f}s of audio",
                     flush=True,
                 )
+                if progress:
+                    progress(f"Reused {len(cached['segments'])} cached transcript segments")
                 return cached
 
     print(f"[transcribe/local] faster-whisper model={selected_model} device={selected_device}", flush=True)
@@ -407,6 +410,8 @@ def transcribe_local(
         if words:
             segment["words"] = words
         segments.append(segment)
+        if progress and (len(segments) == 1 or len(segments) % 5 == 0):
+            progress(f"Transcribed {len(segments)} segments")
 
     try:
         duration = float(getattr(info, "duration", 0.0))
@@ -415,6 +420,8 @@ def transcribe_local(
     if not math.isfinite(duration) or duration <= 0:
         duration = segments[-1]["end"] if segments else 0.0
     print(f"[transcribe/local] {len(segments)} segments, {duration:.0f}s of audio", flush=True)
+    if progress:
+        progress(f"Transcribed {len(segments)} segments")
     detected_language = str(getattr(info, "language", "") or language or "").strip().lower() or None
     try:
         language_probability = float(getattr(info, "language_probability", 0.0) or 0.0)

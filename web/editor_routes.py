@@ -26,6 +26,7 @@ from web.models import ClipUpdate, MergeRequest
 from web.security import redact_structure
 from shorts_generator.config import LOCAL_THUMBNAIL_POSITION, runtime_job_control
 from web.feature_routes import _safe_backup_value, _strip_backup_media_fields
+from web.factory import factory_manifest
 
 
 def _safe_export_short(studio: Any, value: Dict[str, Any]) -> Dict[str, Any]:
@@ -828,11 +829,14 @@ def export_job(job_id: str):
             for short in raw_shorts
         ],
     }
+    factory = factory_manifest(studio, job)
+    manifest["factory"] = factory
     # Keep small exports in memory but spill large clip bundles to the system
     # temp directory instead of retaining an unbounded BytesIO allocation.
     archive = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
         bundle.writestr("metadata.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        bundle.writestr("factory.json", json.dumps(factory, ensure_ascii=False, indent=2))
         bundle.writestr(
             "publishing/youtube_shorts.json",
             json.dumps(

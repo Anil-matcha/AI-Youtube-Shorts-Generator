@@ -39,9 +39,50 @@
       $('resetViralityPrompt').addEventListener('click', () => { $('viralityPrompt').value = ''; $('viralityPromptStatus').textContent = 'Using the built-in virality criteria.'; });
     }
     if (exportTab && !$('youtubeApprovalControls')) {
-      const block = add(exportTab, `<div class="field feature-controls" id="youtubeApprovalControls"><label>YouTube OAuth publishing foundation</label><div class="two"><select class="select" id="youtubePrivacy" aria-label="YouTube privacy"><option value="private">Private (recommended)</option><option value="unlisted">Unlisted</option><option value="public">Public (explicit approval)</option></select><input class="input" id="youtubePublishAt" type="datetime-local" aria-label="Schedule publish time"></div><label class="checkline"><input id="youtubeConfirm" type="checkbox"> I reviewed the title, description, clip, and privacy setting</label><div class="settings-actions"><button class="secondary" id="youtubeOAuthButton" type="button">Connect YouTube</button><button class="primary" id="youtubePublishButton" type="button">Approve upload</button></div><p class="setting-help" id="youtubePublishStatus" role="status" aria-live="polite">Uploads are resumable, approval-first, private by default, and never start without your confirmation.</p></div>`);
-      $('youtubeOAuthButton').addEventListener('click', async () => { try { const response = await fetch('/api/youtube/oauth/start'); const data = await response.json(); if (!response.ok) throw Error(data.error || 'YouTube OAuth is not configured'); const opened = window.open(data.authorization_url, '_blank', 'noopener,noreferrer'); if (!opened) window.location.href = data.authorization_url; $('youtubePublishStatus').textContent = 'Authorize Shorts Studio in the Google consent window, then return here.'; } catch (error) { $('youtubePublishStatus').textContent = error.message; } });
-      $('youtubePublishButton').addEventListener('click', async () => { const job = window.ShortsStudioState?.state?.activeJobId; if (!job) { $('youtubePublishStatus').textContent = 'Render a project before approving an upload.'; return; } if (!$('youtubeConfirm').checked) { $('youtubePublishStatus').textContent = 'Check the review confirmation before uploading.'; return; } const publishAt = $('youtubePublishAt').value ? new Date($('youtubePublishAt').value).toISOString() : null; const payload = {platform: 'youtube_shorts', privacy_status: $('youtubePrivacy').value, publish_at: publishAt, confirm: true, allow_public: $('youtubePrivacy').value === 'public'}; try { const response = await fetch(`/api/jobs/${encodeURIComponent(job)}/youtube/publish`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)}); const data = await response.json(); if (!response.ok) throw Error(data.error || data.detail || 'YouTube upload failed'); $('youtubePublishStatus').textContent = data.message || `Upload ${data.status}.`; } catch (error) { $('youtubePublishStatus').textContent = error.message; } });
+      const block = add(exportTab, `<div class="field feature-controls" id="youtubeApprovalControls"><label>YouTube / Google account</label><div class="two"><select class="select" id="youtubePrivacy" aria-label="YouTube privacy"><option value="private">Private (recommended)</option><option value="unlisted">Unlisted</option><option value="public">Public (explicit approval)</option></select><input class="input" id="youtubePublishAt" type="datetime-local" aria-label="Schedule publish time"></div><label class="checkline"><input id="youtubeConfirm" type="checkbox"> I reviewed the title, description, clip, and privacy setting</label><label class="checkline"><input id="youtubeAutoPublish" type="checkbox"> Enable unattended YouTube publish (deployment opt-in required)</label><div class="settings-actions"><button class="secondary" id="youtubeOAuthButton" type="button">Sign in with Google</button><button class="ghost" id="youtubeDisconnectButton" type="button">Disconnect</button><button class="primary" id="youtubePublishButton" type="button">Approve upload</button></div><p class="setting-help" id="youtubePublishStatus" role="status" aria-live="polite">Google OAuth uses process-memory tokens. Uploads are resumable, approval-first, private by default, and never start without your confirmation.</p></div>`);
+      const status = $('youtubePublishStatus');
+      const setStatus = message => { if (status) status.textContent = String(message || ''); };
+      const refreshYouTubeStatus = async () => {
+        try {
+          const response = await fetch('/api/v1/youtube/oauth/status', {cache: 'no-store'});
+          const data = await response.json();
+          if (!response.ok) throw Error(data.error || data.detail || 'Google sign-in status unavailable');
+          const button = $('youtubeOAuthButton');
+          if (button) button.textContent = data.authorized ? 'Google account connected' : 'Sign in with Google';
+          if (data.authorized) setStatus(`Google account connected. Privacy default: ${data.privacy_default || 'private'}.`);
+          return data;
+        } catch (error) { setStatus(error.message); return null; }
+      };
+      $('youtubeOAuthButton').addEventListener('click', async () => {
+        try {
+          const response = await fetch('/api/v1/youtube/oauth/start'); const data = await response.json();
+          if (!response.ok) throw Error(data.error || data.detail || 'YouTube OAuth is not configured');
+          const opened = window.open(data.authorization_url, '_blank', 'noopener,noreferrer');
+          if (!opened) window.location.href = data.authorization_url;
+          setStatus('Authorize Shorts Studio in the Google consent window, then return here. This page will refresh the connection status.');
+          let checks = 0; const timer = window.setInterval(async () => { checks += 1; const current = await refreshYouTubeStatus(); if (current?.authorized || checks >= 30) window.clearInterval(timer); }, 2000);
+        } catch (error) { setStatus(error.message); }
+      });
+      $('youtubeDisconnectButton').addEventListener('click', async () => {
+        try { const response = await fetch('/api/v1/youtube/oauth/disconnect', {method: 'POST'}); const data = await response.json(); if (!response.ok) throw Error(data.error || data.detail || 'Could not disconnect Google'); setStatus('Google account disconnected from this Shorts Studio process.'); $('youtubeOAuthButton').textContent = 'Sign in with Google'; } catch (error) { setStatus(error.message); }
+      });
+      $('youtubePublishButton').addEventListener('click', async () => {
+        const job = window.ShortsStudioState?.state?.activeJobId;
+        if (!job) { setStatus('Render a project before approving an upload.'); return; }
+        if (!$('youtubeConfirm').checked) { setStatus('Check the review confirmation before uploading.'); return; }
+        const publishAt = $('youtubePublishAt').value ? new Date($('youtubePublishAt').value).toISOString() : null;
+        const privacy = $('youtubePrivacy').value;
+        const payload = {platform: 'youtube_shorts', privacy_status: privacy, publish_at: publishAt, confirm: true, allow_public: privacy === 'public', auto_publish: Boolean($('youtubeAutoPublish').checked)};
+        try { const response = await fetch(`/api/v1/jobs/${encodeURIComponent(job)}/youtube/publish`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)}); const data = await response.json(); if (!response.ok) throw Error(data.error || data.detail || 'YouTube upload failed'); setStatus(data.message || `Upload ${data.status}.`); } catch (error) { setStatus(error.message); }
+      });
+      refreshYouTubeStatus();
+    }
+    if (exportTab && !$('factoryControls')) {
+      add(exportTab, `<div class="field feature-controls" id="factoryControls"><label>Autonomous Shorts Factory review</label><p class="setting-help">Queue factory jobs through <code>/api/v1/factory/jobs</code>. Each completed clip gets a human checkpoint before direct publishing.</p><div class="settings-actions"><button class="secondary" id="factoryRefreshButton" type="button">Refresh factory package</button><button class="primary" id="factoryApproveButton" type="button">Approve selected clip</button></div><p class="setting-help" id="factoryStatus" role="status" aria-live="polite">No factory package loaded for the current project.</p></div>`);
+      const factoryMessage = message => { const node = $('factoryStatus'); if (node) node.textContent = String(message || ''); };
+      const loadFactory = async () => { const job = window.ShortsStudioState?.state?.activeJobId; if (!job) { factoryMessage('Open a factory project before reviewing its package.'); return null; } try { const response = await fetch(`/api/v1/jobs/${encodeURIComponent(job)}/factory`, {cache: 'no-store'}); const data = await response.json(); if (!response.ok) throw Error(data.error || data.detail || 'Factory package unavailable'); const summary = data.approval_summary || {}; factoryMessage(`Factory ${data.status}: ${summary.approved || 0} approved, ${summary.pending || 0} pending, ${summary.rejected || 0} rejected.`); return data; } catch (error) { factoryMessage(error.message); return null; } };
+      $('factoryRefreshButton').addEventListener('click', loadFactory);
+      $('factoryApproveButton').addEventListener('click', async () => { const job = window.ShortsStudioState?.state?.activeJobId; const clip = Number(window.ShortsStudioState?.state?.selectedClip || 0); if (!job) { factoryMessage('Open a factory project before approving a clip.'); return; } try { const response = await fetch(`/api/v1/jobs/${encodeURIComponent(job)}/factory/approve`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({clip_indices: [clip], decision: 'approved'})}); const data = await response.json(); if (!response.ok) throw Error(data.error || data.detail || 'Factory approval failed'); factoryMessage(data.message || 'Factory approval recorded.'); } catch (error) { factoryMessage(error.message); } });
     }
     if (exportTab && !$('mergeControls')) {
       add(exportTab, `<div class="field feature-controls" id="mergeControls"><label for="mergeClipIndices">Merge separate highlights</label><div class="two"><input class="input" id="mergeClipIndices" inputmode="numeric" placeholder="Clip numbers, e.g. 1,3,4"><button class="secondary" id="mergeClipsButton" type="button">Render merged clip</button></div><p class="setting-help" id="mergeStatus" role="status" aria-live="polite">Choose two or more completed clips. Each source range remains explicit; transitions are applied at the joins.</p></div>`);

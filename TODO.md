@@ -1,7 +1,9 @@
 # Shorts Studio TODO
 
-**Current local tag:** v0.11.3 (published; local and remote gates passed)
-**Implementation target:** v1.0.0 (production-ready API and migration work)
+**Published baseline:** v0.11.3 (local and remote gates passed)
+**Current development branch:** `beta/v1.0.0` (production-readiness work)
+**Implementation target:** v1.0.0 Beta (production-ready API and migration work)
+**Beta channel:** `beta` prerelease published from the gated branch snapshot
 **Last reviewed:** 2026-09-15
 
 This is the canonical implementation backlog. Inline `TODO` comments should
@@ -103,9 +105,38 @@ asset upload remain intentionally out of scope.
   token handling, approval-first plans, private-by-default/resumable uploads,
   future scheduling validation, idempotency keys, and an audit entry on upload.
 - [x] Explicit merge workflow for separate local highlights
-- [ ] Direct publishing integrations beyond the YouTube foundation, analytics
-  feedback, and A/B variants
+- [x] Direct publishing integrations beyond the YouTube foundation, analytics
+  feedback, and A/B variants - v1 beta now includes official TikTok file
+  uploads, Instagram Reels container publishing, process-memory OAuth,
+  approval/idempotency controls, durable metadata variants, and explainable
+  retention/engagement feedback.
 - [ ] Plugin, mobile, collaboration, and cloud-rendering systems
+
+## v1.0.0 beta production-readiness implementation
+
+- [x] Version all API routes under `/api/v1/` while retaining a deprecated
+  `/api/` compatibility surface with `Sunset` and successor `Link` headers.
+- [x] Publish a stable error catalog and `{error, code}` response contract.
+- [x] Add pure project migrations, startup recovery, dry-run/apply CLI tooling,
+  and versioned metadata/media backup restore.
+- [x] Add OpenAPI aliases, the screenshot-backed user guide, contributing
+  policy, and four accepted ADRs.
+- [x] Add bounded parallel FFmpeg rendering, Whisper progress streaming through
+  SSE, and mutation-invalidated response caching for read-only catalogs.
+- [x] **G-001 beta slice** - Add the Shorts Factory queue and reviewable package
+  with clips, captions, hooks, thumbnails, metadata, platform export plans,
+  and durable per-clip approval checkpoints.
+- [x] **G-010 beta slice** - Add Google/YouTube PKCE sign-in, approval-first
+  resumable uploads with category/privacy/scheduling controls, thumbnails,
+  captions, bounded quota-aware retries, idempotency, and a credential-free
+  audit log.
+- [x] Before any v1.0.0 release: run a fresh authenticated packaged smoke,
+  record the certificate-backed signing decision, verify remote CI/assets, and
+  confirm a clean repository (remote run `35046498312`; this beta branch still
+  has no production v1.0.0 tag or release; the separate `beta` prerelease is
+  published).
+- [x] Publish the separate `beta` prerelease with the verified ZIP, installer,
+  and SHA-256 manifest; keep production v1.0.0 unreleased.
 
 ## Game-changing future bets (v2+)
 
@@ -113,9 +144,9 @@ These are deliberately larger than normal feature work. Each bet should have
 a measurable creator outcome, a privacy model, and a staged prototype before
 it becomes a committed release milestone.
 
-- [ ] **G-001 Autonomous Shorts Factory** - Turn one upload or URL into a
-  reviewable package of clips, captions, hooks, thumbnails, metadata, and
-  platform exports with human approval checkpoints.
+- [ ] **G-001 full autonomy** - Extend the beta factory package with unattended
+  scheduling, compliance checks, batch-channel processing, and policy-safe
+  automation after measured production gates.
 - [ ] **G-002 Creator Style Memory** - Learn a creator's approved pacing, hooks,
   caption language, framing, and brand rules across projects, with transparent
   controls and an exportable local profile.
@@ -139,11 +170,10 @@ it becomes a committed release milestone.
   media or credentials.
 - [ ] **G-009 Open Extension Ecosystem** - Provide a versioned plugin SDK and
   sandbox for pipeline stages, caption packs, exporters, and integrations.
-- [ ] **G-010 YouTube Auto-Publish** - Add YouTube Data API OAuth with a safe
-  approval-first flow, resumable uploads, title/description/tags/category,
-  thumbnails and captions, privacy and publish-time controls, quota-aware
-  retries, idempotency, and an audit log. Never auto-publish publicly without
-  an explicit user setting and visible confirmation.
+- [ ] **G-010 production distribution** - Extend the beta YouTube adapter with
+  a hosted scheduler, operational quota dashboards, live authenticated
+  deployment coverage, and policy/compliance controls. Public auto-publish
+  remains an explicit opt-in.
 
 ## Verified complete or corrected in the v0.10.1 implementation
 

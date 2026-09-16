@@ -65,7 +65,11 @@ LOCAL_ENCODE_PRESET = os.getenv("LOCAL_ENCODE_PRESET", "fast").strip() or "fast"
 LOCAL_CRF = _positive_float_env("LOCAL_CRF", 20.0)
 LOCAL_AUDIO_BITRATE = os.getenv("LOCAL_AUDIO_BITRATE", "128k").strip() or "128k"
 LOCAL_OUTPUT_TEMPLATE = os.getenv("LOCAL_OUTPUT_TEMPLATE", "short_{index:02d}.mp4").strip() or "short_{index:02d}.mp4"
-LOCAL_MAX_FFMPEG_PROCS = _positive_int_env("LOCAL_MAX_FFMPEG_PROCS", 2)
+# ``LOCAL_MAX_FFMPEG_PROCS`` is the historical name. Keep it as the shared
+# internal value while allowing the beta-facing ``SHORTS_RENDER_WORKERS``
+# setting to take precedence when both names are present.
+_legacy_ffmpeg_processes = _positive_int_env("LOCAL_MAX_FFMPEG_PROCS", 2)
+LOCAL_MAX_FFMPEG_PROCS = _positive_int_env("SHORTS_RENDER_WORKERS", _legacy_ffmpeg_processes)
 LOCAL_LOG_LEVEL = os.getenv("LOCAL_LOG_LEVEL", "INFO").strip().upper() or "INFO"
 LOCAL_LOG_FILE = os.getenv("LOCAL_LOG_FILE", "").strip()
 LOCAL_TEMP_DIR = os.getenv("LOCAL_TEMP_DIR", "").strip()

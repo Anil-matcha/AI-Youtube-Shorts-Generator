@@ -4,6 +4,43 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
 
 ## [Unreleased]
 
+### Added
+
+- Added the beta Shorts Factory workflow: one upload or URL now creates a
+  reviewable package with clip-safe URLs, hooks, captions, thumbnails, creator
+  metadata, platform export plans, and durable per-clip approval checkpoints.
+- Added Google/YouTube sign-in status and disconnect controls, expanded OAuth
+  scopes for caption tracks, and YouTube uploads for category metadata,
+  thumbnails, SRT/VTT captions, resumable transfer, quota-aware retries, and a
+  credential-free audit record.
+- Started the `beta/v1.0.0` branch with direct TikTok Content Posting API and
+  Instagram Reels Graph API adapters, process-memory OAuth, approval-first
+  idempotent uploads, durable A/B metadata variants, and analytics feedback.
+- Added the `/api/v1/` contract, stable error catalog, project migrations and
+  migration CLI, optional media-inclusive backups, generated OpenAPI aliases,
+  beta user guide, contributing guide, and four ADRs.
+- Added bounded parallel clip rendering and real-time Whisper progress through
+  the existing SSE stream.
+
+### Changed
+
+- Direct YouTube publishing now requires an explicit human confirmation;
+  unattended publishing is disabled by default and public unattended uploads
+  require a separate deployment opt-in.
+- Added short-lived, identity-aware response caching for read-only API
+  catalogs; mutations invalidate the cache.
+- Rebuilt the CPU Docker image as a cached multi-stage, non-root runtime while
+  preserving the existing data volume contract.
+
+### Verification
+
+- Beta regression suite: 89 passed, 4 browser-only skips.
+- Ruff, strict mypy, compile checks, and Node syntax checks pass locally.
+- Final beta packaged smoke, unsigned signing decision, SHA-256 hashes, and
+  remote Quality Checks run `35046498312` are green. The separate `beta`
+  prerelease channel is published with the verified ZIP, installer, and hash
+  manifest; no production `v1.0.0` tag or release has been created.
+
 ## [0.11.3] - 2026-09-15
 
 ### Fixed

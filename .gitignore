@@ -9,6 +9,7 @@ htmlcov/
 .venv/
 venv/
 .agents/
+.freebuff/
 output/
 docker-data/
 build/

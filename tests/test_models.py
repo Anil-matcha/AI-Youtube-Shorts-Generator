@@ -55,3 +55,14 @@ def test_language_auto_and_approval_first_publish_contract() -> None:
     assert PublishRequest(platform="youtube_shorts").privacy_status == "private"
     with pytest.raises(ValidationError, match="allow_public"):
         PublishRequest(platform="youtube_shorts", privacy_status="public")
+    with pytest.raises(ValidationError, match="only for YouTube"):
+        PublishRequest(platform="tiktok", auto_publish=True)
+    youtube = PublishRequest(
+        platform="youtube_shorts",
+        category_id="27",
+        caption_language="fr_CA",
+        captions_draft=True,
+        auto_publish=True,
+    )
+    assert youtube.category_id == "27"
+    assert youtube.caption_language == "fr-ca"

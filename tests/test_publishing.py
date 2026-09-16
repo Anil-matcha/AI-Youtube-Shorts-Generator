@@ -130,3 +130,55 @@ def test_youtube_refresh_and_resumable_308_resume(monkeypatch, tmp_path: Path) -
 
     assert result["video_id"] == "video-2"
     assert [item[0] for item in calls] == ["POST", "PUT", "PUT"]
+
+
+def test_youtube_upload_includes_category_thumbnail_and_captions(monkeypatch, tmp_path: Path) -> None:
+    publishing._upload_results.clear()
+    media = tmp_path / "clip.mp4"
+    thumbnail = tmp_path / "thumb.png"
+    captions = tmp_path / "captions.srt"
+    media.write_bytes(b"video-bytes")
+    thumbnail.write_bytes(b"png-bytes")
+    captions.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
+    monkeypatch.setattr(publishing, "_youtube_access_token", lambda: "access")
+    calls = []
+
+    class Response:
+        def __init__(self, method: str, url: str) -> None:
+            self.status_code = 200
+            self.headers = (
+                {"Location": "https://upload.example/session"}
+                if method == "POST" and ("/videos" in url or "captions" in url)
+                else {}
+            )
+            self._payload = {"id": "caption-1"} if method == "PUT" and len(calls) == 5 else {"id": "video-1"}
+
+        def json(self) -> dict:
+            return self._payload
+
+    def fake_request(method: str, url: str, **kwargs):
+        calls.append((method, url, kwargs))
+        return Response(method, url)
+
+    monkeypatch.setattr(publishing, "_upload_request_with_retry", fake_request)
+    result = publishing.upload_youtube_video(
+        media,
+        title="Title",
+        description="Description",
+        category_id="27",
+        thumbnail_path=thumbnail,
+        captions_path=captions,
+        caption_language="fr",
+        caption_name="French captions",
+        captions_draft=True,
+    )
+
+    assert result["video_id"] == "video-1"
+    assert result["category_id"] == "27"
+    assert result["thumbnail"]["status"] == "uploaded"
+    assert result["captions"]["caption_id"] == "caption-1"
+    assert result["captions"]["draft"] is True
+    assert [item[0] for item in calls] == ["POST", "PUT", "POST", "POST", "PUT"]
+    assert calls[0][2]["json"]["snippet"]["categoryId"] == "27"
+    assert calls[2][2]["headers"]["Content-Type"] == "image/png"
+    assert calls[3][2]["json"]["snippet"]["language"] == "fr"
