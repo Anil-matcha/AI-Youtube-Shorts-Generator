@@ -3,6 +3,7 @@
 **Published baseline:** v0.11.3 (local and remote gates passed)
 **Current development branch:** `beta/v1.0.0` (production-readiness work)
 **Implementation target:** v1.0.0 Beta (production-ready API and migration work)
+**Beta channel:** `beta` prerelease published from the gated branch snapshot
 **Last reviewed:** 2026-09-15
 
 This is the canonical implementation backlog. Inline `TODO` comments should
@@ -132,7 +133,10 @@ asset upload remain intentionally out of scope.
 - [x] Before any v1.0.0 release: run a fresh authenticated packaged smoke,
   record the certificate-backed signing decision, verify remote CI/assets, and
   confirm a clean repository (remote run `35046498312`; this beta branch still
-  has no v1.0.0 tag or public release).
+  has no production v1.0.0 tag or release; the separate `beta` prerelease is
+  published).
+- [x] Publish the separate `beta` prerelease with the verified ZIP, installer,
+  and SHA-256 manifest; keep production v1.0.0 unreleased.
 
 ## Game-changing future bets (v2+)
 

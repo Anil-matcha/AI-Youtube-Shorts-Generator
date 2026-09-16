@@ -202,10 +202,10 @@ No push, GitHub release, or asset upload has been performed.
 
 ### v1.0.0 Beta implementation (`beta/v1.0.0`)
 
-The implementation items below are complete on the beta branch. A public
-release is intentionally separate: it still requires the fresh authenticated
-packaged-runtime smoke, the certificate-backed signing decision, final remote
-CI, and a clean repository at release time.
+The implementation items below are complete on the beta branch. The separate
+`beta` prerelease channel is published from the gated branch snapshot. A
+production release remains intentionally separate and still requires its own
+release authorization.
 
 - [x] Add direct TikTok and Instagram Reels publishing through official APIs,
       with approval-first private defaults, OAuth state expiry, idempotency,
@@ -242,12 +242,14 @@ CI, and a clean repository at release time.
 - [x] Add response caching for repeated API calls
 - [x] Optimize Docker image size (multi-stage build, layer caching)
 
-### Release gates (verified for beta; no release created)
+### Release gates (verified for beta; beta prerelease published)
 - [x] Fresh authenticated packaged-runtime smoke test against the beta build
 - [x] Certificate-backed signing decision recorded for the beta artifact
 - [x] Final remote CI, hashes, and clean repository state verified before any
-      v1.0.0 tag or public release (remote run `35046498312`; no tag or public
-      release was created)
+      production v1.0.0 tag or release (remote run `35046498312`; no
+      production tag or release was created)
+- [x] Publish the separate beta prerelease channel at tag `beta` from the
+      gated branch snapshot, with the verified ZIP, installer, and hash manifest
 
 ---
 

@@ -2,8 +2,9 @@
 
 Last updated: 2026-09-15
 
-This document records beta validation only. It does not authorize or create a
-`v1.0.0` tag, GitHub release, or public artifact publication.
+This document records beta validation and the separate beta-channel
+publication. It does not authorize or create a production `v1.0.0` tag or
+release.
 
 ## Artifacts
 
@@ -65,4 +66,7 @@ any signed public release.
   `e9361e4`; the worktree was clean.
 - The final evidence follow-up is documentation-only and does not change
   packaged runtime code or the recorded artifact hashes.
-- No `v1.0.0` tag or public release is permitted by this beta gate.
+- The separate beta prerelease is published at tag `beta`, targeting
+  `f3b496fb707e9dcb43fa25753cda360c086f9385`, with the ZIP, installer, and
+  SHA-256 manifest attached.
+- No production `v1.0.0` tag or release was created by this beta gate.
