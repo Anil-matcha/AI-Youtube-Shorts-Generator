@@ -303,6 +303,8 @@ This project is licensed under the MIT License.
 
 ## Related Projects
 
+- [awesome-vibecoded-saas](https://github.com/Anil-matcha/awesome-vibecoded-saas) — broader catalog of open-source SaaS alternatives featuring this Shorts workflow.
+- [Muapi open-source alternatives](https://muapi.ai/open-source/alternative) — compare the Shorts workflow with the paid creator tools it targets.
 - [AI Influencer Generator](https://github.com/SamurAIGPT/AI-Influencer-Generator)
 - [Text to Video AI](https://github.com/SamurAIGPT/Text-To-Video-AI)
 - [Faceless Video Generator](https://github.com/SamurAIGPT/Faceless-Video-Generator)
