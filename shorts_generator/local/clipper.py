@@ -5,12 +5,69 @@ Two stages per highlight:
   2. Reframe the cut to the target aspect ratio. For 9:16 we slide a vertical
      window horizontally across the frame to keep faces centred (Haar
      cascade — same approach as the original repo, no external models).
+
+Supports both OpenCV 4 (cv2.CascadeClassifier in the main module) and
+OpenCV 5 (moved to opencv_contrib / xobjdetect).
 """
 import os
 import subprocess
 from typing import Dict, List, Optional, Tuple
 
 from ..config import LOCAL_OUTPUT_DIR
+
+
+_HAAR_XML_URL = (
+    "https://raw.githubusercontent.com/opencv/opencv/4.x"
+    "/data/haarcascades/haarcascade_frontalface_default.xml"
+)
+
+
+def _haar_xml_path() -> str:
+    """Return a local path to haarcascade_frontalface_default.xml.
+
+    Resolution order:
+      1. cv2.data.haarcascades (works on opencv-python 4.x out of the box).
+      2. A cached copy in LOCAL_OUTPUT_DIR (downloaded once from GitHub).
+    """
+    import cv2
+
+    bundled = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+    if os.path.isfile(bundled):
+        return bundled
+
+    cache_dir = os.path.join(LOCAL_OUTPUT_DIR, ".opencv_data")
+    os.makedirs(cache_dir, exist_ok=True)
+    cached = os.path.join(cache_dir, "haarcascade_frontalface_default.xml")
+    if os.path.isfile(cached):
+        return cached
+
+    print("[clip/local] Haar cascade XML not bundled; downloading from GitHub …", flush=True)
+    import urllib.request
+    urllib.request.urlretrieve(_HAAR_XML_URL, cached)
+    return cached
+
+
+def _load_face_cascade():
+    """Return a cv2.CascadeClassifier loaded with the frontal-face model.
+
+    Works with:
+      - opencv-python 4.x  (CascadeClassifier in cv2 directly)
+      - opencv-contrib-python 5.x (CascadeClassifier in cv2 via xobjdetect)
+    Returns None if CascadeClassifier is unavailable (plain opencv-python 5.x
+    without contrib) so the caller can fall back to centre-crop.
+    """
+    import cv2
+
+    CascadeClassifier = getattr(cv2, "CascadeClassifier", None)
+    if CascadeClassifier is None:
+        return None
+
+    xml_path = _haar_xml_path()
+    cascade = CascadeClassifier(xml_path)
+    if cascade.empty():
+        print(f"[clip/local] warning: Haar cascade failed to load from {xml_path}", flush=True)
+        return None
+    return cascade
 
 
 def _ratio(aspect_ratio: str) -> float:
@@ -66,7 +123,9 @@ def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str) -> str:
     crop_w = max(2, crop_w - (crop_w % 2))
     crop_h = max(2, crop_h - (crop_h % 2))
 
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    face_cascade = _load_face_cascade()
+    if face_cascade is None:
+        print("[clip/local] face tracking unavailable — using centre crop", flush=True)
 
     silent_path = out_path + ".silent.mp4"
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -79,21 +138,21 @@ def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str) -> str:
         if not ret:
             break
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
-        if len(faces) > 0:
-            # Pick the largest face — usually the speaker.
-            x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-            cx = x + w // 2
-            cy = y + h // 2
-            if last_center is None:
-                last_center = (cx, cy)
-            else:
-                lx, ly = last_center
-                last_center = (
-                    int(lx + (cx - lx) * smoothing),
-                    int(ly + (cy - ly) * smoothing),
-                )
+        if face_cascade is not None:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
+            if len(faces) > 0:
+                x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+                cx = x + w // 2
+                cy = y + h // 2
+                if last_center is None:
+                    last_center = (cx, cy)
+                else:
+                    lx, ly = last_center
+                    last_center = (
+                        int(lx + (cx - lx) * smoothing),
+                        int(ly + (cy - ly) * smoothing),
+                    )
         if last_center is None:
             last_center = (src_w // 2, src_h // 2)
 
