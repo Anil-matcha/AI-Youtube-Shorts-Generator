@@ -15,6 +15,10 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").strip().lower()
 LOCAL_WHISPER_MODEL = os.getenv("LOCAL_WHISPER_MODEL", "base")
 LOCAL_WHISPER_DEVICE = os.getenv("LOCAL_WHISPER_DEVICE", "auto")  # auto / cpu / cuda
@@ -65,3 +69,21 @@ def require_gemini_key() -> str:
             "Add it to your .env or export it, or switch LLM_PROVIDER back to openai."
         )
     return GEMINI_API_KEY
+
+
+def require_groq_key() -> str:
+    if not GROQ_API_KEY:
+        raise RuntimeError(
+            "GROQ_API_KEY is not set. Local mode needs a Groq key when LLM_PROVIDER=groq. "
+            "Get a free key at https://console.groq.com and add it to your .env."
+        )
+    return GROQ_API_KEY
+
+
+def require_openrouter_key() -> str:
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError(
+            "OPENROUTER_API_KEY is not set. Local mode needs an OpenRouter key when LLM_PROVIDER=openrouter. "
+            "Get a free key at https://openrouter.ai/keys and add it to your .env."
+        )
+    return OPENROUTER_API_KEY
