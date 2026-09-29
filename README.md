@@ -97,6 +97,7 @@ Don't want to self-host? The [AI Clipping API](https://muapi.ai/playground/ai-cl
    # Local mode (--mode local)
    LLM_PROVIDER=openai         # openai or gemini
    OPENAI_API_KEY=your_openai_key_here
+   OPENAI_BASE_URL=                   # optional, e.g. http://127.0.0.1:1234/v1
    OPENAI_MODEL=gpt-4o-mini          # optional, default gpt-4o-mini
    GEMINI_API_KEY=your_gemini_key_here
    GEMINI_MODEL=gemini-2.5-flash      # optional, default gemini-2.5-flash
