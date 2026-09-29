@@ -4,6 +4,35 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
 
 ## [Unreleased]
 
+### Added
+
+- Added the v2 performance loop: a cross-project performance and publishing
+  dashboard, bounded analytics JSON import, variant comparison, and explainable
+  recommendations based on completion and engagement.
+- Added transparent Creator Style Memory. Approved Shorts Factory decisions and
+  project settings can be learned into an inspectable, exportable local profile;
+  the profile never stores source URLs, credentials, or media paths.
+- Added bounded YouTube channel/playlist preview and batch queue controls. A
+  creator can inspect up to 50 public videos before queueing separate local or
+  API projects, with optional Shorts Factory review packages.
+- Added the private Edge AI model manager for the supported faster-whisper
+  catalog, including cache discovery, background downloads, status, and
+  explicit confirmed removal.
+- Added backup/restore coverage for the creator style profile, plus the
+  dashboard, channel, style-memory, and model-management UI surfaces.
+
+### Verification
+
+- The v2 foundation has focused route/model tests in `tests/test_v2_features.py`;
+  the existing suite remains the release baseline until a new version is cut.
+- Repeated the fresh v1.0.1 installer smoke attempt with the required
+  `RunAs`/UAC path; this non-interactive shell could not accept the UAC prompt,
+  so the installer launch remains unverified. No installed process or smoke
+  temporary directory was left behind.
+- Re-ran the signing helper for the installer and portable executable; it
+  remains explicitly unsigned because `WINDOWS_CODESIGN_CERT` is not set.
+  A local maintenance report was generated; release artifacts remain unchanged.
+
 ### Documentation
 
 - Added the latest fork comparison's related-project links for the broader

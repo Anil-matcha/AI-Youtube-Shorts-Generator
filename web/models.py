@@ -557,3 +557,115 @@ class VariantUpdate(StrictModel):
             return None
         cleaned = " ".join(str(value).replace("\x00", "").split())
         return cleaned or None
+
+
+class AnalyticsImportRecord(AnalyticsUpdate):
+    """One imported platform observation tied to a local project."""
+
+    job_id: str = Field(..., min_length=1, max_length=64)
+
+    @field_validator("job_id", mode="before")
+    @classmethod
+    def clean_job_id(cls, value: object) -> str:
+        cleaned = str(value or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", cleaned):
+            raise ValueError("job_id is invalid")
+        return cleaned
+
+
+class AnalyticsImportRequest(StrictModel):
+    """Bounded JSON import for platform analytics exports."""
+
+    records: List[AnalyticsImportRecord] = Field(..., min_length=1, max_length=500)
+
+
+class StyleProfileUpdate(StrictModel):
+    """Creator-authored style memory; all fields are transparent and exportable."""
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    notes: Optional[str] = Field(default=None, max_length=1000)
+    caption_style: Optional[CaptionStyle] = None
+    caption_position: Optional[CaptionPosition] = None
+    caption_font: Optional[str] = Field(default=None, max_length=80)
+    caption_color: Optional[str] = None
+    aspect_ratio: Optional[AspectRatio] = None
+    focus: Optional[Focus] = None
+    auto_reframe: Optional[bool] = None
+    music_ducking: Optional[bool] = None
+    transition: Optional[Transition] = None
+    hook_style: Optional[str] = Field(default=None, max_length=240)
+
+    @field_validator("name", "notes", "caption_font", "caption_color", "hook_style", mode="before")
+    @classmethod
+    def clean_profile_text(cls, value: object) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = " ".join(str(value).replace("\x00", "").split())
+        return cleaned or None
+
+    @field_validator("caption_color")
+    @classmethod
+    def validate_profile_color(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if not _HEX_COLOR.fullmatch(value):
+            raise ValueError("caption_color must be a six-digit hex color")
+        return value.lower()
+
+
+class StyleProfileLearnRequest(StrictModel):
+    """Request to learn a profile from completed local project decisions."""
+
+    job_ids: List[str] = Field(default_factory=list, max_length=50)
+    name: Optional[str] = Field(default=None, max_length=80)
+    include_unreviewed: bool = False
+
+    @field_validator("job_ids")
+    @classmethod
+    def clean_job_ids(cls, value: List[str]) -> List[str]:
+        cleaned = []
+        for item in value:
+            job_id = str(item or "").strip()
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", job_id):
+                raise ValueError("job_ids contains an invalid job id")
+            if job_id not in cleaned:
+                cleaned.append(job_id)
+        return cleaned
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def clean_learning_name(cls, value: object) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = " ".join(str(value).replace("\x00", "").split())
+        return cleaned or None
+
+
+class ChannelBatchRequest(StrictModel):
+    """Resolve a YouTube channel/playlist and queue bounded project jobs."""
+
+    source: str = Field(..., min_length=8, max_length=8192)
+    max_items: int = Field(10, ge=1, le=50)
+    mode: Mode = "local"
+    num_clips: int = Field(3, ge=1, le=12)
+    aspect_ratio: AspectRatio = "9:16"
+    download_format: DownloadFormat = "720"
+    language: Optional[str] = Field(default=None, max_length=16)
+    factory_mode: bool = True
+    name_prefix: Optional[str] = Field(default=None, max_length=60)
+
+    @field_validator("source", "name_prefix", mode="before")
+    @classmethod
+    def clean_channel_text(cls, value: object) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = str(value).replace("\x00", "").strip()
+        return cleaned or None
+
+    @field_validator("language", mode="before")
+    @classmethod
+    def clean_channel_language(cls, value: object) -> Optional[str]:
+        cleaned = str(value).strip() if value is not None else ""
+        if cleaned and cleaned.lower() != "auto" and not re.fullmatch(r"[A-Za-z]{2,3}(?:[-_][A-Za-z]{2,4})?", cleaned):
+            raise ValueError("language must be an ISO-639 code or auto")
+        return cleaned or None

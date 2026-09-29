@@ -382,6 +382,7 @@ def backup_projects(include_media: bool = Query(default=False)) -> StreamingResp
         bundle.writestr("jobs.json", json.dumps(records, ensure_ascii=False, indent=2, default=str))
         bundle.writestr("studio_state.json", json.dumps(studio._setup_state(), ensure_ascii=False, indent=2))
         bundle.writestr("brand_presets.json", json.dumps(studio._load_brand_presets(), ensure_ascii=False, indent=2))
+        bundle.writestr("style_profile.json", json.dumps(studio._load_style_profile(), ensure_ascii=False, indent=2))
         bundle.writestr("provider_costs.json", json.dumps(studio._cost_rates_public(), ensure_ascii=False, indent=2))
         if include_media:
             manifest = []
@@ -529,6 +530,10 @@ async def restore_projects(file: UploadFile = File(...), confirm: bool = Query(d
             presets = json.loads(archive.read("brand_presets.json"))
             if isinstance(presets, dict):
                 studio._save_brand_presets({str(k): v for k, v in presets.items() if isinstance(v, dict)})
+        if "style_profile.json" in names:
+            profile = json.loads(archive.read("style_profile.json"))
+            if isinstance(profile, dict):
+                studio._save_style_profile(profile)
         if "provider_costs.json" in names:
             rates = json.loads(archive.read("provider_costs.json"))
             if isinstance(rates, dict):

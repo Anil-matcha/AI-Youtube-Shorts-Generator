@@ -96,6 +96,10 @@ from web.editor_routes import router as editor_router  # noqa: E402
 from web.job_routes import router as job_router  # noqa: E402
 from web.system_routes import router as system_router  # noqa: E402
 from web.experiment_routes import router as experiment_router  # noqa: E402
+from web.dashboard_routes import router as dashboard_router  # noqa: E402
+from web.channel_routes import router as channel_router  # noqa: E402
+from web.style_memory import default_profile, load_profile, save_profile  # noqa: E402
+from web.model_manager import list_models  # noqa: E402
 from web.update_service import UpdateService  # noqa: E402
 from web.job_store import JobStore  # noqa: E402
 from web.api_contract import API_VERSION, LEGACY_SUNSET, code_for_error, is_versioned_path, legacy_api_path  # noqa: E402
@@ -134,6 +138,7 @@ app = FastAPI(
         {"name": "media", "description": "Upload and stream source or generated media."},
         {"name": "updates", "description": "Check and apply releases from the wiifhub repository."},
         {"name": "experiments", "description": "A/B variants and platform analytics feedback."},
+        {"name": "dashboard", "description": "Cross-project performance, publishing, and local model controls."},
     ],
     lifespan=lifespan,
 )
@@ -143,6 +148,8 @@ app.include_router(feature_router, prefix="/api")
 app.include_router(job_router)
 app.include_router(editor_router)
 app.include_router(experiment_router)
+app.include_router(dashboard_router)
+app.include_router(channel_router)
 
 
 def _openapi_with_v1_aliases() -> Dict[str, Any]:
@@ -266,6 +273,7 @@ _uploads_dir = _output_root / "uploads"
 _trash_dir = _output_root / ".trash"
 _setup_state_path = _output_root / "studio_state.json"
 _brand_presets_path = _output_root / "brand_presets.json"
+_style_profile_path = _output_root / "style_profile.json"
 _cost_rates_path = _output_root / "provider_costs.json"
 _allowed_upload_extensions = {
     ".avi",
@@ -363,6 +371,10 @@ _response_cache_paths = {
     "/api/publishing/platforms",
     "/api/migrations",
     "/api/analytics/summary",
+    "/api/analytics/dashboard",
+    "/api/publishing/dashboard",
+    "/api/style-profile",
+    "/api/local/models",
 }
 
 
@@ -2176,6 +2188,25 @@ def _save_brand_presets(presets: Dict[str, Dict[str, Any]]) -> None:
     temporary.write_text(json.dumps(presets, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(temporary, _brand_presets_path)
 
+
+def _load_style_profile() -> Dict[str, Any]:
+    return load_profile(_style_profile_path)
+
+
+def _save_style_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
+    saved = save_profile(_style_profile_path, profile)
+    _clear_response_cache()
+    return saved
+
+
+def _reset_style_profile() -> Dict[str, Any]:
+    try:
+        _style_profile_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    _clear_response_cache()
+    return default_profile()
+
 def _setup_state() -> Dict[str, Any]:
     try:
         value = json.loads(_setup_state_path.read_text(encoding="utf-8"))
@@ -2218,6 +2249,7 @@ def _setup_report() -> Dict[str, Any]:
     ffmpeg = shutil.which("ffmpeg")
     ffprobe = shutil.which("ffprobe")
     gpu = gpu_status()
+    local_models = list_models()
     # ``faster_whisper`` imports CTranslate2 only when a model is loaded, so
     # check both packages during setup.  This keeps a packaged build from
     # reporting that Local mode is ready until its CPU Whisper runtime is
@@ -2257,6 +2289,7 @@ def _setup_report() -> Dict[str, Any]:
             "device": LOCAL_WHISPER_DEVICE,
             "model_cached": _whisper_model_cached(LOCAL_WHISPER_MODEL),
             "dependencies": local_modules,
+            "catalog": local_models,
         },
         "keys": {
             "muapi_configured": bool(MUAPI_API_KEY),

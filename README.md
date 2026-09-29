@@ -180,9 +180,24 @@ The theme switch applies to the entire interface. The light Settings view is sho
 - **Publish safely** to YouTube Shorts, TikTok, and Instagram Reels through approval-first official APIs. Google sign-in uses PKCE and process-memory tokens; YouTube supports resumable video transfer, category/privacy/scheduling controls, custom thumbnails, and SRT/VTT captions. Unattended publishing is disabled unless explicitly enabled in deployment settings, and public unattended uploads require a second opt-in.
 - **Run the Shorts Factory** by submitting one upload or URL to `/api/v1/factory/jobs`. Completed work exposes clips, hooks, captions, thumbnails, metadata, and platform export plans at `/api/v1/jobs/{id}/factory`; every direct upload still requires a recorded human approval checkpoint.
 - **Run experiments** with per-clip A/B metadata variants, append-only platform analytics observations, and explainable retention/engagement feedback.
+- **Close the performance loop** in the Performance view: filter cross-project
+  publishing results, compare variants, import bounded platform JSON exports,
+  and get explainable next-step recommendations from completion and
+  engagement signals.
+- **Remember creator style transparently** by learning approved Shorts Factory
+  clips and project settings into an inspectable local JSON profile. Notes,
+  preferences, examples, backup/restore, and reset controls are all visible;
+  source URLs, credentials, and media paths are excluded.
+- **Process a channel in batches** by previewing up to 50 public YouTube
+  channel/playlist videos before queueing separate projects with the existing
+  job-budget, credential, and optional Factory-review boundaries.
 - **Render efficiently** with bounded parallel FFmpeg workers, live Whisper progress in the existing SSE stream, and short-lived caching for read-only catalogs.
 - **Use platform export contracts** for YouTube Shorts, TikTok, Instagram Reels, Instagram 4:5, and YouTube 16:9 presets that validate canvas and duration before rendering.
 - **Use GPU controls** to choose Whisper model and Auto/CPU/CUDA device. CUDA is detected at runtime and safely falls back to CPU.
+- **Manage private Edge AI models** from the Performance view. The supported
+  faster-whisper catalog discovers normal Hugging Face caches, downloads in a
+  background worker, reports status, and requires explicit confirmation before
+  removing a cached model.
 - **Use dark or light mode** from the top-bar switch. Your choice is saved locally and applies to panels, forms, previews, captions, timelines, dialogs, status states, and the closed screen.
 - **Personalize the accent** from Settings with Ocean, Indigo, Sunset, Emerald, or Berry palettes. Accent choices update controls, focus states, timelines, captions, badges, and the preview without changing your Dark, Light, or System appearance choice.
 - **Update in place** from the Settings view. Packaged Windows builds can download the newest release from this repository and restart without a reinstall.
@@ -353,6 +368,11 @@ The loopback FastAPI service powers the desktop shell and can be used by local t
 | `GET/POST/PATCH /api/jobs/{id}/variants` | Create and update A/B metadata variants for a clip |
 | `GET/POST /api/jobs/{id}/analytics` / `POST /api/jobs/{id}/variants/{variant_id}/analytics` | Record platform observations and receive feedback |
 | `GET /api/analytics/summary` | Aggregate feedback across the project library |
+| `GET /api/analytics/dashboard` / `GET /api/publishing/dashboard` | Cross-project performance, publishing totals, top variants, recommendations, style profile, and local model status; optional `platform` filter |
+| `POST /api/analytics/import` | Import up to 500 validated platform observations tied to existing project IDs |
+| `GET/PUT/DELETE /api/style-profile` / `POST /api/style-profile/learn` | Inspect, edit, learn, or reset the transparent local creator style profile |
+| `GET /api/local/models` / `POST /api/local/models/{name}/download` / `DELETE /api/local/models/{name}?confirm=true` | Inspect the supported faster-whisper model cache, start a background download, or explicitly remove one |
+| `POST /api/channel/preview` / `POST /api/channel/batch` | Preview or queue a bounded YouTube channel/playlist batch without downloading during preview |
 | `GET /api/errors` / `GET /api/migrations` | Read the v1 error catalog and current project migration status |
 | `GET /api/auth/status` / `POST /api/auth/login` / `POST /api/auth/logout` | Inspect and manage the optional API-token session |
 | `GET /api/update` | Check the latest wiifhub release |
@@ -377,6 +397,10 @@ web/                   FastAPI coordinator, typed models, security, SQLite queue
   feature_routes.py    Storage, backup, transcript, presets, factory, and publishing endpoints
   factory.py           Reviewable Shorts Factory manifests and approval state
   experiment_routes.py A/B variants and analytics feedback endpoints
+  dashboard_routes.py Cross-project performance, style memory, and local model endpoints
+  channel_routes.py   Bounded YouTube channel/playlist preview and queue endpoints
+  model_manager.py    Private faster-whisper cache catalog and download state
+  style_memory.py     Inspectable local creator style profile learning
   migrations.py        Pure project-format migrations shared by startup, restore, and CLI
   analytics.py         Local analytics ledger aggregation and recommendations
   system_routes.py     Auth, uploads, diagnostics, setup, and update endpoints

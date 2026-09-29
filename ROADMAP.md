@@ -11,7 +11,36 @@ unordered TODO list.
 
 ---
 
-## v1.0.1 — Security and reliability hardening
+## v2.0.0 - Creator feedback and private edge foundation (in progress)
+
+The first v2 slice is implemented on `main` without changing the v1.0.1
+release version. It connects the four next-step workflows through bounded,
+local-first seams; production scheduling, model download performance, and
+deeper multimodal learning remain follow-up milestones.
+
+- [x] Add a cross-project performance/publishing dashboard with platform
+      filters, variant ranking, explainable feedback, and bounded analytics
+      import.
+- [x] Add transparent Creator Style Memory with approved-clip learning,
+      creator-authored notes, inspectable JSON storage, backup/restore, and
+      reset controls.
+- [x] Add bounded channel/playlist discovery with preview-before-queue and
+      per-video jobs, while retaining the existing job budget and credentials
+      boundaries.
+- [x] Add a private faster-whisper model catalog with cache discovery,
+      background download state, and confirmed removal controls.
+- [ ] Measure model-download progress and first-render latency on representative
+      CPU/GPU machines before selecting a v2 release default.
+- [ ] Extend the foundation with multimodal story search, policy checks, and a
+      reviewable scheduler before enabling unattended distribution.
+- [ ] Re-run the v1.0.1 fresh installer smoke from an interactive elevated UAC
+      session; the current non-interactive shell cannot accept that prompt.
+- [ ] Configure the owner Authenticode certificate and re-run the signing
+      helper before publishing a signed Windows artifact.
+
+---
+
+## v1.0.1 - Security and reliability hardening
 
 The v1.0.1 patch release carries the post-v1.0.0 security review and the
 concurrency/path fixes completed on `main`.

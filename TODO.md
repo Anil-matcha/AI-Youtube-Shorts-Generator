@@ -10,6 +10,29 @@ This is the canonical implementation backlog. Inline `TODO` comments should
 point to an item here; completed capabilities belong in `ROADMAP.md` rather
 than remaining as open TODOs.
 
+## v2.0.0 foundation (implemented on main)
+
+- [x] **G-003 foundation - Performance Feedback Loop** - Add the
+  cross-project analytics/publishing dashboard, bounded JSON import, variant
+  comparison, and explainable completion/engagement recommendations.
+- [x] **G-002 foundation - Creator Style Memory** - Learn approved factory
+  clips and project settings into a transparent local profile with notes,
+  backup/restore, and reset controls; keep URLs, credentials, and media paths
+  out of the profile.
+- [x] **G-001 bounded channel slice** - Preview up to 50 YouTube channel or
+  playlist videos before queueing separate jobs, preserving the shared job
+  budget and optional Factory approval workflow.
+- [x] **G-007 foundation - Private Edge AI** - Discover, download, inspect, and
+  explicitly remove supported faster-whisper model caches from the UI and API.
+- [ ] Benchmark model download/render latency and define a supported v2 default
+  on CPU and CUDA hardware.
+- [ ] Continue G-001/G-006 with policy checks, scheduling, and provider quota
+  telemetry before unattended publishing.
+- [ ] Maintenance: repeat the v1.0.1 fresh installer smoke under an interactive
+  elevated UAC session; the non-interactive shell cannot accept the prompt.
+- [ ] Maintenance: set `WINDOWS_CODESIGN_CERT` to the owner certificate and
+  publish a new signed artifact only after `sign_artifacts.py` reports signed.
+
 ## v1.0.1 security and reliability follow-up (released)
 
 - [x] Scrub URL credentials, signed query values, basic-auth authorities, and
@@ -178,13 +201,17 @@ it becomes a committed release milestone.
 
 - [ ] **G-001 full autonomy** - Extend the beta factory package with unattended
   scheduling, compliance checks, batch-channel processing, and policy-safe
-  automation after measured production gates.
+  automation after measured production gates. The bounded channel preview and
+  queue foundation is now implemented above.
 - [ ] **G-002 Creator Style Memory** - Learn a creator's approved pacing, hooks,
   caption language, framing, and brand rules across projects, with transparent
-  controls and an exportable local profile.
+  controls and an exportable local profile. The first transparent profile
+  implementation is complete; richer pacing/language learning remains.
 - [ ] **G-003 Performance Feedback Loop** - Import platform analytics, compare
   clip variants, and use measured retention/engagement to improve future
   highlight selection and packaging instead of relying only on generic scores.
+  Dashboard/import/variant comparison foundations are complete; scorer
+  retraining and automatic packaging changes remain.
 - [ ] **G-004 Multimodal Story Graph** - Index transcript, scenes, faces, OCR,
   sound events, and chapters so creators can search a video semantically and
   see why a moment was selected.
@@ -196,7 +223,8 @@ it becomes a committed release milestone.
   official APIs with an auditable approval queue.
 - [ ] **G-007 Private Edge AI** - Offer a one-click offline model manager and
   fully local pipeline so sensitive footage never needs to leave the creator's
-  machine or network.
+  machine or network. The supported faster-whisper catalog and cache controls
+  are implemented; broader model families remain future work.
 - [ ] **G-008 Collaborative Review Studio** - Add shareable review links,
   comments, approvals, roles, and version history without exposing source
   media or credentials.

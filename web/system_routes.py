@@ -25,6 +25,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from shorts_generator.config import PipelineConfig
 from web.models import AuthLogin, OpenFolderRequest, SetupStateUpdate
+from web.model_manager import list_models
 from web.security import (
     LoginAttemptLimiter,
     authorized,
@@ -284,6 +285,7 @@ def system_status() -> Dict[str, Any]:
         "gpu": studio.gpu_status(),
         "whisper_models": ["tiny", "base", "small", "medium", "large-v3"],
         "whisper_devices": ["auto", "cpu", "cuda", "mps", "directml", "rocm"],
+        "local_models": list_models(),
         "captions_enabled": studio.LOCAL_BURN_CAPTIONS,
         "free_disk_gb": free_disk_gb,
         "max_concurrent_jobs": studio._max_concurrent_jobs,
