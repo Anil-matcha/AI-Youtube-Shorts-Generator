@@ -3,7 +3,7 @@
 **Published baseline:** v1.0.1 (local and remote gates passed)
 **Current development branch:** `main` (v1.0.1 production release)
 **Next implementation target:** v2.0.0
-**Last updated:** 2026-09-25
+**Last updated:** 2026-09-29
 
 The actionable implementation list now lives in [TODO.md](TODO.md). This
 roadmap tracks release milestones and verified state; it is not a second
@@ -33,10 +33,13 @@ deeper multimodal learning remain follow-up milestones.
       CPU/GPU machines before selecting a v2 release default.
 - [ ] Extend the foundation with multimodal story search, policy checks, and a
       reviewable scheduler before enabling unattended distribution.
-- [ ] Re-run the v1.0.1 fresh installer smoke from an interactive elevated UAC
-      session; the current non-interactive shell cannot accept that prompt.
-- [ ] Configure the owner Authenticode certificate and re-run the signing
-      helper before publishing a signed Windows artifact.
+- [x] Close the v1.0.1 fresh installer maintenance gate from an elevated
+      Windows process: isolated install, API health 200, anonymous rejection,
+      authenticated system access, UI version `1.0.1`, authenticated shutdown,
+      and clean process exit all pass.
+- [x] Defer Authenticode signing for the public artifacts. The owner
+      certificate is not configured, so unsigned Windows packages remain the
+      supported release state and signing is not a v2 foundation blocker.
 
 ---
 

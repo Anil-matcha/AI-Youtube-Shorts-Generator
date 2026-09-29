@@ -25,13 +25,14 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
 
 - The v2 foundation has focused route/model tests in `tests/test_v2_features.py`;
   the existing suite remains the release baseline until a new version is cut.
-- Repeated the fresh v1.0.1 installer smoke attempt with the required
-  `RunAs`/UAC path; this non-interactive shell could not accept the UAC prompt,
-  so the installer launch remains unverified. No installed process or smoke
-  temporary directory was left behind.
-- Re-ran the signing helper for the installer and portable executable; it
-  remains explicitly unsigned because `WINDOWS_CODESIGN_CERT` is not set.
-  A local maintenance report was generated; release artifacts remain unchanged.
+- Closed the fresh v1.0.1 installer maintenance gate from an elevated Windows
+  process: the isolated install completed, `/api/health` returned 200,
+  anonymous `/api/system` was rejected with 401, authenticated system access
+  returned 200, the installed UI reported version `1.0.1`, and authenticated
+  shutdown produced a clean process exit.
+- Authenticode signing is intentionally deferred. Public Windows artifacts
+  remain explicitly unsigned until an owner certificate is supplied; this is
+  not a blocker for the current v2 foundation work.
 
 ### Documentation
 

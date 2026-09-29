@@ -4,7 +4,7 @@
 **Current development branch:** `main` (v1.0.1 production release)
 **Implementation target:** v2.0.0 (next production roadmap)
 **Beta channel:** `beta` prerelease published from the gated branch snapshot
-**Last reviewed:** 2026-09-25
+**Last reviewed:** 2026-09-29
 
 This is the canonical implementation backlog. Inline `TODO` comments should
 point to an item here; completed capabilities belong in `ROADMAP.md` rather
@@ -28,10 +28,12 @@ than remaining as open TODOs.
   on CPU and CUDA hardware.
 - [ ] Continue G-001/G-006 with policy checks, scheduling, and provider quota
   telemetry before unattended publishing.
-- [ ] Maintenance: repeat the v1.0.1 fresh installer smoke under an interactive
-  elevated UAC session; the non-interactive shell cannot accept the prompt.
-- [ ] Maintenance: set `WINDOWS_CODESIGN_CERT` to the owner certificate and
-  publish a new signed artifact only after `sign_artifacts.py` reports signed.
+- [x] Maintenance: fresh v1.0.1 installer smoke now passes from an elevated
+  Windows process, including isolated install, health/authentication checks,
+  UI version `1.0.1`, authenticated shutdown, and clean exit.
+- [x] Maintenance: defer Authenticode signing. The owner certificate is not
+  configured, and unsigned public artifacts are the intentional supported
+  release state for this foundation milestone.
 
 ## v1.0.1 security and reliability follow-up (released)
 
