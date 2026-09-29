@@ -7,6 +7,7 @@ Two stages per highlight:
      cascade — same approach as the original repo, no external models).
 """
 import os
+import time 
 import subprocess
 from typing import Dict, List, Optional, Tuple
 
@@ -135,8 +136,13 @@ def crop_clip_local(
         _cut_subclip(source_path, start_time, end_time, cut_path)
         _reframe_vertical(cut_path, out_path, aspect_ratio)
     finally:
-        if os.path.exists(cut_path):
-            os.remove(cut_path)
+        for attempt in range(5):
+            try:
+                if os.path.exists(cut_path):
+                    os.remove(cut_path)
+                break
+            except PermissionError:
+                time.sleep(0.5)
     return out_path
 
 
