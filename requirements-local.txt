@@ -5,6 +5,8 @@ yt-dlp>=2024.1.1
 faster-whisper>=1.0.0
 openai>=1.0.0
 google-genai>=1.0.0
-opencv-python>=4.8.0
+# OpenCV 5.0 removed cv2.CascadeClassifier, which the auto-crop face
+# tracking depends on. Stay on 4.x until that path is ported.
+opencv-python>=4.8.0,<5
 # torch is only needed if you want CUDA Whisper. CPU works without it.
 # torch>=2.0
