@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       require_signing:
-        description: Fail if the owner signing certificate is not configured (recommended: true for releases)
+        description: "Fail if the owner signing certificate is not configured (recommended: true for releases)"
         required: true
         default: true
         type: boolean
