@@ -1,8 +1,8 @@
 # Shorts Studio TODO
 
-**Published baseline:** v1.0.1 (local and remote gates passed)
-**Current development branch:** `main` (v1.0.1 production release)
-**Implementation target:** v2.0.0 (next production roadmap)
+**Published baseline:** v2.0.0 (local and remote gates passed)
+**Current development branch:** `main` (v2.0.0 production release)
+**Implementation target:** v2.1.0 (next production roadmap)
 **Beta channel:** `beta` prerelease published from the gated branch snapshot
 **Last reviewed:** 2026-09-30
 
@@ -10,7 +10,7 @@ This is the canonical implementation backlog. Inline `TODO` comments should
 point to an item here; completed capabilities belong in `ROADMAP.md` rather
 than remaining as open TODOs.
 
-## v2.0.0 foundation (implemented on main)
+## v2.0.0 foundation (released)
 
 - [x] **G-003 foundation - Performance Feedback Loop** - Add the
   cross-project analytics/publishing dashboard, bounded JSON import, variant
@@ -39,6 +39,19 @@ than remaining as open TODOs.
 - [x] Maintenance: defer Authenticode signing. The owner certificate is not
   configured, and unsigned public artifacts are the intentional supported
   release state for this foundation milestone.
+- [x] Publish v2.0.0 with the verified unsigned installer and portable ZIP;
+  209 Python tests passed, 4 browser-only tests were skipped by default,
+  coverage reached 69.71%, the opt-in browser flow passed 4/4, dependency
+  audits were clean, and packaged shutdown/clean-exit smoke passed.
+
+## v2.1.0 follow-up (planned)
+
+- [ ] Add optional OCR/audio story models with bounded local resource usage and
+  redacted evidence payloads.
+- [ ] Add provider-side scheduling only after explicit approval, retry,
+  cancellation, and provider-contract coverage is complete.
+- [ ] Extend model download performance and hardware benchmark coverage beyond
+  the representative v2.0.0 CPU/CUDA baselines.
 
 ## v1.0.1 security and reliability follow-up (released)
 

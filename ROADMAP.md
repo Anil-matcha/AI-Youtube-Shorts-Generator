@@ -1,8 +1,8 @@
 # Shorts Studio Upgrade Roadmap
 
-**Published baseline:** v1.0.1 (local and remote gates passed)
-**Current development branch:** `main` (v1.0.1 production release)
-**Next implementation target:** v2.0.0
+**Published baseline:** v2.0.0 (local and remote gates passed)
+**Current development branch:** `main` (v2.0.0 production release)
+**Next implementation target:** v2.1.0
 **Last updated:** 2026-09-30
 
 The actionable implementation list now lives in [TODO.md](TODO.md). This
@@ -11,12 +11,12 @@ unordered TODO list.
 
 ---
 
-## v2.0.0 - Creator feedback and private edge foundation (in progress)
+## v2.0.0 - Creator feedback and private edge foundation (released)
 
-The first v2 slice is implemented on `main` without changing the v1.0.1
-release version. It connects the four next-step workflows through bounded,
-local-first seams; production scheduling, model download performance, and
-deeper multimodal learning remain follow-up milestones.
+The first v2 slice is released from `main` as v2.0.0. It connects the four
+next-step workflows through bounded, local-first seams; production scheduling,
+model download performance, and deeper multimodal learning remain follow-up
+milestones.
 
 - [x] Add a cross-project performance/publishing dashboard with platform
       filters, variant ranking, explainable feedback, and bounded analytics
@@ -47,6 +47,22 @@ deeper multimodal learning remain follow-up milestones.
 - [x] Defer Authenticode signing for the public artifacts. The owner
       certificate is not configured, so unsigned Windows packages remain the
       supported release state and signing is not a v2 foundation blocker.
+- [x] Publish v2.0.0 after 209 Python tests passed, 4 browser-only tests were
+      skipped by default, coverage reached 69.71%, the opt-in browser flow
+      passed 4/4, dependency audits were clean, and the packaged EXE passed
+      authenticated shutdown and clean exit. The release carries matching
+      SHA-256 hashes for the unsigned installer and portable ZIP.
+
+---
+
+## v2.1.0 - Multimodal and provider scheduling follow-up (planned)
+
+- [ ] Add optional OCR and audio evidence models behind explicit local model
+      selection, bounded resource budgets, and privacy-preserving output.
+- [ ] Add provider-side scheduling adapters only after provider contracts,
+      approval semantics, retries, and cancellation behavior are specified.
+- [ ] Improve model-cache download performance and expand benchmark coverage
+      beyond the representative CPU/CUDA baselines recorded in v2.0.0.
 
 ---
 

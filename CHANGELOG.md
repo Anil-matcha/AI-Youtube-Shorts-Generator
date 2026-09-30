@@ -4,6 +4,10 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
 
 ## [Unreleased]
 
+No unreleased changes.
+
+## [2.0.0] - 2026-09-30
+
 ### Added
 
 - Added the v2 performance loop: a cross-project performance and publishing
@@ -57,6 +61,14 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
   Docker, arm64, and installed environments; `pip check` was clean. Bandit
   reported zero medium/high issues (the remaining low findings are existing
   intentional subprocess/exception/provider-adapter patterns).
+- The fresh v2.0.0 packaged runtime smoke passed health 200, anonymous system
+  rejection 401, authenticated system access 200, UI version `2.0.0`,
+  authenticated shutdown, and clean process exit.
+- The unsigned release artifacts have matching SHA-256 entries in
+  `SHA256SUMS-v2.0.0.txt`: installer
+  `FEC288BC2CA93EF4375D269D2D5E3BDE03EDE19616F7979F177CC1B3D07DA19C` and
+  portable ZIP
+  `445CE07E733639B8765500BBFCF6C7F6D0E5BB920760338DC34AD397CFE0DF20`.
 - The CPU benchmark on this Windows workstation measured faster-whisper `tiny`
   model load at 2.115s (cached) and the synthetic 9:16 first render at 1.3402s.
   The representative CUDA run on an NVIDIA GeForce RTX 5060 Ti (16 GB,
@@ -333,7 +345,8 @@ kept as the stable baseline for v0.10.2 work.
 - Added persistent project library, logs, previews, exports, and in-app
   update checks.
 
-[Unreleased]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v1.0.1...v2.0.0
 [1.0.1]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v0.11.3...v1.0.0
 [0.11.3]: https://github.com/wiifhub/AI-Youtube-Shorts-Generator/compare/v0.11.2...v0.11.3
