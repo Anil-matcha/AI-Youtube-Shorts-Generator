@@ -7,6 +7,8 @@
 yt-dlp==2026.7.4
 openai==2.49.0
 google-genai==2.14.0
+# google-auth uses cryptography; keep the security-fixed release explicit.
+cryptography==50.0.1
 opencv-python-headless==4.13.0.92
 # Pillow 12.3.0 (Pillow 12.2.0 has 25 published advisories and no fix). The
 # manylinux_2_27 aarch64 wheel now exists upstream; the arm64-dependencies CI

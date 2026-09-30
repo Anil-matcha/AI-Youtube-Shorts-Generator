@@ -4,7 +4,7 @@
 **Current development branch:** `main` (v1.0.1 production release)
 **Implementation target:** v2.0.0 (next production roadmap)
 **Beta channel:** `beta` prerelease published from the gated branch snapshot
-**Last reviewed:** 2026-09-29
+**Last reviewed:** 2026-09-30
 
 This is the canonical implementation backlog. Inline `TODO` comments should
 point to an item here; completed capabilities belong in `ROADMAP.md` rather
@@ -24,10 +24,14 @@ than remaining as open TODOs.
   budget and optional Factory approval workflow.
 - [x] **G-007 foundation - Private Edge AI** - Discover, download, inspect, and
   explicitly remove supported faster-whisper model caches from the UI and API.
-- [ ] Benchmark model download/render latency and define a supported v2 default
-  on CPU and CUDA hardware.
-- [ ] Continue G-001/G-006 with policy checks, scheduling, and provider quota
-  telemetry before unattended publishing.
+- [x] Add `scripts/benchmark_v2.py` and record the current CPU baseline: the
+  cached `tiny` model loaded in 2.115s and a synthetic 9:16 first render took
+  1.3402s. Repeat on representative CUDA hardware before setting a GPU-specific
+  v2 default.
+- [x] Continue G-001/G-006 with bounded story search, deterministic policy
+  checks, private reviewable scheduling, and observed provider quota telemetry.
+  Unattended publishing, provider-side scheduling, OCR/audio story models, and
+  automatic policy decisions remain explicitly out of scope for this foundation.
 - [x] Maintenance: fresh v1.0.1 installer smoke now passes from an elevated
   Windows process, including isolated install, health/authentication checks,
   UI version `1.0.1`, authenticated shutdown, and clean exit.

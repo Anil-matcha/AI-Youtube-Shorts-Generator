@@ -198,6 +198,16 @@ The theme switch applies to the entire interface. The light Settings view is sho
   faster-whisper catalog discovers normal Hugging Face caches, downloads in a
   background worker, reports status, and requires explicit confirmation before
   removing a cached model.
+- **Search the story locally** across transcript segments, chapters, generated
+  highlights, and visual signals. Search results are bounded and redact source
+  URLs and media paths before they leave the process.
+- **Preflight publishing policy** with deterministic duration, HTTPS, privacy,
+  sensitive-language, platform, and Factory-approval checks. Scheduled entries
+  are private review intents; Shorts Studio never uploads from the scheduler
+  automatically.
+- **Review a publishing queue** with explicit approve, reject, and cancel
+  decisions, plus observed provider-error and quota telemetry. No quota is
+  inferred or bypassed when a provider has not reported one.
 - **Use dark or light mode** from the top-bar switch. Your choice is saved locally and applies to panels, forms, previews, captions, timelines, dialogs, status states, and the closed screen.
 - **Personalize the accent** from Settings with Ocean, Indigo, Sunset, Emerald, or Berry palettes. Accent choices update controls, focus states, timelines, captions, badges, and the preview without changing your Dark, Light, or System appearance choice.
 - **Update in place** from the Settings view. Packaged Windows builds can download the newest release from this repository and restart without a reinstall.
@@ -373,6 +383,10 @@ The loopback FastAPI service powers the desktop shell and can be used by local t
 | `GET/PUT/DELETE /api/style-profile` / `POST /api/style-profile/learn` | Inspect, edit, learn, or reset the transparent local creator style profile |
 | `GET /api/local/models` / `POST /api/local/models/{name}/download` / `DELETE /api/local/models/{name}?confirm=true` | Inspect the supported faster-whisper model cache, start a background download, or explicitly remove one |
 | `POST /api/channel/preview` / `POST /api/channel/batch` | Preview or queue a bounded YouTube channel/playlist batch without downloading during preview |
+| `POST /api/story/search` | Search bounded local transcript, chapter, highlight, and visual evidence |
+| `POST /api/policy/check` | Run a deterministic publishing-policy preflight for a project clip or standalone metadata |
+| `GET/POST /api/scheduler` / `POST /api/scheduler/{id}/decision` / `DELETE /api/scheduler/{id}` | List, create, decide, or cancel private reviewable schedule intents; no automatic uploads |
+| `GET /api/publishing/telemetry` / `GET /api/publishing/quota` | Report observed publishing attempts, errors, policy states, and provider quota signals |
 | `GET /api/errors` / `GET /api/migrations` | Read the v1 error catalog and current project migration status |
 | `GET /api/auth/status` / `POST /api/auth/login` / `POST /api/auth/logout` | Inspect and manage the optional API-token session |
 | `GET /api/update` | Check the latest wiifhub release |
@@ -399,6 +413,7 @@ web/                   FastAPI coordinator, typed models, security, SQLite queue
   experiment_routes.py A/B variants and analytics feedback endpoints
   dashboard_routes.py Cross-project performance, style memory, and local model endpoints
   channel_routes.py   Bounded YouTube channel/playlist preview and queue endpoints
+  v2_routes.py         Story search, policy preflight, reviewable scheduler, and telemetry endpoints
   model_manager.py    Private faster-whisper cache catalog and download state
   style_memory.py     Inspectable local creator style profile learning
   migrations.py        Pure project-format migrations shared by startup, restore, and CLI
@@ -415,6 +430,7 @@ CONTRIBUTING.md        Development, testing, and review policy
 launcher.py            Browser-free desktop launcher
 main.py                CLI entry point
 scripts/build.py       Cross-platform portable/installer build entry point
+scripts/benchmark_v2.py Bounded model-load and synthetic first-render benchmark
 scripts/sign_artifacts.py  Optional Authenticode/codesign/notarization
 install_windows.bat    Source dependency setup
 build_portable.bat     PyInstaller portable build
@@ -438,6 +454,7 @@ Install the pinned development tools before making changes, then run the same
 checks used by GitHub Actions:
 
 ```powershell
+.\venv\Scripts\python.exe -m pip install --upgrade pip
 .\venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\venv\Scripts\python.exe -m ruff check shorts_generator web launcher.py main.py tests scripts
 .\venv\Scripts\python.exe -m mypy --strict
@@ -448,6 +465,7 @@ checks used by GitHub Actions:
 .\venv\Scripts\python.exe -m pip_audit -r requirements-gpu.txt --progress-spinner off
 .\venv\Scripts\python.exe -m pip_audit -r requirements-docker.txt --progress-spinner off
 .\venv\Scripts\python.exe -m pip_audit -r requirements-docker-arm64.txt --progress-spinner off
+.\venv\Scripts\python.exe scripts\benchmark_v2.py --model tiny --device cpu --output release\benchmark-v2.json
 Get-ChildItem web\static -Filter *.js -File; Get-ChildItem web\static\modules -Filter *.js -File | ForEach-Object { node --check $_.FullName }
 
 # Optional browser flow (install Chromium once):

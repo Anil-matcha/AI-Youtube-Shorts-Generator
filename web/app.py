@@ -98,6 +98,7 @@ from web.system_routes import router as system_router  # noqa: E402
 from web.experiment_routes import router as experiment_router  # noqa: E402
 from web.dashboard_routes import router as dashboard_router  # noqa: E402
 from web.channel_routes import router as channel_router  # noqa: E402
+from web.v2_routes import router as v2_router  # noqa: E402
 from web.style_memory import default_profile, load_profile, save_profile  # noqa: E402
 from web.model_manager import list_models  # noqa: E402
 from web.update_service import UpdateService  # noqa: E402
@@ -139,6 +140,7 @@ app = FastAPI(
         {"name": "updates", "description": "Check and apply releases from the wiifhub repository."},
         {"name": "experiments", "description": "A/B variants and platform analytics feedback."},
         {"name": "dashboard", "description": "Cross-project performance, publishing, and local model controls."},
+        {"name": "v2 foundation", "description": "Local story search, deterministic policy preflight, and reviewable scheduling."},
     ],
     lifespan=lifespan,
 )
@@ -150,6 +152,7 @@ app.include_router(editor_router)
 app.include_router(experiment_router)
 app.include_router(dashboard_router)
 app.include_router(channel_router)
+app.include_router(v2_router)
 
 
 def _openapi_with_v1_aliases() -> Dict[str, Any]:

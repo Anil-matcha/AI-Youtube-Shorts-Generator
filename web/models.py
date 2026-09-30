@@ -669,3 +669,120 @@ class ChannelBatchRequest(StrictModel):
         if cleaned and cleaned.lower() != "auto" and not re.fullmatch(r"[A-Za-z]{2,3}(?:[-_][A-Za-z]{2,4})?", cleaned):
             raise ValueError("language must be an ISO-639 code or auto")
         return cleaned or None
+
+
+class StorySearchRequest(StrictModel):
+    """Bounded local search over transcript, visual, chapter, and clip signals."""
+
+    query: str = Field(..., min_length=1, max_length=200)
+    limit: int = Field(default=25, ge=1, le=50)
+    job_ids: List[str] = Field(default_factory=list, max_length=50)
+
+    @field_validator("query", mode="before")
+    @classmethod
+    def clean_story_query(cls, value: object) -> str:
+        cleaned = " ".join(str(value or "").replace("\x00", "").split())
+        return cleaned
+
+    @field_validator("job_ids")
+    @classmethod
+    def clean_story_job_ids(cls, value: List[str]) -> List[str]:
+        cleaned: List[str] = []
+        for item in value:
+            job_id = str(item or "").strip()
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", job_id):
+                raise ValueError("job_ids contains an invalid job id")
+            if job_id not in cleaned:
+                cleaned.append(job_id)
+        return cleaned
+
+
+class PolicyCheckRequest(StrictModel):
+    """Deterministic preflight for a reviewable or publishing action."""
+
+    job_id: Optional[str] = Field(default=None, max_length=64)
+    clip_index: Optional[int] = Field(default=None, ge=0, le=1000)
+    variant_id: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    platform: PublishPlatform
+    title: Optional[str] = Field(default=None, max_length=150)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    media_url: Optional[str] = Field(default=None, max_length=4096)
+    tags: List[str] = Field(default_factory=list, max_length=30)
+    privacy_status: PrivacyStatus = "private"
+    publish_at: Optional[str] = Field(default=None, max_length=80)
+    auto_publish: bool = False
+
+    @field_validator("job_id", "variant_id", "media_url", mode="before")
+    @classmethod
+    def clean_policy_identifiers(cls, value: object) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = str(value).replace("\x00", "").strip()
+        if "\r" in cleaned or "\n" in cleaned:
+            raise ValueError("policy metadata contains invalid line breaks")
+        return cleaned or None
+
+    @field_validator("title", "description", mode="before")
+    @classmethod
+    def clean_policy_text(cls, value: object) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = " ".join(str(value).replace("\x00", "").split())
+        return cleaned or None
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def clean_policy_tags(cls, value: object) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        return [" ".join(str(item).replace("\x00", "").split())[:100] for item in value if str(item).strip()][:30]
+
+
+class ScheduleCreateRequest(PublishRequest):
+    """A future publish intent that always waits for an explicit review decision."""
+
+    job_id: str = Field(..., min_length=1, max_length=64)
+    note: Optional[str] = Field(default=None, max_length=1000)
+
+    @field_validator("job_id", mode="before")
+    @classmethod
+    def clean_schedule_job_id(cls, value: object) -> str:
+        cleaned = str(value or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", cleaned):
+            raise ValueError("job_id is invalid")
+        return cleaned
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def clean_schedule_note(cls, value: object) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = " ".join(str(value).replace("\x00", "").split())
+        return cleaned[:1000] or None
+
+    @model_validator(mode="after")
+    def validate_reviewable_schedule(self) -> "ScheduleCreateRequest":
+        if not self.publish_at:
+            raise ValueError("publish_at is required for a scheduled entry")
+        if self.confirm:
+            raise ValueError("scheduled entries cannot publish during creation")
+        if self.auto_publish:
+            raise ValueError("reviewable scheduled entries cannot enable auto_publish")
+        if self.privacy_status != "private":
+            raise ValueError("scheduled entries must remain private until explicit publish confirmation")
+        return self
+
+
+class ScheduleDecisionRequest(StrictModel):
+    """Explicit human decision for a queued schedule entry."""
+
+    decision: Literal["approved", "rejected"]
+    note: Optional[str] = Field(default=None, max_length=1000)
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def clean_schedule_decision_note(cls, value: object) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = " ".join(str(value).replace("\x00", "").split())
+        return cleaned[:1000] or None

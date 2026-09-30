@@ -27,6 +27,7 @@ from fastapi.responses import StreamingResponse
 from web.models import BrandPreset, CleanupRequest, FactoryApprovalRequest, ProviderCostRates, PublishRequest, TranscriptUpdate
 from web.factory import approved_for_clip, factory_manifest
 from web.security import redact_structure, redact_text, redact_url_query
+from web.policy import evaluate_publish_policy
 from web.migrations import CURRENT_SCHEMA_VERSION, PROJECT_FORMAT_VERSION, migrate_job_record
 from web.publishing import (
     PLATFORMS,
@@ -881,6 +882,32 @@ def _publish_error(exc: Exception) -> HTTPException:
     return HTTPException(502, {"error": redact_text(str(exc)), "code": "publish_failed"})
 
 
+def _record_publish_error(studio: Any, job_id: str, request: PublishRequest, exc: Exception) -> None:
+    """Persist a bounded, credential-free provider error for telemetry."""
+    code = getattr(exc, "code", None) if isinstance(exc, YouTubePublishError) else None
+    safe_code = str(code or "").strip().lower()
+    if safe_code not in {"quota_exceeded", "publish_failed", "dependency_failure"}:
+        safe_code = "quota_exceeded" if "quota" in str(exc).casefold() else "publish_failed"
+    entry = {
+        "platform": request.platform,
+        "code": safe_code,
+        "message": redact_text(str(exc), max_length=500),
+        "at": time.time(),
+    }
+    with studio._lock:
+        current = studio._jobs.get(job_id)
+        if not current:
+            return
+        errors = current.get("publishing_errors")
+        if not isinstance(errors, list):
+            errors = []
+            current["publishing_errors"] = errors
+        errors.append(entry)
+        if len(errors) > 100:
+            del errors[:-100]
+        studio._persist_job_locked(current)
+
+
 @router.post("/jobs/{job_id}/publish", tags=["projects"])
 def prepare_publish(job_id: str, request: PublishRequest) -> Dict[str, Any]:
     studio = _studio()
@@ -892,6 +919,25 @@ def prepare_publish(job_id: str, request: PublishRequest) -> Dict[str, Any]:
         index, short, variant = _publish_selection(studio, job, request)
         factory_enabled = bool(
             isinstance(job.get("factory"), dict) and job.get("factory", {}).get("enabled")
+        )
+        metadata = studio._creator_metadata(short)
+        if variant:
+            metadata = {**metadata, **variant}
+        policy = evaluate_publish_policy(
+            {
+                "platform": request.platform,
+                "title": request.title or metadata.get("title"),
+                "description": request.description or metadata.get("description"),
+                "hook_sentence": short.get("hook_sentence"),
+                "media_url": request.media_url,
+                "privacy_status": request.privacy_status,
+                "publish_at": request.publish_at,
+                "auto_publish": request.auto_publish,
+                "start_time": short.get("start_time"),
+                "end_time": short.get("end_time"),
+            },
+            scheduled=bool(request.publish_at),
+            factory_approved=not factory_enabled or approved_for_clip(job, index),
         )
     selected_pairs = (
         list(enumerate(shorts))
@@ -908,6 +954,7 @@ def prepare_publish(job_id: str, request: PublishRequest) -> Dict[str, Any]:
     )
     plan["approval_required"] = True
     plan["auto_publish"] = bool(request.auto_publish)
+    plan["policy"] = policy
     if request.platform == "youtube_shorts":
         plan["public_auto_publish_enabled"] = youtube_public_auto_publish_enabled()
     if request.confirm:
@@ -920,6 +967,13 @@ def prepare_publish(job_id: str, request: PublishRequest) -> Dict[str, Any]:
                     "error": "this factory clip has not passed its human approval checkpoint",
                     "code": "factory_approval_required",
                 },
+            )
+        if policy["status"] == "blocked":
+            raise HTTPException(409, {"error": "publish policy blocked this action", "code": "policy_blocked", "policy": policy})
+        if request.auto_publish and policy["status"] != "pass":
+            raise HTTPException(
+                409,
+                {"error": "automatic publishing requires a passing policy preflight", "code": "policy_review_required", "policy": policy},
             )
         if not status.get("authorized"):
             raise HTTPException(
@@ -964,7 +1018,9 @@ def prepare_publish(job_id: str, request: PublishRequest) -> Dict[str, Any]:
         media = studio._job_media_path(job, short.get("clip_url"))
         if not media or not media.is_file():
             raise HTTPException(400, {"error": "clip media is unavailable", "code": "media_unavailable"})
-        metadata = variant or studio._creator_metadata(short)
+        metadata = studio._creator_metadata(short)
+        if variant:
+            metadata = {**metadata, **variant}
         title = request.title or str(metadata.get("title") or "Untitled highlight")
         description = request.description or str(metadata.get("description") or "")
         tags = request.tags or [tag for tag in str(metadata.get("hashtags") or "").split() if tag]
@@ -995,6 +1051,7 @@ def prepare_publish(job_id: str, request: PublishRequest) -> Dict[str, Any]:
                 captions_draft=request.captions_draft,
             )
         except (ValueError, OSError, RuntimeError, requests.RequestException) as exc:
+            _record_publish_error(studio, job_id, request, exc)
             raise _publish_error(exc) from exc
         with studio._lock:
             current = studio._jobs.get(job_id)
@@ -1015,6 +1072,7 @@ def prepare_publish(job_id: str, request: PublishRequest) -> Dict[str, Any]:
         "upload_url": plan["upload_url"],
         "authorization_url": plan["authorization_url"],
         "items": plan["items"],
+        "policy": policy,
         "requires_manual_upload": not direct_ready,
         "direct_api": bool(PLATFORMS[request.platform].direct_api),
         "oauth_status": status,
@@ -1124,6 +1182,7 @@ def publish_youtube(job_id: str, request: PublishRequest) -> Dict[str, Any]:
             "approval_required": True,
             "resumable": True,
             "auto_publish": effective.auto_publish,
+            "policy": result.get("policy"),
             "idempotency_key": hashlib.sha256(
                 f"{job_id}:{effective.variant_id or effective.clip_index}:{effective.title or item.get('title') or ''}:"
                 f"{effective.publish_at or ''}:{effective.privacy_status}:{effective.category_id}".encode("utf-8")

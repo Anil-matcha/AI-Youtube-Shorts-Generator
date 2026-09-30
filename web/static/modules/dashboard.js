@@ -41,6 +41,20 @@
       : '<div class="empty">Nothing published yet.</div>';
   }
 
+  function renderStorySearch(data) {
+    const node = $('storySearchResults');
+    if (!node) return;
+    const values = Array.isArray(data?.results) ? data.results.slice(0, 25) : [];
+    node.innerHTML = values.length
+      ? values.map(item => {
+        const start = Number(item.start_time);
+        const end = Number(item.end_time);
+        const timing = Number.isFinite(start) ? `${start.toFixed(1)}s${Number.isFinite(end) && end > start ? `–${end.toFixed(1)}s` : ''}` : 'time unavailable';
+        return `<div class="insight-row"><div><strong>${esc(item.title || item.kind || 'Story match')}</strong><small>${esc(item.project_name || 'Project')} · ${esc(item.kind || 'signal')} · ${esc(timing)}</small><small>${esc(item.snippet || '')}</small></div><span class="badge">${esc((item.matched_terms || []).join(', ') || 'signal')}</span></div>`;
+      }).join('')
+      : '<div class="empty">No matching story moments were found.</div>';
+  }
+
   function renderStyle(profile) {
     const node = $('styleProfileSummary');
     if (!node) return;
@@ -178,6 +192,18 @@
     } catch (error) { if (status) status.textContent = error.message; }
   }
 
+  async function searchStory() {
+    const input = $('storySearchInput');
+    const status = $('storySearchStatus');
+    const query = String(input?.value || '').trim();
+    if (!query) { if (status) status.textContent = 'Enter a word or phrase to search.'; return; }
+    try {
+      const data = await api('/api/story/search', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({query, limit: 25})});
+      renderStorySearch(data);
+      if (status) status.textContent = `${data.result_count || 0} match${Number(data.result_count) === 1 ? '' : 'es'} across ${data.searched_projects || 0} project(s).`;
+    } catch (error) { if (status) status.textContent = error.message; }
+  }
+
   function mount() {
     $('performanceRefresh')?.addEventListener('click', () => refresh().catch(error => setText('performanceRecommendations', error.message)));
     $('performancePlatform')?.addEventListener('change', () => refresh().catch(error => setText('performanceRecommendations', error.message)));
@@ -187,6 +213,8 @@
     $('styleSaveButton')?.addEventListener('click', saveStyle);
     $('styleResetButton')?.addEventListener('click', resetStyle);
     $('analyticsImportButton')?.addEventListener('click', importAnalytics);
+    $('storySearchButton')?.addEventListener('click', searchStory);
+    $('storySearchInput')?.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); searchStory(); } });
     window.ShortsStudioDashboard = {refresh, refreshModels};
   }
 

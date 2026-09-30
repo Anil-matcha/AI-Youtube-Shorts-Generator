@@ -6,6 +6,8 @@ yt-dlp==2026.7.4
 faster-whisper==1.2.1
 openai==2.49.0
 google-genai==2.14.0
+# google-auth uses cryptography; keep the security-fixed release explicit.
+cryptography==50.0.1
 opencv-python-headless==4.13.0.92
 # The generic (amd64) container uses the current security-fixed release.
 Pillow==12.3.0

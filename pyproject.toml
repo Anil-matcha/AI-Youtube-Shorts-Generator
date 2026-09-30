@@ -25,6 +25,7 @@ local = [
   "faster-whisper==1.2.1",
   "openai==2.49.0",
   "google-genai==2.14.0",
+  "cryptography==50.0.1",
   "opencv-python==4.13.0.92",
   "pywebview==6.2.1",
   "pystray==0.19.5",

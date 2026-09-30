@@ -20,11 +20,47 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
   explicit confirmed removal.
 - Added backup/restore coverage for the creator style profile, plus the
   dashboard, channel, style-memory, and model-management UI surfaces.
+- Added the private v2 story-search foundation. Creators can search bounded
+  transcript, chapter, highlight, and local visual-signal evidence while
+  credential-bearing URLs and media paths are excluded from result payloads.
+- Added deterministic publishing-policy preflight for platform, duration,
+  HTTPS, privacy, sensitive-language, and Shorts Factory approval signals.
+  Reviewable scheduler intents are private by default and never upload on their
+  own; explicit approve/reject/cancel decisions are durable and auditable.
+- Added observed publishing/quota telemetry and durable redacted provider
+  errors. The telemetry reports only provider responses and never infers or
+  bypasses a quota.
+- Added `scripts/benchmark_v2.py` for a bounded model-load and synthetic
+  first-render measurement, plus a Performance-view story-search control.
+
+### Security
+
+- Fixed the active environment's known `cryptography` and `pip` advisories by
+  upgrading to `cryptography==50.0.1` and `pip==26.2.1`; the supported local,
+  Docker, arm64, and package optional-dependency manifests now pin the fixed
+  cryptography release.
+- Added policy and scheduler bounds, malformed-timestamp tolerance, URL/secret
+  redaction on search and telemetry payloads, and bounded durable provider
+  error history.
 
 ### Verification
 
-- The v2 foundation has focused route/model tests in `tests/test_v2_features.py`;
-  the existing suite remains the release baseline until a new version is cut.
+- The v2 foundation has focused route/model tests in `tests/test_v2_features.py`
+  and `tests/test_v2_foundation.py`; the full release suite remains the gate
+  until a new version is cut.
+- Final local verification for this update passed: 209 Python tests passed, 4
+  browser-only tests were skipped by default, coverage was 69.69%, the
+  opt-in Playwright browser flow passed 4/4, and the focused security suite
+  passed 92/92.
+- Ruff, strict mypy, Python compile, Node syntax, and `git diff --check` passed.
+  `pip-audit` reported no known vulnerabilities for the base, dev, local, GPU,
+  Docker, arm64, and installed environments; `pip check` was clean. Bandit
+  reported zero medium/high issues (the remaining low findings are existing
+  intentional subprocess/exception/provider-adapter patterns).
+- The CPU benchmark on this Windows workstation measured faster-whisper `tiny`
+  model load at 2.115s (cached) and the synthetic 9:16 first render at 1.3402s.
+  CUDA hardware was not available in this run, so the v2 default remains
+  environment-selected CPU fallback pending a representative GPU baseline.
 - Closed the fresh v1.0.1 installer maintenance gate from an elevated Windows
   process: the isolated install completed, `/api/health` returned 200,
   anonymous `/api/system` was rejected with 401, authenticated system access

@@ -3,7 +3,7 @@
 **Published baseline:** v1.0.1 (local and remote gates passed)
 **Current development branch:** `main` (v1.0.1 production release)
 **Next implementation target:** v2.0.0
-**Last updated:** 2026-09-29
+**Last updated:** 2026-09-30
 
 The actionable implementation list now lives in [TODO.md](TODO.md). This
 roadmap tracks release milestones and verified state; it is not a second
@@ -29,10 +29,15 @@ deeper multimodal learning remain follow-up milestones.
       boundaries.
 - [x] Add a private faster-whisper model catalog with cache discovery,
       background download state, and confirmed removal controls.
-- [ ] Measure model-download progress and first-render latency on representative
-      CPU/GPU machines before selecting a v2 release default.
-- [ ] Extend the foundation with multimodal story search, policy checks, and a
-      reviewable scheduler before enabling unattended distribution.
+- [x] Add a bounded model-load/first-render benchmark harness and record the
+      current CPU baseline (tiny cached load 2.115s; synthetic 9:16 render
+      1.3402s). A representative CUDA run remains required before selecting a
+      GPU-specific v2 default.
+- [x] Extend the foundation with bounded multimodal evidence search over local
+      transcript/chapters/highlights/visual signals, deterministic policy
+      preflight, a private reviewable scheduler, and observed provider quota
+      telemetry. Unattended distribution remains disabled; OCR/audio models,
+      provider scheduling, and a GPU benchmark are follow-up gates.
 - [x] Close the v1.0.1 fresh installer maintenance gate from an elevated
       Windows process: isolated install, API health 200, anonymous rejection,
       authenticated system access, UI version `1.0.1`, authenticated shutdown,
