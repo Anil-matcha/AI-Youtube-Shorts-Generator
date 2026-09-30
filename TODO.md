@@ -26,8 +26,9 @@ than remaining as open TODOs.
   explicitly remove supported faster-whisper model caches from the UI and API.
 - [x] Add `scripts/benchmark_v2.py` and record the current CPU baseline: the
   cached `tiny` model loaded in 2.115s and a synthetic 9:16 first render took
-  1.3402s. Repeat on representative CUDA hardware before setting a GPU-specific
-  v2 default.
+  1.3402s; NVIDIA GeForce RTX 5060 Ti (16 GB, driver 617.14) with CUDA FP16
+  cached tiny load 0.9388s / synthetic 9:16 render 1.3215s. Keep device
+  selection environment-driven rather than requiring a GPU-specific default.
 - [x] Continue G-001/G-006 with bounded story search, deterministic policy
   checks, private reviewable scheduling, and observed provider quota telemetry.
   Unattended publishing, provider-side scheduling, OCR/audio story models, and

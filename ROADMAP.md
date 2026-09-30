@@ -30,14 +30,16 @@ deeper multimodal learning remain follow-up milestones.
 - [x] Add a private faster-whisper model catalog with cache discovery,
       background download state, and confirmed removal controls.
 - [x] Add a bounded model-load/first-render benchmark harness and record the
-      current CPU baseline (tiny cached load 2.115s; synthetic 9:16 render
-      1.3402s). A representative CUDA run remains required before selecting a
-      GPU-specific v2 default.
+      CPU baseline (tiny cached load 2.115s; synthetic 9:16 render 1.3402s) and
+      representative CUDA baseline (NVIDIA GeForce RTX 5060 Ti, 16 GB, driver
+      617.14: tiny FP16 load 0.9388s; synthetic 9:16 render 1.3215s). Device
+      selection remains environment-driven; no GPU-specific requirement is
+      introduced.
 - [x] Extend the foundation with bounded multimodal evidence search over local
       transcript/chapters/highlights/visual signals, deterministic policy
       preflight, a private reviewable scheduler, and observed provider quota
       telemetry. Unattended distribution remains disabled; OCR/audio models,
-      provider scheduling, and a GPU benchmark are follow-up gates.
+      and provider scheduling remain follow-up gates.
 - [x] Close the v1.0.1 fresh installer maintenance gate from an elevated
       Windows process: isolated install, API health 200, anonymous rejection,
       authenticated system access, UI version `1.0.1`, authenticated shutdown,

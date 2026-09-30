@@ -59,8 +59,11 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
   intentional subprocess/exception/provider-adapter patterns).
 - The CPU benchmark on this Windows workstation measured faster-whisper `tiny`
   model load at 2.115s (cached) and the synthetic 9:16 first render at 1.3402s.
-  CUDA hardware was not available in this run, so the v2 default remains
-  environment-selected CPU fallback pending a representative GPU baseline.
+  The representative CUDA run on an NVIDIA GeForce RTX 5060 Ti (16 GB,
+  driver 617.14) measured tiny FP16 load at 0.9388s and the synthetic 9:16
+  first render at 1.3215s. CUDA detection and the environment-selected device
+  default remain unchanged; the measurements are release-planning baselines,
+  not a forced hardware requirement.
 - Closed the fresh v1.0.1 installer maintenance gate from an elevated Windows
   process: the isolated install completed, `/api/health` returned 200,
   anonymous `/api/system` was rejected with 401, authenticated system access

@@ -466,6 +466,7 @@ checks used by GitHub Actions:
 .\venv\Scripts\python.exe -m pip_audit -r requirements-docker.txt --progress-spinner off
 .\venv\Scripts\python.exe -m pip_audit -r requirements-docker-arm64.txt --progress-spinner off
 .\venv\Scripts\python.exe scripts\benchmark_v2.py --model tiny --device cpu --output release\benchmark-v2.json
+.\venv\Scripts\python.exe scripts\benchmark_v2.py --model tiny --device cuda --compute-type float16 --output release\benchmark-v2-cuda.json
 Get-ChildItem web\static -Filter *.js -File; Get-ChildItem web\static\modules -Filter *.js -File | ForEach-Object { node --check $_.FullName }
 
 # Optional browser flow (install Chromium once):
