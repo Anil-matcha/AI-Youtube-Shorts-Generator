@@ -1,7 +1,7 @@
 # Shorts Studio Upgrade Roadmap
 
 **Published baseline:** v2.0.0 (local and remote gates passed)
-**Current development branch:** `main` (unreleased v2.1.0 implementation)
+**Current development branch:** `main` (v2.1.0 release)
 **Next implementation target:** v2.1.0
 **Last updated:** 2026-09-30
 

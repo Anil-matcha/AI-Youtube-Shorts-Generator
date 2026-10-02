@@ -93,6 +93,16 @@ jobs:
           python -m pip install -r requirements-dev.txt
           python -m pip install pyinstaller==6.22.2
       - name: Build packaged executable
+        # The media smoke must exercise the real packaged FFmpeg, not rely on
+        # a developer machine's PATH or silently omit it from the bundle.
+        shell: pwsh
+        run: |
+          choco install ffmpeg --yes --no-progress
+          $roots = @("$env:ChocolateyInstall\lib\ffmpeg", 'C:\tools\ffmpeg')
+          $ffmpeg = $roots | Where-Object { Test-Path -LiteralPath $_ } | ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter ffmpeg.exe -File -Recurse } | Select-Object -First 1
+          if (-not $ffmpeg) { throw 'Real FFmpeg binary was not found after installation' }
+          $ffmpeg.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build packaged executable with local runtime
         shell: pwsh
         run: |
           python -m pip install -r requirements-local.txt

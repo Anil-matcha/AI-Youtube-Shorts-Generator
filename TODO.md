@@ -69,14 +69,15 @@ Initial implementation (source verification, not release completion):
   tests, real local speech/cancel/deadline checks, and zero medium/high Bandit
   findings. Pin new model downloads to immutable official revisions.
 - [ ] Run actual Tesseract OCR with locally installed language data and
-  representative creator footage; add broader audio-event classifiers later.
+  representative creator footage; generated-fixture OCR passed in Linux CI.
+  Add broader audio-event classifiers later.
 - [ ] Verify YouTube scheduling against an explicitly authorized connected test
   account, including provider restrictions and cancellation in YouTube Studio.
 - [x] Add isolated generated-media runtime checks and required real-OCR CI;
   locally verify source and fresh Windows portable speech analysis, authenticated
   access, evidence clearing, and clean shutdown. Local OCR remains unavailable.
 - [ ] Measure cold-download throughput and larger-model inference/accuracy,
-  then run installer and remote release gates for v2.1.0. Initial isolated
+  and complete fresh installer verification. Initial isolated
   tiny/base cold-download samples passed; representative multi-run throughput
   and larger-model accuracy comparisons remain open.
 - [x] Add explicitly authorized anonymous cold-download benchmarking with
