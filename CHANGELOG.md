@@ -79,6 +79,11 @@ not yet fully verified. Authenticode signing remains intentionally deferred.
 
 ### Verification
 
+- Release checks: the fresh v2.1.0 portable executable passed UI version,
+  authentication, speech evidence, clearing, shutdown, and clean exit. Real OCR
+  passed in Linux CI. Six dependency manifests audited clean. Fresh elevated
+  installer testing remains unverified because an existing v1.0.1 test
+  registration was preserved; Windows artifacts remain intentionally unsigned.
 - Model-download UX follow-up: 333 Python tests passed (17 browser tests
   skipped by default), then all 17 opt-in browser tests passed. Ruff, strict
   mypy, JavaScript syntax, and diff checks passed; model-manager security lint

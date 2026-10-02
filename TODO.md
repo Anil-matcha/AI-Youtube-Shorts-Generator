@@ -1,10 +1,10 @@
 # Shorts Studio TODO
 
-**Release target:** v2.1.0 (packaging and GitHub publication in progress)
+**Published baseline:** v2.1.0 (opt-in evidence and manual scheduling preview)
 **Current development branch:** `main`
 **Implementation target:** v2.1.0 (next production roadmap)
 **Beta channel:** `beta` prerelease published from the gated branch snapshot
-**Last reviewed:** 2026-09-30
+**Last reviewed:** 2026-10-02
 **Benchmark follow-up:** 2026-10-02
 
 This is the canonical implementation backlog. Inline `TODO` comments should
@@ -55,6 +55,12 @@ than remaining as open TODOs.
   the representative v2.0.0 CPU/CUDA baselines.
 
 Initial implementation (source verification, not release completion):
+
+- [x] Prepare v2.1.0 GitHub release, synchronized versions, unsigned Windows
+  packages, hashes, and explicit preview limitations. Portable UI/authentication,
+  speech evidence, clearing, and shutdown passed. Real OCR passed in Linux CI.
+- [ ] Fresh elevated v2.1.0 installer verification: an existing v1.0.1 test
+  registration was preserved, so compilation is not claimed as install testing.
 
 - [x] Add explicitly selected Tesseract OCR and bundled Silero speech-activity
   adapters, timestamped redacted evidence, story search integration, cancel/clear
