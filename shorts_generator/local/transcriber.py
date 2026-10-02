@@ -266,8 +266,19 @@ def _load_whisper_model(model_name: str, device: str):
         raise RuntimeError(
             "faster-whisper is required for --mode local. Install it with:\n    pip install -r requirements-local.txt"
         ) from e
+    # Use the same validated snapshot that Settings advertises as ready,
+    # including legacy/LOCALAPPDATA caches outside the SDK's default root.
+    # This helper imports only the standard library; keep it lazy so cloud-only
+    # callers do not depend on desktop model discovery during module import.
+    from web.model_manager import cached_snapshot
+
+    snapshot = cached_snapshot(model_name)
     compute_type = "float16" if device == "cuda" else "int8"
     with _MODEL_LOCK:
+        if snapshot is not None:
+            return WhisperModel(
+                str(snapshot), device=device, compute_type=compute_type, local_files_only=True, use_auth_token=False
+            )
         return WhisperModel(model_name, device=device, compute_type=compute_type)
 
 

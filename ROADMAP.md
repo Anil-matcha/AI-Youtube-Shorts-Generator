@@ -1,7 +1,7 @@
 # Shorts Studio Upgrade Roadmap
 
 **Published baseline:** v2.0.0 (local and remote gates passed)
-**Current development branch:** `main` (v2.0.0 production release)
+**Current development branch:** `main` (unreleased v2.1.0 implementation)
 **Next implementation target:** v2.1.0
 **Last updated:** 2026-09-30
 
@@ -55,7 +55,7 @@ milestones.
 
 ---
 
-## v2.1.0 - Multimodal and provider scheduling follow-up (planned)
+## v2.1.0 - Opt-in evidence and manual provider scheduling release
 
 - [ ] Add optional OCR and audio evidence models behind explicit local model
       selection, bounded resource budgets, and privacy-preserving output.
@@ -63,6 +63,36 @@ milestones.
       approval semantics, retries, and cancellation behavior are specified.
 - [ ] Improve model-cache download performance and expand benchmark coverage
       beyond the representative CPU/CUDA baselines recorded in v2.0.0.
+
+Initial source implementation now includes opt-in Tesseract OCR and bundled
+Silero speech activity, searchable redacted results, bounded analysis/cancel
+controls, and manual YouTube scheduled dispatch bound to approved media and
+metadata. Provider uncertainty survives restart and requires read-only
+reconciliation rather than a blind retry. OCR and manual scheduling ship as
+opt-in development-preview features; representative OCR footage and live
+connected-account verification remain follow-ups, not release guarantees.
+Generated-media source and fresh Windows portable checks now pass real speech
+analysis, authentication, evidence clearing, and clean shutdown. A repeatable
+harness requires real OCR in Linux CI; local Tesseract is not installed.
+The benchmark also supports optional full-decoder timing in an offline,
+timeout-isolated child, with a bounded local-media input and private reports.
+Representative accuracy and cold-download measurements remain separate gates.
+Initial tiny/base cold-download samples now pass in disposable isolated caches;
+the harness measures effective artifact throughput and offline validation
+without touching the creator's installed models. Larger-model accuracy and
+representative multi-run download comparisons remain outstanding.
+The app now exposes download/validation phases, live elapsed time, cache metrics,
+and actionable private errors with manual retry; transfer progress stays
+indeterminate until a reliable byte-level contract is available.
+Source verification passed 302 Python tests with 71.52% coverage and all
+16 opt-in browser tests, plus lint/type/security/runtime checks.
+
+Model downloads now use bounded parallel file workers and validate the current
+cache snapshot before advertising readiness. The repeated cached-only tiny
+benchmark measured CPU/int8 model-load median 0.2880s and CUDA/FP16 median
+0.1795s (three samples each); normal synthetic FFmpeg render medians were
+1.3220s and 1.3341s. These measure warm model loading and rendering, not
+inference quality or CUDA video encoding. Cold-download measurements remain open.
 
 ---
 

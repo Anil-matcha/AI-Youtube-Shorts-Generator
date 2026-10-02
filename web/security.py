@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import ipaddress
+import math
 import os
 import re
 import secrets
@@ -299,6 +300,10 @@ def redact_structure(value: Any, secrets: Optional[Dict[str, str]] = None) -> An
         return [redact_structure(item, secrets) for item in value]
     if isinstance(value, str):
         return redact_text(value, secrets)
+    if isinstance(value, float) and not math.isfinite(value):
+        # Validation details may echo an invalid Infinity/NaN input. Preserve
+        # its description without letting strict JSON encoding fail with 500.
+        return str(value)
     return value
 
 

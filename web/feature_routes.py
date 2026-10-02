@@ -910,6 +910,15 @@ def _record_publish_error(studio: Any, job_id: str, request: PublishRequest, exc
 
 @router.post("/jobs/{job_id}/publish", tags=["projects"])
 def prepare_publish(job_id: str, request: PublishRequest) -> Dict[str, Any]:
+    if request.confirm and request.publish_at:
+        raise HTTPException(
+            409,
+            {
+                "error": "Create and approve a scheduler entry, then explicitly acknowledge its future public release before dispatch.",
+                "code": "schedule_review_required",
+                "scheduler_url": "/api/v1/scheduler",
+            },
+        )
     studio = _studio()
     with studio._lock:
         job = studio._jobs.get(job_id)
@@ -1190,7 +1199,8 @@ def publish_youtube(job_id: str, request: PublishRequest) -> Dict[str, Any]:
         }
         return {
             "status": "approval_required",
-            "message": "Review this plan and resend with confirm=true.",
+            "message": "Create and approve a scheduler entry before dispatching this scheduled upload." if effective.publish_at else "Review this plan and resend with confirm=true.",
+            "scheduler_required": bool(effective.publish_at),
             "plan": plan,
             "oauth_status": result.get("oauth_status", youtube_oauth_status()),
         }

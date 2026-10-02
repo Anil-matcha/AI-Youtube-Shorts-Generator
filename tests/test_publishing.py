@@ -370,12 +370,69 @@ def test_publish_idempotency_locks_stay_bounded() -> None:
     Trimming the map is only safe while a held lock is never evicted, because
     two duplicates of one key have to meet on the same object.
     """
-    held = publishing._upload_key_lock("held-key")
     try:
-        with held:
+        with publishing._upload_key_lock("held-key"):
+            held = publishing._upload_key_locks["held-key"]
             for index in range(publishing._MAX_UPLOAD_KEY_LOCKS * 3):
-                publishing._upload_key_lock(f"key-{index}")
+                with publishing._upload_key_lock(f"key-{index}"):
+                    pass
             assert len(publishing._upload_key_locks) <= publishing._MAX_UPLOAD_KEY_LOCKS
-            assert publishing._upload_key_lock("held-key") is held
+            assert publishing._upload_key_locks["held-key"] is held
     finally:
         publishing._upload_key_locks.clear()
+        publishing._upload_key_users.clear()
+
+
+def test_publish_idempotency_lock_is_reserved_before_acquisition() -> None:
+    """An unlocked lock about to be acquired cannot be evicted under pressure."""
+    import threading
+
+    reserved = threading.Event()
+    acquire = threading.Event()
+    errors = []
+
+    class PausedLock:
+        def __init__(self) -> None:
+            self.inner = threading.Lock()
+
+        def locked(self) -> bool:
+            return self.inner.locked()
+
+        def __enter__(self):
+            reserved.set()
+            if not acquire.wait(10):
+                raise TimeoutError("reservation test timed out")
+            self.inner.acquire()
+            return self
+
+        def __exit__(self, *_args) -> None:
+            self.inner.release()
+
+    paused = PausedLock()
+    with publishing._upload_key_locks_guard:
+        publishing._upload_key_locks["pre-acquire"] = paused
+
+    def wait_for_lock() -> None:
+        try:
+            with publishing._upload_key_lock("pre-acquire"):
+                assert publishing._upload_key_locks["pre-acquire"] is paused
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=wait_for_lock)
+    worker.start()
+    try:
+        assert reserved.wait(10)
+        assert not paused.locked()
+        for index in range(publishing._MAX_UPLOAD_KEY_LOCKS * 3):
+            with publishing._upload_key_lock(f"eviction-pressure-{index}"):
+                pass
+        assert publishing._upload_key_locks["pre-acquire"] is paused
+        assert publishing._upload_key_users["pre-acquire"] == 1
+    finally:
+        acquire.set()
+        worker.join(10)
+        publishing._upload_key_locks.clear()
+        publishing._upload_key_users.clear()
+    assert not worker.is_alive()
+    assert errors == []

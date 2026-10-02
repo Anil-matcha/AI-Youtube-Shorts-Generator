@@ -17,6 +17,7 @@ import tempfile
 import zipfile
 import uuid
 from array import array
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -36,6 +37,33 @@ def _safe_export_short(studio: Any, value: Dict[str, Any]) -> Dict[str, Any]:
 
 
 router = APIRouter()
+
+
+def _require_editable_schedule(job: Dict[str, Any]) -> None:
+    from web.provider_schedule import dispatch_inflight
+    if dispatch_inflight(job):
+        raise HTTPException(409, {"error": "wait for the provider upload to finish before editing clips", "code": "provider_dispatch_busy"})
+
+
+@contextmanager
+def _clip_edit_operation(job_id: str):
+    """Reserve the edit until both rendered bytes and metadata are committed."""
+    studio = _studio()
+    with studio._lock:
+        job = studio._jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "job not found")
+        _require_editable_schedule(job)
+        studio._clip_edit_counts[job_id] = studio._clip_edit_counts.get(job_id, 0) + 1
+    try:
+        yield
+    finally:
+        with studio._lock:
+            count = studio._clip_edit_counts.get(job_id, 1) - 1
+            if count:
+                studio._clip_edit_counts[job_id] = count
+            else:
+                studio._clip_edit_counts.pop(job_id, None)
 
 
 def _studio() -> Any:
@@ -259,12 +287,18 @@ def _commit_edit_history(
 
 @router.post("/api/jobs/{job_id}/clips/{index}")
 def update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
+    with _clip_edit_operation(job_id):
+        return _update_clip(job_id, index, update)
+
+
+def _update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
     """Regenerate one clip after a manual timestamp/style adjustment."""
     studio = _studio()
     with studio._lock:
         job = studio._jobs.get(job_id)
         if not job:
             raise HTTPException(404, "job not found")
+        _require_editable_schedule(job)
         raw_shorts = studio._dict_items(job.get("raw_shorts"))
         if index < 0 or index >= len(raw_shorts):
             raise HTTPException(404, "clip not found")
@@ -404,8 +438,10 @@ def update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
             # completed successfully, and publish the clip and its thumbnail in
             # one step so a concurrent edit cannot interleave with either.
             with studio._artifact_lock(out_path):
-                os.replace(render_path, out_path)
-                _publish_clip_thumbnail(out_path, replacement)
+                with studio._lock:
+                    _require_editable_schedule(job)
+                    os.replace(render_path, out_path)
+                    _publish_clip_thumbnail(out_path, replacement)
         elif mode == "api":
             unsupported_api_edit = (
                 update.cuts
@@ -472,6 +508,7 @@ def update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
 
     with studio._lock:
         job = studio._jobs[job_id]
+        _require_editable_schedule(job)
         current = studio._dict_items(job.get("raw_shorts"))
         if index >= len(current):
             raise HTTPException(409, "job clips changed while regenerating")
@@ -496,6 +533,11 @@ def update_clip(job_id: str, index: int, update: ClipUpdate) -> Dict[str, Any]:
 
 @router.post("/api/jobs/{job_id}/merge")
 def merge_clips(job_id: str, request: MergeRequest) -> Dict[str, Any]:
+    with _clip_edit_operation(job_id):
+        return _merge_clips(job_id, request)
+
+
+def _merge_clips(job_id: str, request: MergeRequest) -> Dict[str, Any]:
     """Render an explicit multi-highlight merge with optional transitions."""
     studio = _studio()
     with studio._lock:
@@ -619,11 +661,17 @@ def merge_clips(job_id: str, request: MergeRequest) -> Dict[str, Any]:
 
 @router.post("/api/jobs/{job_id}/clips/{index}/undo")
 def undo_clip(job_id: str, index: int) -> Dict[str, Any]:
+    with _clip_edit_operation(job_id):
+        return _undo_clip(job_id, index)
+
+
+def _undo_clip(job_id: str, index: int) -> Dict[str, Any]:
     studio = _studio()
     with studio._lock:
         job = studio._jobs.get(job_id)
         if not job:
             raise HTTPException(404, "job not found")
+        _require_editable_schedule(job)
         shorts = studio._dict_items(job.get("raw_shorts"))
         if index < 0 or index >= len(shorts):
             raise HTTPException(404, "clip not found")
@@ -666,12 +714,18 @@ def undo_clip(job_id: str, index: int) -> Dict[str, Any]:
 
 @router.post("/api/jobs/{job_id}/clips/{index}/redo")
 def redo_clip(job_id: str, index: int) -> Dict[str, Any]:
+    with _clip_edit_operation(job_id):
+        return _redo_clip(job_id, index)
+
+
+def _redo_clip(job_id: str, index: int) -> Dict[str, Any]:
     """Restore the next clip version after an undo."""
     studio = _studio()
     with studio._lock:
         job = studio._jobs.get(job_id)
         if not job:
             raise HTTPException(404, "job not found")
+        _require_editable_schedule(job)
         shorts = studio._dict_items(job.get("raw_shorts"))
         if index < 0 or index >= len(shorts):
             raise HTTPException(404, "clip not found")

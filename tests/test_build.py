@@ -12,6 +12,6 @@ def _collect_all_packages(command: list[str]) -> set[str]:
 def test_portable_build_collects_local_whisper_runtime() -> None:
     command = build._portable_command("python")
 
-    local_runtime = {"faster_whisper", "ctranslate2", "yt_dlp", "cv2", "openai", "google.genai"}
+    local_runtime = {"faster_whisper", "ctranslate2", "onnxruntime", "yt_dlp", "cv2", "openai", "google.genai"}
     assert local_runtime.issubset(_collect_all_packages(command))
     assert local_runtime.issubset(set(build._REQUIRED_BUILD_IMPORTS))

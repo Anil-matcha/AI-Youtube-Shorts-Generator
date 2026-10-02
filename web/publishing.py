@@ -9,6 +9,7 @@ the API caller before it is invoked.
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
 from email.utils import parsedate_to_datetime
 import functools
 import hashlib
@@ -128,6 +129,7 @@ _oauth_states: Dict[str, Dict[str, Any]] = {}
 _youtube_tokens: Dict[str, Any] = {}
 _upload_results: Dict[str, Dict[str, Any]] = {}
 _upload_key_locks: Dict[str, threading.Lock] = OrderedDict()
+_upload_key_users: Dict[str, int] = {}
 _upload_key_locks_guard = threading.Lock()
 # A key's lock is only useful while a duplicate upload is in flight, so the map
 # keeps the most recent keys instead of retaining one lock per key forever.
@@ -144,10 +146,20 @@ _CHUNK_SIZE = 8 * 1024 * 1024
 class YouTubePublishError(RuntimeError):
     """Safe, machine-readable failure returned by the YouTube API."""
 
-    def __init__(self, message: str, *, code: str = "publish_failed", status_code: int = 502) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "publish_failed",
+        status_code: int = 502,
+        external_state: str = "unknown",
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.status_code = int(status_code)
+        # Only an adapter that knows no video bytes were submitted may declare
+        # an upload safe to retry. A transport error is not proof of absence.
+        self.external_state = external_state
 
 
 def youtube_auto_publish_enabled() -> bool:
@@ -378,7 +390,9 @@ def _youtube_response_payload(response: Any) -> Dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _raise_youtube_for_status(response: requests.Response, operation: str) -> None:
+def _raise_youtube_for_status(
+    response: requests.Response, operation: str, *, external_state: str = "unknown"
+) -> None:
     status_code = int(getattr(response, "status_code", 502) or 502)
     if status_code < 400:
         return
@@ -408,7 +422,7 @@ def _raise_youtube_for_status(response: requests.Response, operation: str) -> No
         code = "publish_failed"
         message = f"YouTube {operation} failed (HTTP {status_code})."
         status = 502 if status_code >= 500 else status_code
-    raise YouTubePublishError(message, code=code, status_code=status)
+    raise YouTubePublishError(message, code=code, status_code=status, external_state=external_state)
 
 
 def _upload_youtube_thumbnail(token: str, video_id: str, path: Path) -> Dict[str, Any]:
@@ -490,26 +504,35 @@ def _upload_youtube_captions(
     return {"caption_id": caption_id, "language": language, "name": name, "draft": bool(draft), "status": "uploaded"}
 
 
-def _upload_key_lock(key: str) -> threading.Lock:
-    """Return the serialization lock for one publish idempotency key.
+@contextmanager
+def _upload_key_lock(key: str):
+    """Reserve the serialization lock for one publish idempotency key.
 
-    The map is bounded by reusing the oldest *idle* lock, which is safe because
-    a lock is only ever evicted while no caller holds it: two duplicates always
-    still meet on the same object.
+    The map evicts only keys with no holders or waiters, including callers
+    between reservation and acquisition. Two duplicates therefore always
+    meet on the same object even under pressure from unrelated uploads.
     """
     with _upload_key_locks_guard:
-        existing = _upload_key_locks.get(key)
-        if existing is not None:
+        lock = _upload_key_locks.get(key)
+        if lock is not None:
             _upload_key_locks.move_to_end(key)
-            return existing
-        lock = threading.Lock()
-        _upload_key_locks[key] = lock
+        else:
+            lock = threading.Lock()
+            _upload_key_locks[key] = lock
+        _upload_key_users[key] = _upload_key_users.get(key, 0) + 1
         while len(_upload_key_locks) > _MAX_UPLOAD_KEY_LOCKS:
-            idle = next((name for name, held in _upload_key_locks.items() if not held.locked()), None)
+            idle = next((name for name, held in _upload_key_locks.items() if not _upload_key_users.get(name) and not held.locked()), None)
             if idle is None:
                 break
             del _upload_key_locks[idle]
-    return lock
+    try:
+        with lock:
+            yield
+    finally:
+        with _upload_key_locks_guard:
+            _upload_key_users[key] -= 1
+            if not _upload_key_users[key]:
+                _upload_key_users.pop(key, None)
 
 
 def _serialize_duplicate_upload(prefix: str):
@@ -604,17 +627,27 @@ def upload_youtube_video(
         "X-Upload-Content-Type": "video/mp4",
         "Content-Type": "application/json; charset=UTF-8",
     }
-    session = _upload_request_with_retry(
-        "POST",
-        f"{_UPLOAD_ENDPOINT}?uploadType=resumable&part=snippet,status",
-        headers=headers,
-        json=body,
-        timeout=(15, 30),
-    )
-    _raise_youtube_for_status(session, "resumable session initialization")
+    try:
+        session = _upload_request_with_retry(
+            "POST",
+            f"{_UPLOAD_ENDPOINT}?uploadType=resumable&part=snippet,status",
+            headers=headers,
+            json=body,
+            timeout=(15, 30),
+        )
+    except (YouTubePublishError, requests.RequestException) as exc:
+        # A resumable-session POST sends metadata only. No clip bytes have
+        # reached YouTube, so opening a new session cannot duplicate a video.
+        raise YouTubePublishError(
+            "YouTube upload session could not be initialized; no video bytes were sent.",
+            code=getattr(exc, "code", "dependency_failure"),
+            status_code=getattr(exc, "status_code", 502),
+            external_state="not_created",
+        ) from exc
+    _raise_youtube_for_status(session, "resumable session initialization", external_state="not_created")
     location = str(session.headers.get("Location") or "")
     if not location:
-        raise RuntimeError("YouTube did not return a resumable upload URL")
+        raise YouTubePublishError("YouTube did not return a resumable upload URL", external_state="not_created")
     offset = 0
     total = path.stat().st_size
     with path.open("rb") as stream:
@@ -654,6 +687,7 @@ def upload_youtube_video(
                 "video_id": str(payload["id"]),
                 "url": f"https://youtu.be/{payload['id']}",
                 "privacy_status": privacy,
+                "publish_at": publish_at,
                 "category_id": normalized_category,
                 "thumbnail": None,
                 "captions": None,
@@ -686,6 +720,47 @@ def upload_youtube_video(
                     _upload_results[f"key:{request_key}"] = result
             return result
     raise RuntimeError("YouTube resumable upload ended before all bytes were sent")
+
+
+def youtube_video_schedule(video_id: str) -> Dict[str, Any]:
+    """Read a private YouTube video's schedule for explicit reconciliation.
+
+    This query never mutates a video. Private status and publishAt can only be
+    returned to the authorized owner; public lookalikes cannot reconcile an
+    uncertain private scheduled upload.
+    """
+    value = str(video_id or "").strip()
+    if len(value) != 11 or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for char in value):
+        raise ValueError("video_id must be an 11-character YouTube video id")
+    response = _upload_request_with_retry(
+        "GET",
+        "https://www.googleapis.com/youtube/v3/videos",
+        params={"id": value, "part": "snippet,status"},
+        headers={"Authorization": f"Bearer {_youtube_access_token()}"},
+        timeout=(15, 30),
+    )
+    _raise_youtube_for_status(response, "schedule lookup")
+    items = _youtube_response_payload(response).get("items")
+    if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict):
+        raise ValueError("YouTube did not return this video for the connected account")
+    video = items[0]
+    status: Dict[str, Any] = video.get("status") if isinstance(video.get("status"), dict) else {}
+    snippet: Dict[str, Any] = video.get("snippet") if isinstance(video.get("snippet"), dict) else {}
+    return {
+        "video_id": str(video.get("id") or ""),
+        "url": f"https://youtu.be/{value}",
+        "privacy_status": str(status.get("privacyStatus") or ""),
+        "publish_at": str(status.get("publishAt") or ""),
+        "upload_status": str(status.get("uploadStatus") or ""),
+        "title": str(snippet.get("title") or ""),
+        "description": str(snippet.get("description") or ""),
+        "category_id": str(snippet.get("categoryId") or ""),
+        "tags": snippet.get("tags") if isinstance(snippet.get("tags"), list) else [],
+        # This field is returned only if the owner authorized videos.list.
+        # Private schedule metadata already implies owner access; the marker
+        # is also needed before accepting a public/private-unscheduled state.
+        "owner_verified": "selfDeclaredMadeForKids" in status,
+    }
 
 
 # ---------------------------------------------------------------------------

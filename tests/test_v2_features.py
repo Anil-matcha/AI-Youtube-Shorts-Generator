@@ -139,12 +139,18 @@ def test_channel_preview_is_bounded_and_only_returns_youtube_urls(v2_client: Tes
 def test_model_manager_catalog_cache_and_confirmed_delete(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cache = tmp_path / "hub"
     model_dir = cache / "models--Systran--faster-whisper-base"
-    model_dir.mkdir(parents=True)
-    (model_dir / "weights.bin").write_bytes(b"weights")
+    snapshot = model_dir / "snapshots" / ("a" * 40)
+    snapshot.mkdir(parents=True)
+    (model_dir / "refs").mkdir()
+    (model_dir / "refs" / "main").write_text("a" * 40, encoding="utf-8")
+    (snapshot / "model.bin").write_bytes(b"weights")
+    (snapshot / "config.json").write_text('{"is_multilingual": true}', encoding="utf-8")
+    (snapshot / "tokenizer.json").write_text('{"model": {"type": "BPE"}}', encoding="utf-8")
+    (snapshot / "vocabulary.json").write_text('["hello"]', encoding="utf-8")
     monkeypatch.setattr(model_manager, "_model_dirs", lambda name: [cache / f"models--Systran--faster-whisper-{name}"])
 
     catalog = {item["name"]: item for item in model_manager.list_models()}
     assert catalog["base"]["installed"] is True
     assert catalog["tiny"]["installed"] is False
-    assert model_manager.delete("base")["removed_bytes"] == len(b"weights")
+    assert model_manager.delete("base")["removed_bytes"] >= len(b"weights")
     assert not model_dir.exists()

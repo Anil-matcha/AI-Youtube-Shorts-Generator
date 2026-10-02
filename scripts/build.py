@@ -35,6 +35,8 @@ _REQUIRED_BUILD_IMPORTS = (
     # Local mode imports these packages dynamically when a render starts.
     "faster_whisper",
     "ctranslate2",
+    # Story audio evidence invokes the bundled Silero ONNX model in a worker.
+    "onnxruntime",
     "yt_dlp",
     "cv2",
     "openai",
@@ -223,6 +225,8 @@ def _portable_command(python: str) -> List[str]:
             "faster_whisper",
             "--collect-all",
             "ctranslate2",
+            "--collect-all",
+            "onnxruntime",
             "--collect-all",
             "yt_dlp",
             "--collect-all",

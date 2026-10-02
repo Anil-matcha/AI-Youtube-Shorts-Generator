@@ -1,10 +1,11 @@
 # Shorts Studio TODO
 
-**Published baseline:** v2.0.0 (local and remote gates passed)
-**Current development branch:** `main` (v2.0.0 production release)
+**Release target:** v2.1.0 (packaging and GitHub publication in progress)
+**Current development branch:** `main`
 **Implementation target:** v2.1.0 (next production roadmap)
 **Beta channel:** `beta` prerelease published from the gated branch snapshot
 **Last reviewed:** 2026-09-30
+**Benchmark follow-up:** 2026-10-02
 
 This is the canonical implementation backlog. Inline `TODO` comments should
 point to an item here; completed capabilities belong in `ROADMAP.md` rather
@@ -44,7 +45,7 @@ than remaining as open TODOs.
   coverage reached 69.71%, the opt-in browser flow passed 4/4, dependency
   audits were clean, and packaged shutdown/clean-exit smoke passed.
 
-## v2.1.0 follow-up (planned)
+## v2.1.0 follow-up (in development)
 
 - [ ] Add optional OCR/audio story models with bounded local resource usage and
   redacted evidence payloads.
@@ -52,6 +53,41 @@ than remaining as open TODOs.
   cancellation, and provider-contract coverage is complete.
 - [ ] Extend model download performance and hardware benchmark coverage beyond
   the representative v2.0.0 CPU/CUDA baselines.
+
+Initial implementation (source verification, not release completion):
+
+- [x] Add explicitly selected Tesseract OCR and bundled Silero speech-activity
+  adapters, timestamped redacted evidence, story search integration, cancel/clear
+  controls, and fixed duration/frame/operation budgets.
+- [x] Add manual YouTube dispatch with a separate public-publication
+  acknowledgement, media/metadata approval fingerprints, durable idempotency,
+  bounded safe retries, and reconciliation of uncertain provider outcomes.
+- [x] Add usable Export-panel evidence and scheduler controls with browser guards.
+- [x] Improve cache completeness checks and bounded parallel downloads; extend
+  the cached-only benchmark with repeated CPU/CUDA samples and timing summaries.
+- [x] Verify source changes: 302 Python tests, 71.52% coverage, all 16 browser
+  tests, real local speech/cancel/deadline checks, and zero medium/high Bandit
+  findings. Pin new model downloads to immutable official revisions.
+- [ ] Run actual Tesseract OCR with locally installed language data and
+  representative creator footage; add broader audio-event classifiers later.
+- [ ] Verify YouTube scheduling against an explicitly authorized connected test
+  account, including provider restrictions and cancellation in YouTube Studio.
+- [x] Add isolated generated-media runtime checks and required real-OCR CI;
+  locally verify source and fresh Windows portable speech analysis, authenticated
+  access, evidence clearing, and clean shutdown. Local OCR remains unavailable.
+- [ ] Measure cold-download throughput and larger-model inference/accuracy,
+  then run installer and remote release gates for v2.1.0. Initial isolated
+  tiny/base cold-download samples passed; representative multi-run throughput
+  and larger-model accuracy comparisons remain open.
+- [x] Add explicitly authorized anonymous cold-download benchmarking with
+  disposable isolated caches, worker deadlines, private reports, and exact
+  download-destination validation. Preserve all existing caches.
+- [x] Improve model download UX with explicit phases, monotonic elapsed time,
+  honest indeterminate progress, cache/worker metrics, private actionable
+  failure codes, and manual retry. Verify browser rendering and retry semantics.
+- [x] Add actual decoder timing, bounded local-media inputs, isolated worker
+  deadlines, offline mode, private reports, and nonzero exit on unavailable
+  requested benchmark stages. Synthetic-tone timing is not an accuracy result.
 
 ## v1.0.1 security and reliability follow-up (released)
 

@@ -21,6 +21,8 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 from web.models import BatchRequest, JobRequest, ProjectUpdate
+from web.provider_schedule import dispatch_inflight, provider_schedule_active
+from web.evidence_routes import _active as active_evidence
 from web.security import JOB_SUBMISSION_PATH, rate_limit_key
 
 
@@ -308,6 +310,12 @@ def delete_job(job_id: str) -> Dict[str, Any]:
             raise HTTPException(404, "job not found")
         if job.get("status") == "running":
             raise HTTPException(409, "cancel the running job before deleting it")
+        if job_id in active_evidence:
+            raise HTTPException(409, {"error": "cancel evidence analysis before deleting this project", "code": "evidence_busy"})
+        if studio._clip_edit_counts.get(job_id):
+            raise HTTPException(409, {"error": "wait for clip editing to finish before deleting this project", "code": "clip_edit_busy"})
+        if provider_schedule_active(job):
+            raise HTTPException(409, {"error": "keep the project while its provider schedule is active or unresolved; review it in YouTube Studio", "code": "provider_schedule_active"})
         studio._trash_dir.mkdir(parents=True, exist_ok=True)
         source = studio._job_path(job_id)
         target = _trash_path(studio, job_id)
@@ -358,6 +366,8 @@ def retry_job(
         job = studio._jobs.get(job_id)
         if not job:
             raise HTTPException(404, "job not found")
+        if dispatch_inflight(job) or job_id in active_evidence or studio._clip_edit_counts.get(job_id):
+            raise HTTPException(409, {"error": "wait for publishing or evidence analysis to finish before retrying", "code": "job_busy"})
         status = str(job.get("status") or "unknown")
         if status == "running":
             raise HTTPException(409, "project is already running")
@@ -391,6 +401,8 @@ def retry_job(
         # logs and record.
         if str(job.get("status") or "unknown") not in {"error", "cancelled", "interrupted", "draft"}:
             raise HTTPException(409, "project is already running")
+        if dispatch_inflight(job) or job_id in active_evidence or studio._clip_edit_counts.get(job_id):
+            raise HTTPException(409, {"error": "wait for publishing or evidence analysis to finish before retrying", "code": "job_busy"})
         job["status"] = "running"
         job["stage"] = "queued"
         job["message"] = "Queued for retry"
@@ -399,6 +411,7 @@ def retry_job(
         job["raw_shorts"] = []
         job["raw_transcript"] = {}
         job["raw_source_video_url"] = None
+        job.pop("story_evidence", None)
         job["logs"] = list(job.get("logs") or [])[-79:]
         studio._append_job_log(job, "queued", job["message"])
         studio._cancel_events[job_id] = threading.Event()

@@ -300,4 +300,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--story-vad-worker"]:
+        _ensure_stdio()
+        from web.story_evidence_worker import main as evidence_worker
+        raise SystemExit(evidence_worker(sys.argv[2:]))
     main()

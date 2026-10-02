@@ -18,6 +18,16 @@ from web.models import (
     StorySearchRequest,
 )
 from web.policy import evaluate_publish_policy, policy_summary
+from web.provider_schedule import (
+    ScheduleDispatchRequest,
+    ScheduleReconcileRequest,
+    ScheduleRefreshRequest,
+    approve_snapshot,
+    capabilities,
+    dispatch,
+    reconcile,
+    refresh,
+)
 from web.security import redact_structure
 from web.story_search import search_jobs
 
@@ -201,8 +211,13 @@ def list_schedule(status: Optional[str] = Query(default=None, max_length=40)) ->
     return {
         "entries": entries,
         "count": len(entries),
-        "notice": "Entries are reviewable intents only; Shorts Studio never uploads from the scheduler automatically.",
+        "notice": "Entries require review and explicit dispatch; Shorts Studio never uploads from the scheduler automatically. YouTube publishes dispatched videos at the chosen time.",
     }
+
+
+@router.get("/api/scheduler/capabilities")
+def scheduler_capabilities() -> Dict[str, Any]:
+    return capabilities()
 
 
 def _find_schedule(studio: Any, schedule_id: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -227,6 +242,14 @@ def decide_schedule(schedule_id: str, request: ScheduleDecisionRequest) -> Dict[
             raise HTTPException(409, {"error": "schedule entry is no longer reviewable", "code": "schedule_state"})
         if request.decision == "approved" and str(studio._dict_value(entry.get("policy")).get("status")) == "blocked":
             raise HTTPException(409, {"error": "blocked policy result cannot be approved", "code": "policy_blocked"})
+        if request.decision == "approved":
+            try:
+                approve_snapshot(studio, job, entry)
+            except OSError as exc:
+                raise HTTPException(400, {"error": "clip media could not be read for approval", "code": "media_unavailable"}) from exc
+        else:
+            entry.pop("approval_fingerprint", None)
+            entry.pop("approved_payload", None)
         entry["status"] = "approved_pending_publish" if request.decision == "approved" else "rejected"
         entry["decision"] = request.decision
         entry["decision_note"] = request.note
@@ -242,7 +265,12 @@ def cancel_schedule(schedule_id: str) -> Dict[str, Any]:
     studio = _studio()
     with studio._lock:
         job, entry = _find_schedule(studio, schedule_id)
-        if str(entry.get("status") or "") in {"published", "cancelled", "rejected"}:
+        if str(entry.get("status") or "") in {"provider_dispatching", "provider_unknown", "provider_scheduled"}:
+            raise HTTPException(
+                409,
+                {"error": "A provider schedule may be active. Cancel or review the upload in YouTube Studio; a local cancellation cannot stop its public release.", "code": "provider_schedule_active"},
+            )
+        if str(entry.get("status") or "") in {"published", "cancelled", "rejected", "provider_published", "provider_unscheduled", "provider_rejected", "provider_removed"}:
             raise HTTPException(409, {"error": "schedule entry cannot be cancelled", "code": "schedule_state"})
         entry["status"] = "cancelled"
         entry["cancelled_at"] = time.time()
@@ -250,6 +278,21 @@ def cancel_schedule(schedule_id: str) -> Dict[str, Any]:
         studio._persist_job_locked(job)
         result = redact_structure(dict(entry))
     return {"status": "cancelled", "entry": result}
+
+
+@router.post("/api/scheduler/{schedule_id}/dispatch")
+def dispatch_schedule(schedule_id: str, request: ScheduleDispatchRequest) -> Dict[str, Any]:
+    return dispatch(_studio(), schedule_id, request)
+
+
+@router.post("/api/scheduler/{schedule_id}/reconcile")
+def reconcile_schedule(schedule_id: str, request: ScheduleReconcileRequest) -> Dict[str, Any]:
+    return reconcile(_studio(), schedule_id, request)
+
+
+@router.post("/api/scheduler/{schedule_id}/refresh")
+def refresh_schedule(schedule_id: str, request: ScheduleRefreshRequest) -> Dict[str, Any]:
+    return refresh(_studio(), schedule_id, request)
 
 
 @router.get("/api/publishing/telemetry")

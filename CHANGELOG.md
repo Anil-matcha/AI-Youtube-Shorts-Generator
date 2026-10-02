@@ -4,7 +4,110 @@ All notable Shorts Studio changes are recorded here. Dates use ISO 8601.
 
 ## [Unreleased]
 
-No unreleased changes.
+## [2.1.0] - 2026-10-02
+
+Opt-in local evidence and manual YouTube scheduling are development-preview
+capabilities in this release. Real OCR is required in CI; representative creator
+footage, connected-account provider behavior, and larger-model accuracy are
+not yet fully verified. Authenticode signing remains intentionally deferred.
+
+### Added
+
+- Improved local model cards with explicit download/validation stages, live
+  monotonic elapsed time, cache size and reuse details, file-worker settings,
+  accessible indeterminate progress, and an explicit retry action. Active
+  downloads no longer show an invented transfer percentage.
+- Added explicit anonymous cold-download benchmarks using disposable Hub/Xet
+  caches, immutable model revisions, bounded workers/repetitions, and child
+  process deadlines. Reports separate effective artifact throughput from
+  offline completeness-validation time; tokens and local paths are excluded.
+- Added opt-in offline transcription benchmarks with a timeout-isolated worker,
+  full lazy-decoder timing, real-time factor, and first/warm samples. Local media
+  is bounded to its first 30 seconds; reports omit paths and transcript text.
+  An explicit CUDA library directory can be supplied to the worker without
+  changing the app or machine environment. Missing requested stages now fail
+  the benchmark command instead of silently returning success.
+- Added an isolated v2.1 runtime verification harness with generated footage,
+  real speech analysis, searchable OCR when installed, authentication,
+  evidence clearing, and clean shutdown checks. CI requires real Tesseract OCR
+  on Linux and runs the speech check against the fresh Windows executable.
+- Started the v2.1.0 multimodal slice with explicitly selected local Tesseract
+  OCR and bundled Silero speech-activity evidence. Analysis is bounded to
+  120 seconds and eight sampled frames, supports cancellation and clear,
+  preserves previous evidence on failure, and makes redacted evidence searchable.
+- Added a manual YouTube provider-scheduling adapter: separately approve an
+  immutable clip/metadata snapshot, then acknowledge public publication and
+  dispatch its initially private upload. Durable state, stale-approval checks,
+  bounded retries, and read-only reconciliation prevent blind duplicate uploads
+  after uncertain outcomes. Provider cancellation uses YouTube Studio.
+- Added local evidence and provider-schedule review controls in the Export
+  panel, including unavailable-model messages and explicit upload confirmation.
+- Extended the local benchmark to 1-10 repetitions with timing summaries and
+  cached-only model loading by default; network downloads require an explicit
+  `--allow-download` flag.
+
+### Changed
+
+- Download only immutable revisions of supported public Whisper runtime files, with 1-8 bounded file
+  workers and at most two simultaneous models. Cache readiness now requires a
+  complete current snapshot, and download state exposes duration/cache metrics.
+  Transcription reuses the discovered cache path; ONNX runtime is explicitly
+  probed and collected for the packaged speech worker.
+
+### Fixed
+
+- Return private actionable model-download failure codes for missing
+  dependencies, cache permissions, disk space, and network failures; clear
+  stale failure details when retrying or removing a cache.
+- Validate a model download in its actual destination instead of allowing a
+  complete snapshot in another cache root to mask an incomplete target.
+- Preserve active provider upload records across restart, prevent clip edits
+  during dispatch, and keep unresolved provider schedules in the project library.
+- Isolate VAD inference in a tracked child process to enforce cancellation and
+  operation deadlines; reserve edit and upload locks before acquisition to
+  prevent eviction races, and freeze publishing assets for scheduled uploads.
+- Refresh owner-verified YouTube video state to resolve published/unscheduled
+  entries, and route legacy scheduled confirmations through the review queue.
+- Return JSON validation errors for non-finite numeric inputs instead of 500.
+
+### Development gates
+
+- OCR requires an existing local Tesseract installation and language data.
+  Broader sound-event classification, live credentialed provider verification,
+  cold-download performance measurements, and packaged release checks remain
+  follow-ups. These changes are not part of the published v2.0.0 artifacts.
+
+### Verification
+
+- Model-download UX follow-up: 333 Python tests passed (17 browser tests
+  skipped by default), then all 17 opt-in browser tests passed. Ruff, strict
+  mypy, JavaScript syntax, and diff checks passed; model-manager security lint
+  reported no findings. Browser coverage checks indeterminate progress,
+  validation messaging, escaped errors, explicit retry, and cache-reuse details.
+- Cold-download/cache follow-up: 325 Python tests passed (16 opt-in browser
+  tests skipped), Ruff and strict mypy passed, and changed download code had
+  zero medium/high Bandit findings. Disposable tiny and base samples passed;
+  base measured 2.2927s with one file worker and 2.0411s with four. These single
+  samples do not establish a concurrency speedup. Normal cache availability
+  was unchanged after testing; all temporary benchmark downloads were removed.
+- 2026-10-02 benchmark follow-up: 314 Python tests passed (16 opt-in browser
+  tests skipped); Ruff and strict mypy passed, with no medium/high Bandit findings
+  in the benchmark. Tiny-model synthetic decoding passed CPU and CUDA using
+  explicitly supplied existing CUDA DLLs. CPU first/warm timings were
+  0.5106s / 0.3070-0.3153s; CUDA first/warm timings were
+  30.5364s / 0.1106-0.1646s. These are not accuracy measurements.
+- Follow-up verification passed 309 Python tests (16 opt-in browser tests
+  skipped), Ruff, strict mypy, workflow YAML parsing, and zero medium/high
+  security findings in the new harness. Fresh Windows portable speech,
+  authentication, evidence clearing, and clean shutdown passed; OCR was
+  unavailable locally and the added remote CI gates have not yet run.
+- Source verification passed 302 Python tests with 71.52% coverage; the
+  separate opt-in browser run passed all 16 tests. Real local audio decoding,
+  bundled Silero inference, process cancellation/deadline checks, and repeated
+  cached CPU/CUDA model-load/render benchmarks passed.
+- Ruff, strict mypy, Python compile, JavaScript syntax, dependency consistency,
+  and diff checks passed. Bandit reported zero medium/high findings after
+  model downloads were pinned to reviewed immutable upstream revisions.
 
 ## [2.0.0] - 2026-09-30
 

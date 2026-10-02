@@ -127,11 +127,34 @@ jobs:
             if (-not $process.HasExited) { throw "Packaged process did not stop after shutdown" }
           } finally { $process.Refresh(); if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue } }
 
+      - name: Verify packaged local speech evidence
+        shell: pwsh
+        run: python scripts/verify_v21.py --executable dist/ShortsStudio/ShortsStudio.exe --expected-version 2.1.0 --output release/v21-packaged-check.json
+
       - name: Verify package version source
         shell: pwsh
         run: |
           $version = python -c "from shorts_generator import __version__; print(__version__)"
-          if ($version -ne "2.0.0") { throw "Unexpected package version: $version" }
+          if ($version -ne "2.1.0") { throw "Unexpected package version: $version" }
+
+  local-evidence:
+    name: Real OCR and speech runtime integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Install local runtime and OCR engine
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg tesseract-ocr tesseract-ocr-eng
+          python -m pip install -r requirements-local.txt
+      - name: Verify real evidence and authenticated lifecycle
+        run: python scripts/verify_v21.py --require-ocr --expected-version 2.1.0 --output release/v21-source-check.json
 
   compose:
     name: Validate Docker Compose
@@ -185,7 +208,7 @@ jobs:
       - name: Lint and render chart
         run: |
           helm lint deploy/helm/shorts-studio
-          helm template shorts-studio deploy/helm/shorts-studio --set image.tag=2.0.0 --set-string secretEnv.SHORTS_API_TOKEN=ci-placeholder-token >/tmp/shorts-studio.yaml
+          helm template shorts-studio deploy/helm/shorts-studio --set image.tag=2.1.0 --set-string secretEnv.SHORTS_API_TOKEN=ci-placeholder-token >/tmp/shorts-studio.yaml
           grep -q 'kind: Deployment' /tmp/shorts-studio.yaml
 
   browser-e2e:

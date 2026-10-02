@@ -1,6 +1,6 @@
 """Public package surface and the single runtime version source."""
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 
 from .pipeline import generate_shorts
 

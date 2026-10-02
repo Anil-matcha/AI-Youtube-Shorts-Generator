@@ -7,6 +7,7 @@ import re
 from typing import Any, Dict, Iterable, List, Sequence
 
 from web.security import redact_text
+from web.story_evidence import clean_evidence_text
 
 
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9'_-]{1,48}")
@@ -222,6 +223,23 @@ def _search_one_job(job: Dict[str, Any], query: str) -> List[Dict[str, Any]]:
                 "score": 0.8,
             }
         )
+    evidence = job.get("story_evidence") if isinstance(job.get("story_evidence"), dict) else {}
+    for kind in ("ocr", "audio"):
+        items = evidence.get(kind) if isinstance(evidence.get(kind), list) else []
+        for item in items[:240]:
+            if not isinstance(item, dict):
+                continue
+            text = clean_evidence_text(item.get("text"))
+            score = _lexical_score(query, query_terms, text, boost=0.85)
+            if score <= 0:
+                continue
+            start = max(0.0, _number(item.get("start_time")))
+            end = max(start, _number(item.get("end_time"), start))
+            hits.append({"job_id": job_id, "project_name": project_name, "kind": kind,
+                         "start_time": round(start, 3), "end_time": round(end, 3),
+                         "title": "On-screen text" if kind == "ocr" else "Speech activity",
+                         "snippet": text, "matched_terms": _matching_terms(query_terms, text),
+                         "visual_signals": _visual_context(visual_events, start, end), "score": score})
     return hits
 
 

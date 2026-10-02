@@ -99,8 +99,10 @@ from web.experiment_routes import router as experiment_router  # noqa: E402
 from web.dashboard_routes import router as dashboard_router  # noqa: E402
 from web.channel_routes import router as channel_router  # noqa: E402
 from web.v2_routes import router as v2_router  # noqa: E402
+from web.evidence_routes import router as evidence_router  # noqa: E402
 from web.style_memory import default_profile, load_profile, save_profile  # noqa: E402
-from web.model_manager import list_models  # noqa: E402
+from web.model_manager import installed as model_installed, list_models  # noqa: E402
+from web.provider_schedule import recover_interrupted_dispatches  # noqa: E402
 from web.update_service import UpdateService  # noqa: E402
 from web.job_store import JobStore  # noqa: E402
 from web.api_contract import API_VERSION, LEGACY_SUNSET, code_for_error, is_versioned_path, legacy_api_path  # noqa: E402
@@ -153,6 +155,7 @@ app.include_router(experiment_router)
 app.include_router(dashboard_router)
 app.include_router(channel_router)
 app.include_router(v2_router)
+app.include_router(evidence_router)
 
 
 def _openapi_with_v1_aliases() -> Dict[str, Any]:
@@ -323,6 +326,7 @@ _process_lock = threading.RLock()
 # concurrently, so a termination decision has to name the run it was made about;
 # without that the pending cancel of one run kills the next run's render.
 _job_processes: Dict[str, Dict[int, Tuple[int, Any]]] = {}
+_clip_edit_counts: Dict[str, int] = {}
 _job_run_generations: Dict[str, int] = {}
 _shutdown_requested = threading.Event()
 _bound_server: Any = None
@@ -775,6 +779,7 @@ def _media_operation(job_id: str):
 
 
 _artifact_locks: Dict[str, threading.Lock] = {}
+_artifact_users: Dict[str, int] = {}
 _artifact_locks_guard = threading.Lock()
 _MAX_ARTIFACT_LOCKS = 64
 
@@ -795,13 +800,21 @@ def _artifact_lock(target: str):
         if lock is None:
             lock = threading.Lock()
             _artifact_locks[key] = lock
+        _artifact_users[key] = _artifact_users.get(key, 0) + 1
+        if len(_artifact_locks) > _MAX_ARTIFACT_LOCKS:
             while len(_artifact_locks) > _MAX_ARTIFACT_LOCKS:
-                idle = next((name for name, held in _artifact_locks.items() if not held.locked()), None)
+                idle = next((name for name, held in _artifact_locks.items() if not _artifact_users.get(name) and not held.locked()), None)
                 if idle is None:
                     break
                 del _artifact_locks[idle]
-    with lock:
-        yield
+    try:
+        with lock:
+            yield
+    finally:
+        with _artifact_locks_guard:
+            _artifact_users[key] -= 1
+            if not _artifact_users[key]:
+                _artifact_users.pop(key, None)
 
 
 def _media_scratch_path(target: str, suffix: str) -> str:
@@ -991,6 +1004,7 @@ def _load_persisted_jobs() -> None:
         job.setdefault("name", str(persisted_request.get("url") or job_id))
         job.setdefault("archived", False)
         job.setdefault("updated_at", job.get("created_at"))
+        recover_interrupted_dispatches(job)
         if job.get("status") in {"running", "queued"}:
             message = "Interrupted when Shorts Studio stopped; it can be resumed."
             job["status"] = "interrupted"
@@ -2226,20 +2240,7 @@ def _write_setup_state(values: Dict[str, Any]) -> None:
 
 
 def _whisper_model_cached(model_name: str) -> bool:
-    model = str(model_name or "").strip()
-    if not model:
-        return False
-    roots = [Path.home() / ".cache" / "huggingface" / "hub"]
-    local_appdata = os.getenv("LOCALAPPDATA", "").strip()
-    if local_appdata:
-        roots.append(Path(local_appdata) / "huggingface" / "hub")
-    for env_name in ("HF_HOME", "HUGGINGFACE_HUB_CACHE"):
-        configured = os.getenv(env_name, "").strip()
-        if configured:
-            cache_root = Path(configured).expanduser()
-            roots.extend((cache_root / "hub", cache_root))
-    token = f"models--Systran--faster-whisper-{model}"
-    return any((root / token).is_dir() for root in roots if str(root))
+    return model_installed(model_name)
 
 
 def _setup_report() -> Dict[str, Any]:

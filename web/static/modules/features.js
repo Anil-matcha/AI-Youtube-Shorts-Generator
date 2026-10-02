@@ -70,6 +70,7 @@
         if (!job) { setStatus('Render a project before approving an upload.'); return; }
         if (!$('youtubeConfirm').checked) { setStatus('Check the review confirmation before uploading.'); return; }
         const publishAt = $('youtubePublishAt').value ? new Date($('youtubePublishAt').value).toISOString() : null;
+        if (publishAt) { setStatus('Use Queue private review intent, then approve and dispatch it in Provider schedules. YouTube will publish it publicly at the selected time.'); return; }
         const privacy = $('youtubePrivacy').value;
         const payload = {platform: 'youtube_shorts', privacy_status: privacy, publish_at: publishAt, confirm: true, allow_public: privacy === 'public', auto_publish: Boolean($('youtubeAutoPublish').checked)};
         try { const response = await fetch(`/api/v1/jobs/${encodeURIComponent(job)}/youtube/publish`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)}); const data = await response.json(); if (!response.ok) throw Error(data.error || data.detail || 'YouTube upload failed'); const policy = data.plan?.policy; const policyNote = policy ? ` Policy preflight: ${policy.status}.` : ''; setStatus(`${data.message || `Upload ${data.status}.`}${policyNote}`); } catch (error) { setStatus(error.message); }

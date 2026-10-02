@@ -76,8 +76,15 @@
       const state = item.state || {};
       const busy = state.status === 'downloading';
       const installed = Boolean(item.installed) || state.status === 'ready';
-      const action = installed ? `<button class="ghost" type="button" data-model-delete="${esc(item.name)}">Remove</button>` : `<button class="secondary" type="button" data-model-download="${esc(item.name)}" ${busy ? 'disabled' : ''}>${busy ? 'Downloading…' : 'Download'}</button>`;
-      return `<article class="project-card model-card"><div class="project-info"><strong>${esc(item.label || item.name)}</strong><div class="project-meta"><span>${esc(item.name)} · about ${esc(item.size_gb)} GB</span><span class="badge ${installed ? 'done' : busy ? 'run' : ''}">${esc(state.status || (installed ? 'ready' : 'not installed'))}</span></div><p class="setting-help">${esc(item.description || '')}</p>${busy ? `<div class="mini-progress"><span style="width:${Math.max(0, Math.min(100, Number(state.progress) || 0))}%"></span></div>` : ''}<div class="project-card-actions">${action}</div>${state.error ? `<p class="setting-help">${esc(state.error)}</p>` : ''}</div></article>`;
+      const action = installed ? `<button class="ghost" type="button" data-model-delete="${esc(item.name)}" ${busy ? 'disabled' : ''}>Remove</button>` : `<button class="secondary" type="button" data-model-download="${esc(item.name)}" ${busy ? 'disabled' : ''}>${busy ? 'Downloading…' : state.retryable ? 'Retry download' : 'Download'}</button>`;
+      const elapsed = Number(state.elapsed_seconds);
+      const metrics = [];
+      if (state.elapsed_seconds != null && Number.isFinite(elapsed) && elapsed >= 0) metrics.push(`${number(elapsed)}s ${busy ? 'elapsed' : 'total'}`);
+      if (Number(state.cached_bytes) > 0) metrics.push(`${number(Number(state.cached_bytes) / (1024 * 1024))} MiB cached`);
+      if (busy && Number(state.download_workers) > 0) metrics.push(`${number(state.download_workers)} file workers`);
+      if (state.cache_hit === true) metrics.push('Reused local cache');
+      const detail = [state.message, metrics.join(' · ')].filter(Boolean).join(' — ');
+      return `<article class="project-card model-card" aria-busy="${busy}"><div class="project-info"><strong>${esc(item.label || item.name)}</strong><div class="project-meta"><span>${esc(item.name)} · about ${esc(item.size_gb)} GB</span><span class="badge ${installed ? 'done' : busy ? 'run' : ''}">${esc(state.status || (installed ? 'ready' : 'not installed'))}</span></div><p class="setting-help">${esc(item.description || '')}</p>${detail ? `<p class="setting-help" data-model-detail>${esc(detail)}</p>` : ''}${busy ? `<progress aria-label="${esc(item.label || item.name)} model download in progress"></progress><p class="setting-help">${state.phase === 'validating' ? 'Validating required files before marking Ready.' : 'Transfer percentage is unavailable; elapsed time is shown above.'}</p>` : ''}<div class="project-card-actions">${action}</div>${state.error ? `<p class="setting-help" role="alert">${esc(state.error)}</p>` : ''}</div></article>`;
     }).join('') || '<div class="empty">No model catalog available.</div>';
     node.querySelectorAll('[data-model-download]').forEach(button => button.addEventListener('click', async () => {
       button.disabled = true;

@@ -6,6 +6,7 @@ __pycache__/
 *.pyc
 .coverage
 htmlcov/
+.pytest-*/
 .venv/
 venv/
 .agents/
