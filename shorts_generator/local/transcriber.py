@@ -137,6 +137,7 @@ def transcribe_local(media_path: str, language: Optional[str] = None) -> Dict:
         "language": language,
         "beam_size": 5,
         "condition_on_previous_text": False,
+        "word_timestamps": True,
     }
     if LOCAL_WHISPER_VAD_FILTER:
         transcribe_kwargs["vad_filter"] = True
@@ -148,11 +149,20 @@ def transcribe_local(media_path: str, language: Optional[str] = None) -> Dict:
 
     segments = []
     for s in segments_iter:
-        segments.append({
-            "start": float(s.start),
-            "end": float(s.end),
-            "text": (s.text or "").strip(),
-        })
+        # If word-level timestamps are available, use them for precise timing
+        if hasattr(s, 'words') and s.words:
+            for w in s.words:
+                segments.append({
+                    "start": float(w.start),
+                    "end": float(w.end),
+                    "text": (w.word or "").strip(),
+                })
+        else:
+            segments.append({
+                "start": float(s.start),
+                "end": float(s.end),
+                "text": (s.text or "").strip(),
+            })
 
     duration = float(getattr(info, "duration", 0.0)) or (segments[-1]["end"] if segments else 0.0)
     print(f"[transcribe/local] {len(segments)} segments, {duration:.0f}s of audio", flush=True)

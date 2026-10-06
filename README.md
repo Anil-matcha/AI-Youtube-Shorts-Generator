@@ -95,11 +95,16 @@ Don't want to self-host? The [AI Clipping API](https://muapi.ai/playground/ai-cl
    MUAPI_API_KEY=your_muapi_key_here
 
    # Local mode (--mode local)
-   LLM_PROVIDER=openai         # openai or gemini
+   LLM_PROVIDER=openai         # openai, gemini, or ollama
    OPENAI_API_KEY=your_openai_key_here
    OPENAI_MODEL=gpt-4o-mini          # optional, default gpt-4o-mini
    GEMINI_API_KEY=your_gemini_key_here
    GEMINI_MODEL=gemini-2.5-flash      # optional, default gemini-2.5-flash
+   # Ollama settings (when LLM_PROVIDER=ollama)
+   OLLAMA_BASE_URL=http://localhost:11434   # local or remote Ollama endpoint
+   OLLAMA_MODEL=llama3.2                    # any model pulled in Ollama
+   # OLLAMA_NUM_CTX=32768                   # context window size in tokens (default 32768)
+   # CLIP_LENGTH=45                         # optional: target clip length in seconds (±5s tolerance)
    LOCAL_WHISPER_MODEL=base          # tiny / base / small / medium / large-v3
    LOCAL_WHISPER_DEVICE=auto         # auto / cpu / cuda
    LOCAL_OUTPUT_DIR=output           # where local mp4s land
@@ -120,6 +125,30 @@ python main.py "https://www.youtube.com/watch?v=VIDEO_ID" --mode local
 ```
 
 Local mode writes the rendered shorts to `./output/short_01.mp4`, `short_02.mp4`, … (override with `LOCAL_OUTPUT_DIR`).
+
+### Shot-aware cropping (local mode)
+
+When your video has distinct camera cuts or angle changes (e.g. switching between wide shots, close-ups, and different subjects), the default face-tracking crop can drift or shake as it adjusts mid-shot. Use `--crop-mode shot` to detect shot boundaries and lock the crop center to the main action area within each shot:
+
+```bash
+python main.py "https://www.youtube.com/watch?v=VIDEO_ID" --mode local --crop-mode shot
+```
+
+This analyzes motion per shot, finds where the most activity happens, and keeps the crop locked there until the next cut. No mid-shot drift — ideal for stationary shots where you want the action centered per scene.
+
+### Captions (local mode)
+
+Burn transcript captions directly into the output clips. White text with a black outline, bottom-centered, sized automatically to the video height. Default is off.
+
+```bash
+python main.py "https://www.youtube.com/watch?v=VIDEO_ID" --mode local --captions
+```
+
+Combine with other options:
+
+```bash
+python main.py "https://www.youtube.com/watch?v=VIDEO_ID" --mode local --crop-mode shot --captions
+```
 
 ### With options
 
@@ -177,9 +206,13 @@ xargs -a urls.txt -I{} python main.py "{}"
 |------|---------|-------|
 | `--mode` | `api` | `api` (MuAPI, fast, no setup) or `local` (remote URL, `file://`, or local path + faster-whisper + LLM provider + ffmpeg) |
 | `--num-clips` | `3` | How many shorts to render |
+| `--clip-length` | — | Optional: target clip length in seconds (±5s tolerance). Default behavior is 45–90s sweet spot |
 | `--aspect-ratio` | `9:16` | Any ratio; `9:16` for TikTok/Reels, `1:1` for square |
 | `--format` | `720` | Source download resolution: `360` / `480` / `720` / `1080` |
 | `--language` | auto | Force Whisper language code (e.g. `en`) |
+| `--crop-mode` | `face` | Local mode only: `face` (face-tracking) or `shot` (shot-aware action centering) |
+| `--captions` | off | Local mode only: burn transcript captions into the output clips |
+| `--generate-metadata` | off | Generate YouTube + TikTok titles, descriptions, and hashtags for each short |
 | `--output-json` | — | Dump the full result (transcript + all candidates) to a file |
 
 ### API mode vs Local mode
@@ -188,10 +221,10 @@ xargs -a urls.txt -I{} python main.py "{}"
 |---|---|---|
 | Download | MuAPI `/youtube-download` | `yt-dlp` for remote URLs, direct file path for local inputs |
 | Transcription | MuAPI `/openai-whisper` | `faster-whisper` (CPU or CUDA) |
-| Highlight LLM | MuAPI `gpt-5-mini` | `LLM_PROVIDER=openai` uses OpenAI (`gpt-4o-mini` by default), `LLM_PROVIDER=gemini` uses Gemini (`gemini-2.5-flash` by default) |
+| Highlight LLM | MuAPI `gpt-5-mini` | `LLM_PROVIDER=openai` uses OpenAI (`gpt-4o-mini` by default), `LLM_PROVIDER=gemini` uses Gemini (`gemini-2.5-flash` by default), `LLM_PROVIDER=ollama` uses any Ollama model (local or remote) |
 | Vertical crop | MuAPI `/autocrop` | `ffmpeg` + OpenCV face tracking |
 | Output | hosted URLs | local mp4 paths |
-| Required keys | `MUAPI_API_KEY` | `OPENAI_API_KEY` or `GEMINI_API_KEY` (+ `ffmpeg` on PATH) |
+| Required keys | `MUAPI_API_KEY` | `OPENAI_API_KEY`, `GEMINI_API_KEY`, or Ollama endpoint (+ `ffmpeg` on PATH) |
 
 ## How It Works
 
@@ -246,6 +279,96 @@ Highlights:    7 candidates → kept top 3
 
 ## Configuration
 
+### Ollama (fully local / self-hosted LLM)
+
+Set `LLM_PROVIDER=ollama` to run highlight ranking through any Ollama-compatible endpoint — your laptop, a LAN server, or a cloud GPU instance (RunPod, Vast.ai, etc.).
+
+1. **Install Ollama** (if running locally): https://ollama.com/download
+2. **Pull a model** (see model recommendations below):
+   ```bash
+   ollama pull llama3.2
+   ```
+3. **Configure `.env`**:
+   ```bash
+   LLM_PROVIDER=ollama
+   OLLAMA_BASE_URL=http://localhost:11434
+   OLLAMA_MODEL=llama3.2
+   ```
+4. **Run**:
+   ```bash
+   python main.py "https://www.youtube.com/watch?v=VIDEO_ID" --mode local
+   ```
+
+**Context window (`OLLAMA_NUM_CTX`)**
+
+By default the context window is set to **32768 tokens** (the maximum for Qwen 2.5 and most modern models). If you run into VRAM limits, set a lower value in `.env`:
+
+```bash
+OLLAMA_NUM_CTX=16384   # or 8192, 4096, etc.
+```
+
+The value is passed as `num_ctx` in the Ollama `/api/chat` options. You can also set it per-run:
+
+```bash
+OLLAMA_NUM_CTX=8192 python main.py "..." --mode local
+```
+
+**Remote Ollama example** (e.g. on a cloud GPU):
+```bash
+OLLAMA_BASE_URL=http://192.168.1.50:11434 OLLAMA_MODEL=phi4 python main.py "..." --mode local
+```
+
+**Recommended models for an 8 GB GPU**
+
+| Model | Size | Notes |
+|-------|------|-------|
+| `llama3.2` | 3B | Fast, good instruction following, fits easily on 8 GB |
+| `phi4` | ~14B (Q4_K_M ≈ 8.5 GB) | Strong reasoning; may need `--num_gpu 1` on 8 GB |
+| `qwen2.5` | 7B (Q4 ≈ 4.5 GB) | Excellent multilingual, great JSON adherence |
+| `gemma3` | 4B (Q4 ≈ 3 GB) | Google's lightweight model, solid quality |
+| `mistral` | 7B (Q4 ≈ 4.1 GB) | Good general performance, fast inference |
+| `deepseek-r1:7b` | 7B (Q4 ≈ 4.5 GB) | Reasoning-focused, slower but thorough |
+
+**Cloud / hosted Ollama options**
+
+If you don't have a local GPU, you can point `OLLAMA_BASE_URL` at:
+- **RunPod** Serverless or Pod with Ollama pre-installed
+- **Vast.ai** — rent an RTX 3090/4090 by the hour (~$0.30–$0.60/hr)
+- **AnyScale Endpoints** or **Together AI** — OpenAI-compatible APIs that serve open-weight models (set `LLM_PROVIDER=openai` and point `OPENAI_BASE_URL` at their endpoint)
+
+### Clip length
+
+By default the LLM uses a **45–90 second** sweet spot for highlights, which works well for most content. If you want tighter control, set `CLIP_LENGTH` (in seconds) and the LLM will aim for that length with a ±5-second tolerance. A value of `30` produces 25–35s clips and `10` produces 5–15s clips.
+
+```bash
+# .env
+CLIP_LENGTH=30
+```
+
+Or pass it per-run:
+
+```bash
+python main.py "..." --mode local --clip-length 30
+```
+
+Shorter values (10–20) are great for quick hooks; longer values (60–90) suit tutorials or story arcs. Leave it unset to keep the original 45–90s behavior.
+
+### Metadata generation
+
+Generate platform-specific titles and descriptions for each short by passing `--generate-metadata`:
+
+```bash
+python main.py "..." --mode local --generate-metadata
+```
+
+This produces a `shorts_metadata.txt` file alongside the clips with:
+- **YouTube title** (max 60 chars)
+- **YouTube description** (2–3 sentences + hashtags)
+- **TikTok caption** (max 100 chars, emoji-friendly)
+- **TikTok hashtags** (5–8 relevant tags)
+
+The metadata is grounded in the clip's actual transcript, hook sentence, and virality reason. Default is off to save LLM tokens and time.
+
 ### Highlight selection criteria
 Edit `shorts_generator/highlights.py`:
 - **Virality framework**: `VIRALITY_CRITERIA` — the ranked list of signals the LLM optimizes for
@@ -281,7 +404,7 @@ AI-Youtube-Shorts-Generator/
     └── local/                    --mode local backends (offline)
         ├── downloader.py         yt-dlp download
         ├── transcriber.py        faster-whisper transcription
-        ├── llm.py                OpenAI or Gemini client selector
+        ├── llm.py                OpenAI / Gemini / Ollama client selector
         └── clipper.py            ffmpeg cut + OpenCV vertical crop
 ```
 
