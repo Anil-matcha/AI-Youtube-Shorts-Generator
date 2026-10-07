@@ -1,6 +1,9 @@
-"""Local LLM backend — OpenAI or Gemini, selected by LLM_PROVIDER."""
+"""Local LLM backend — OpenAI, Gemini, or LiteLLM, selected by LLM_PROVIDER."""
 from ..config import (
     GEMINI_MODEL,
+    LITELLM_API_KEY,
+    LITELLM_BASE_URL,
+    LITELLM_MODEL,
     LLM_PROVIDER,
     OPENAI_MODEL,
     require_gemini_key,
@@ -50,6 +53,41 @@ def call_gemini_llm(prompt: str) -> str:
     return response.text or ""
 
 
+def call_litellm_llm(prompt: str) -> str:
+    """LiteLLM gateway backend used by --mode local when LLM_PROVIDER=litellm.
+
+    Routes highlight ranking through LiteLLM's unified interface, so the same
+    prompt can target 100+ providers (OpenAI, Anthropic, Gemini, Bedrock, Azure,
+    self-hosted, ...) or a self-hosted LiteLLM proxy by changing LITELLM_MODEL /
+    LITELLM_BASE_URL instead of touching code.
+    """
+    try:
+        import litellm  # type: ignore
+    except ImportError as e:
+        raise RuntimeError(
+            "litellm is required for LLM_PROVIDER=litellm. Install it with:\n"
+            "    pip install -r requirements-local.txt"
+        ) from e
+
+    kwargs = {
+        "model": LITELLM_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7,
+        # Silently drop params an upstream provider doesn't accept (e.g. a fixed
+        # temperature on some reasoning models) so one call works across providers.
+        "drop_params": True,
+    }
+    # Forward credentials only when set; blank lets LiteLLM fall back to the
+    # upstream provider's own env var (OPENAI_API_KEY, ANTHROPIC_API_KEY, ...).
+    if LITELLM_API_KEY:
+        kwargs["api_key"] = LITELLM_API_KEY
+    if LITELLM_BASE_URL:
+        kwargs["api_base"] = LITELLM_BASE_URL
+
+    response = litellm.completion(**kwargs)
+    return response.choices[0].message.content or ""  # type: ignore[union-attr]
+
+
 def call_local_llm(prompt: str) -> str:
     """Dispatch to the configured local LLM provider."""
     provider = (LLM_PROVIDER or "openai").strip().lower()
@@ -57,6 +95,8 @@ def call_local_llm(prompt: str) -> str:
         return call_openai_llm(prompt)
     if provider == "gemini":
         return call_gemini_llm(prompt)
+    if provider == "litellm":
+        return call_litellm_llm(prompt)
     raise RuntimeError(
-        f"Unknown LLM_PROVIDER={provider!r}. Use 'openai' or 'gemini'."
+        f"Unknown LLM_PROVIDER={provider!r}. Use 'openai', 'gemini', or 'litellm'."
     )
