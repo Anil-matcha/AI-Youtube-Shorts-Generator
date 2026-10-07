@@ -206,6 +206,75 @@ xargs -a urls.txt -I{} python main.py "{}"
 
 **Output**: a list of mp4 URLs plus, for each clip, its title, viral score, hook sentence, and a one-line reason explaining why it should perform.
 
+## Viral Highlight Selection
+
+The current selector is transcript-only. It classifies a sample of the opening transcript by content type and density, then asks one LLM call per transcript or long-video chunk to discover moments, choose boundaries, and assign each candidate a 0–100 viral score. Long-video timestamps are made chunk-relative for selection and restored to the global timeline afterward. Candidates are normalized to transcript boundaries within 20–60 seconds, sorted by the LLM's self-reported score, and deduplicated only when their timestamp ranges overlap substantially. The pipeline renders the highest-scoring `--num-clips` candidates.
+
+This design is simple and inexpensive, and its prompt explicitly values hooks, emotional peaks, polarizing opinions, revelations, conflict, quotability, story payoff, practical value, and standalone completeness. Its main limitations are low candidate recall, uncalibrated self-scoring, coupled discovery/scoring/boundary decisions, possible position and topic-clustering bias, timestamp-only deduplication, and no access to delivery, speaker, or visual signals.
+
+### Future Work: Selector V2
+
+> The following architecture is planned work, not currently implemented functionality.
+
+1. **High-recall candidate generation:** collect roughly 10–20 plausible moments across the full source, retaining timestamps, excerpt, proposed hook, and discovery rationale. Candidate count should reflect source length rather than final clip count.
+2. **Independent multi-dimensional judge:** score candidates separately from discovery on hook strength, standalone clarity, novelty, emotional intensity, practical value, controversy/tension, payoff, quotability, niche relevance, and shareability. A starting niche score is `18% hook + 15% clarity + 12% novelty + 12% payoff + 12% niche relevance + 8% practical value + 8% emotion/tension + 7% quotability + 8% shareability`. Component scores should be retained for inspection and later calibration.
+3. **Niche-aware scoring:** make niche relevance a configurable ranking signal rather than a hard filter. An `ai_business_money` profile would favor concrete money/revenue/cost claims, AI-driven job or workflow change, founder mistakes, contrarian business or investing views, automation, career disruption, unusual startup stories, and strong technology predictions. Other profiles should be data/configuration, not selector code.
+4. **Semantic diversity:** after judging, penalize candidates that are temporally close, express the same claim, or cover the same subtopic. Lightweight embeddings are preferred; an LLM pairwise similarity check is a fallback for the small finalist set. Diversity should be a soft penalty so an exceptional section can still contribute more than one clip.
+5. **Boundary refinement:** identify the core claim first, then inspect nearby transcript context and independently choose sentence-aligned boundaries that preserve hook → build/context → payoff within 20–60 seconds. The existing transcript-aware normalizer remains the final safety layer.
+6. **Lightweight multimodal features:** add cheap signals before heavy video models. Recommended order is audio RMS/energy and pause changes (high benefit, low complexity/CPU), speech-rate change and speaker-turn density (medium-high benefit, low-medium cost), laughter cues (medium benefit/cost), title/topic metadata (medium benefit, very low cost), and sparse sampled-frame scene/reaction changes (medium benefit, medium CPU).
+7. **Performance-feedback loop:** log candidate components, topic, duration, platform, and outcomes. With fewer than 100 published clips, inspect errors and tune transparent weights; at 100–500, use shrinkage-aware regressions or pairwise ranking; beyond roughly 500, evaluate learning-to-rank and embeddings against similar successful clips. Raw views are noisy because distribution, account size, posting time, packaging, platform, and randomness confound selector quality; retention, shares, saves, comments, and within-account/platform comparisons are stronger labels.
+
+#### Future Work: Performance-Conditioned Ranking
+
+> This is planned future work, not currently implemented.
+
+The initial component weights are hand-designed. For every published clip, a future system should retain selector features—`hook_strength`, `standalone_clarity`, `novelty`, `payoff`, `niche_relevance`, `practical_value`, `emotional_intensity`, `quotability`, `shareability`, `duration`, `topic`, `source`, and `speaker`—alongside outcomes such as `views_24h`, `views_7d`, `average_watch_time`, `completion_rate`, `shares`, `saves`, `comments`, `follows_generated`, `platform`, and `posting_time`.
+
+Raw views should not be the target by themselves: account size, platform distribution, posting time, source popularity, trends, audience geography, and other confounders can dominate clip quality. A normalized performance objective should emphasize retention/average watch time, completion rate, shares, saves, follows generated, and views normalized within comparable account, platform, and time contexts.
+
+| Published clips | Planned approach |
+|---|---|
+| **<50** | Keep manual weights, collect clean metadata and outcomes, and do not train a model. |
+| **50–150** | Analyze relationships between component scores and performance, then adjust transparent weights based on evidence. |
+| **150–500** | Introduce a lightweight ranker such as logistic regression, linear/pairwise ranking, or gradient boosting. Include duration, topic, source, and posting-time context; avoid deep learning. |
+| **500+** | Evaluate account-specific weights, pairwise preference models, embeddings, similarity to historically successful clips, and nearest-neighbor performance signals. |
+
+Pairwise ranking asks which of two candidates from comparable contexts is more likely to outperform the other, rather than attempting to predict an exact and highly noisy view count.
+
+```text
+Long Video
+    ↓
+High-Recall Candidate Generator
+    ↓
+LLM Component Scoring
+    ↓
+Account-Specific Learned Ranker
+    ↓
+Semantic Diversity Filter
+    ↓
+Boundary Refinement
+    ↓
+Top Clips
+    ↓
+Publish
+    ↓
+Observed Performance
+    ↓
+Training / Calibration Data
+    ↺
+(calibrates scoring and ranking)
+```
+
+The long-term question is not “Is this clip generically viral?” but “How likely is this clip to perform well for this specific account and audience?” A configurable profile such as the following would allow the same source video to produce different finalists for different audiences:
+
+```yaml
+selection:
+  niche: ai_business_money
+  ranking_profile: account_specific
+```
+
+Before enough production data exists, evaluate on 3–5 diverse podcasts using blinded top-k versus random or prior-selector clips. Reviewers should score hook strength, standalone clarity, payoff, niche relevance, publishability, and semantic diversity, with pairwise preference used where absolute scores disagree. Track publishable precision@3 and source-level topic coverage. A practical V1 baseline is at least 2 of 3 clips publishable per source. V2 should reach at least 80% publishable precision@3, beat random/baseline clips in at least 70% of blinded pairwise comparisons, and avoid semantic duplicates in at least 90% of final three-clip sets.
+
 ## Output
 
 Console output looks like:
