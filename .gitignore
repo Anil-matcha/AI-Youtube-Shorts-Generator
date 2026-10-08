@@ -6,3 +6,4 @@ venv/
 output/
 *.mp4
 .DS_Store
+result.json
