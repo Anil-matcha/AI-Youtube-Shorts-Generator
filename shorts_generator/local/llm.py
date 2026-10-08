@@ -1,10 +1,14 @@
-"""Local LLM backend — OpenAI or Gemini, selected by LLM_PROVIDER."""
+"""Local LLM backend — OpenAI, Gemini, Groq, or OpenRouter, selected by LLM_PROVIDER."""
 from ..config import (
     GEMINI_MODEL,
+    GROQ_MODEL,
     LLM_PROVIDER,
     OPENAI_MODEL,
+    OPENROUTER_MODEL,
     require_gemini_key,
+    require_groq_key,
     require_openai_key,
+    require_openrouter_key,
 )
 
 
@@ -50,6 +54,44 @@ def call_gemini_llm(prompt: str) -> str:
     return response.text or ""
 
 
+def call_groq_llm(prompt: str) -> str:
+    """Groq backend used by --mode local when LLM_PROVIDER=groq. Free tier, fast."""
+    try:
+        from openai import OpenAI  # type: ignore
+    except ImportError as e:
+        raise RuntimeError(
+            "openai is required for --mode local. Install it with:\n"
+            "    pip install -r requirements-local.txt"
+        ) from e
+
+    client = OpenAI(api_key=require_groq_key(), base_url="https://api.groq.com/openai/v1")
+    response = client.chat.completions.create(
+        model=GROQ_MODEL,
+        temperature=0.7,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.choices[0].message.content or ""
+
+
+def call_openrouter_llm(prompt: str) -> str:
+    """OpenRouter backend used by --mode local when LLM_PROVIDER=openrouter. Free models available."""
+    try:
+        from openai import OpenAI  # type: ignore
+    except ImportError as e:
+        raise RuntimeError(
+            "openai is required for --mode local. Install it with:\n"
+            "    pip install -r requirements-local.txt"
+        ) from e
+
+    client = OpenAI(api_key=require_openrouter_key(), base_url="https://openrouter.ai/api/v1")
+    response = client.chat.completions.create(
+        model=OPENROUTER_MODEL,
+        temperature=0.7,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.choices[0].message.content or ""
+
+
 def call_local_llm(prompt: str) -> str:
     """Dispatch to the configured local LLM provider."""
     provider = (LLM_PROVIDER or "openai").strip().lower()
@@ -57,6 +99,10 @@ def call_local_llm(prompt: str) -> str:
         return call_openai_llm(prompt)
     if provider == "gemini":
         return call_gemini_llm(prompt)
+    if provider == "groq":
+        return call_groq_llm(prompt)
+    if provider == "openrouter":
+        return call_openrouter_llm(prompt)
     raise RuntimeError(
-        f"Unknown LLM_PROVIDER={provider!r}. Use 'openai' or 'gemini'."
+        f"Unknown LLM_PROVIDER={provider!r}. Use 'openai', 'gemini', 'groq', or 'openrouter'."
     )
