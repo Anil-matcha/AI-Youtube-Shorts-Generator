@@ -41,7 +41,8 @@ Built for creators, agencies, and developers who don't want to pay $20–$300/mo
 ## Features
 
 - **🎬 YouTube In, Vertical Out**: Hand it any YouTube URL — get back N viral-ready 9:16 mp4s
-- **🔀 Two Modes — API (fast) or Local (offline)**: Default `--mode api` uses MuAPI for download/transcription/cropping; `--mode local` runs entirely on your machine with `yt-dlp`, `faster-whisper`, and `ffmpeg`/`opencv`, and lets you pick OpenAI or Gemini for highlight ranking
+- **🔀 Two Modes — API (fast) or Local (offline)**: Default `--mode api` uses MuAPI for download/transcription/cropping; `--mode local` runs entirely on your machine with `yt-dlp`, `faster-whisper`, and `ffmpeg`/`opencv`, and lets you pick OpenAI, Gemini, or TwelveLabs Pegasus for highlight ranking
+- **🎥 Optional Video-Understanding Highlights (TwelveLabs Pegasus)**: Set `LLM_PROVIDER=twelvelabs` in local mode and Pegasus *watches the video* to pick highlights — catching visual gags, reactions, pacing, and on-screen text that a transcript-only LLM misses
 - **🤖 Virality-Aware Highlight Selection**: Clips ranked on hooks, emotional peaks, opinion bombs, revelation moments, conflict, quotable lines, story peaks, and practical value — not just generic "interesting"
 - **📈 Score + Hook + Reason for Every Clip**: Each highlight comes with a viral score, an opening hook line, and a one-sentence explanation of why it works
 - **🎤 Whisper Transcription, Your Choice**: Cloud (`/openai-whisper` via MuAPI) or local (`faster-whisper`, CPU or CUDA) — same downstream output shape
@@ -95,11 +96,15 @@ Don't want to self-host? The [AI Clipping API](https://muapi.ai/playground/ai-cl
    MUAPI_API_KEY=your_muapi_key_here
 
    # Local mode (--mode local)
-   LLM_PROVIDER=openai         # openai or gemini
+   LLM_PROVIDER=openai         # openai, gemini, or twelvelabs
    OPENAI_API_KEY=your_openai_key_here
    OPENAI_MODEL=gpt-4o-mini          # optional, default gpt-4o-mini
    GEMINI_API_KEY=your_gemini_key_here
    GEMINI_MODEL=gemini-2.5-flash      # optional, default gemini-2.5-flash
+   # TwelveLabs Pegasus (LLM_PROVIDER=twelvelabs) — free key at https://twelvelabs.io
+   TWELVELABS_API_KEY=your_twelvelabs_key_here
+   TWELVELABS_PEGASUS_MODEL=pegasus1.5   # optional, default pegasus1.5
+   TWELVELABS_INDEX_ID=                  # optional: reuse an index; auto-created if blank
    LOCAL_WHISPER_MODEL=base          # tiny / base / small / medium / large-v3
    LOCAL_WHISPER_DEVICE=auto         # auto / cpu / cuda
    LOCAL_OUTPUT_DIR=output           # where local mp4s land
@@ -188,10 +193,34 @@ xargs -a urls.txt -I{} python main.py "{}"
 |---|---|---|
 | Download | MuAPI `/youtube-download` | `yt-dlp` for remote URLs, direct file path for local inputs |
 | Transcription | MuAPI `/openai-whisper` | `faster-whisper` (CPU or CUDA) |
-| Highlight LLM | MuAPI `gpt-5-mini` | `LLM_PROVIDER=openai` uses OpenAI (`gpt-4o-mini` by default), `LLM_PROVIDER=gemini` uses Gemini (`gemini-2.5-flash` by default) |
+| Highlight LLM | MuAPI `gpt-5-mini` | `LLM_PROVIDER=openai` uses OpenAI (`gpt-4o-mini` by default), `LLM_PROVIDER=gemini` uses Gemini (`gemini-2.5-flash` by default), `LLM_PROVIDER=twelvelabs` uses TwelveLabs Pegasus (`pegasus1.5`) to rank highlights from the video itself |
 | Vertical crop | MuAPI `/autocrop` | `ffmpeg` + OpenCV face tracking |
 | Output | hosted URLs | local mp4 paths |
 | Required keys | `MUAPI_API_KEY` | `OPENAI_API_KEY` or `GEMINI_API_KEY` (+ `ffmpeg` on PATH) |
+
+### Video-understanding highlights with TwelveLabs Pegasus
+
+By default, highlight ranking reads the **transcript**. Set `LLM_PROVIDER=twelvelabs`
+in local mode and the ranking step is handled by [TwelveLabs](https://twelvelabs.io)
+Pegasus, a video-understanding model that **watches the video** while it answers the
+same virality prompt — so it can pick up visual gags, facial reactions, pacing, and
+on-screen text that a transcript-only LLM never sees.
+
+```bash
+# .env
+LLM_PROVIDER=twelvelabs
+TWELVELABS_API_KEY=your_key   # free tier at https://twelvelabs.io
+```
+
+```bash
+python main.py "/Users/you/Videos/input.mp4" --mode local
+```
+
+On the first run the source video is uploaded and indexed once (this is the slow
+part); the resulting TwelveLabs video id is cached next to the file as
+`<video>.tlvideo`, so re-runs skip re-indexing. Set `TWELVELABS_INDEX_ID` to reuse
+an existing index instead of auto-creating one. This provider is fully opt-in —
+the default pipeline (MuAPI / OpenAI / Gemini) is unchanged.
 
 ## How It Works
 
@@ -282,6 +311,7 @@ AI-Youtube-Shorts-Generator/
         ├── downloader.py         yt-dlp download
         ├── transcriber.py        faster-whisper transcription
         ├── llm.py                OpenAI or Gemini client selector
+        ├── twelvelabs_provider.py  TwelveLabs Pegasus video-understanding highlights (opt-in)
         └── clipper.py            ffmpeg cut + OpenCV vertical crop
 ```
 
