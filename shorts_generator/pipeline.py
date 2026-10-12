@@ -14,12 +14,22 @@ from .highlights import call_muapi_llm, get_highlights
 from .transcriber import transcribe
 
 
+def _add_music(shorts: List[Dict], music_prompt: Optional[str], label: str) -> List[Dict]:
+    """Optional Sonilo background-music pass over the rendered shorts."""
+    from .soundtrack import add_music_to_shorts
+
+    print(f"[{label}] adding background music to {len(shorts)} shorts", flush=True)
+    return add_music_to_shorts(shorts, prompt=music_prompt)
+
+
 def _run_local(
     youtube_url: str,
     num_clips: int,
     aspect_ratio: str,
     download_format: str,
     language: Optional[str],
+    music: bool = False,
+    music_prompt: Optional[str] = None,
 ) -> Dict:
     from .local.clipper import crop_highlights_local
     from .local.downloader import download_youtube_local
@@ -44,6 +54,9 @@ def _run_local(
 
     shorts = crop_highlights_local(source_path, top, aspect_ratio=aspect_ratio)
 
+    if music:
+        shorts = _add_music(shorts, music_prompt, "pipeline/local")
+
     return {
         "mode": "local",
         "source_video_url": source_path,
@@ -59,6 +72,8 @@ def _run_api(
     aspect_ratio: str,
     download_format: str,
     language: Optional[str],
+    music: bool = False,
+    music_prompt: Optional[str] = None,
 ) -> Dict:
     source_url = download_youtube(youtube_url, fmt=download_format)
 
@@ -78,6 +93,9 @@ def _run_api(
 
     shorts = crop_highlights(source_url, top, aspect_ratio=aspect_ratio)
 
+    if music:
+        shorts = _add_music(shorts, music_prompt, "pipeline")
+
     return {
         "mode": "api",
         "source_video_url": source_url,
@@ -94,6 +112,8 @@ def generate_shorts(
     download_format: str = "720",
     language: Optional[str] = None,
     mode: str = "api",
+    music: bool = False,
+    music_prompt: Optional[str] = None,
 ) -> Dict:
     """Run the full pipeline and return a structured result.
 
@@ -105,6 +125,10 @@ def generate_shorts(
         language: ISO-639-1 to force Whisper language detection.
         mode: "api" (default, MuAPI) or "local" (yt-dlp + faster-whisper +
             OpenAI or Gemini + ffmpeg).
+        music: opt-in — give each rendered short an original soundtrack
+            matched to the video via Sonilo, mixed under the original audio.
+            Needs SONILO_API_KEY (and ffmpeg on PATH for the mix).
+        music_prompt: optional style hint for the generated music.
 
     Returns:
         {
@@ -115,9 +139,21 @@ def generate_shorts(
           "shorts": [...],           # top `num_clips` with clip_url / local path
         }
     """
+    if music:
+        # Fail fast on a missing key before any (billed) MuAPI work starts.
+        from .config import require_sonilo_key
+
+        require_sonilo_key()
+
     mode = (mode or "api").lower()
     if mode == "local":
-        return _run_local(youtube_url, num_clips, aspect_ratio, download_format, language)
+        return _run_local(
+            youtube_url, num_clips, aspect_ratio, download_format, language,
+            music=music, music_prompt=music_prompt,
+        )
     if mode == "api":
-        return _run_api(youtube_url, num_clips, aspect_ratio, download_format, language)
+        return _run_api(
+            youtube_url, num_clips, aspect_ratio, download_format, language,
+            music=music, music_prompt=music_prompt,
+        )
     raise ValueError(f"Unknown mode: {mode!r}. Use 'api' or 'local'.")
