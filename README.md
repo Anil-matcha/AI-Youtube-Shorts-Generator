@@ -7,8 +7,8 @@
 
 Built for creators, agencies, and developers who don't want to pay $20–$300/month or be capped on minutes processed. Uses GPT-class LLM highlight detection and Whisper transcription to extract the most viral-worthy moments and auto-crop them vertically for TikTok, Reels, and Shorts.
 
-<p align="center"><a href="https://www.youtube.com/watch?v=8Ua5lRiePFg"><img src="https://i.ytimg.com/vi/Bj-iwmMl-cc/maxresdefault.jpg" width="720"></a></p>
-<p align="center"><a href="https://www.youtube.com/watch?v=8Ua5lRiePFg"><b>▶  Watch: Free Uncensored AI Generator : Open Source, No Restrictions </b></a></p>
+<p align="center"><a href="https://www.youtube.com/watch?v=pAH73nAoOCQ"><img src="https://i.ytimg.com/vi/pAH73nAoOCQ/maxresdefault.jpg" width="720"></a></p>
+<p align="center"><a href="https://www.youtube.com/watch?v=pAH73nAoOCQ"><b>▶  Watch: Free Uncensored AI Generator : Open Source, No Restrictions </b></a></p>
 
 > **Building your own Opus Clip–style SaaS?** Skip the infra and ship on the same APIs that power this repo:
 > - [AI Clipping API](https://muapi.ai/playground/ai-clipping?utm_source=github&utm_medium=readme&utm_campaign=ai-youtube-shorts-generator) — end-to-end clip selection + render
