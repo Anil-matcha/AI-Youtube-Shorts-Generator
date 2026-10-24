@@ -188,9 +188,19 @@ def chunk_transcript(transcript: Dict) -> List[Dict]:
             if s["start"] >= start and s["end"] <= end + CHUNK_OVERLAP_SECONDS
         ]
         if chunk_segs:
+            # Rebase to chunk-relative time. The model sees a 0-based transcript,
+            # _sanitize_highlights validates against the chunk's own length, and
+            # get_highlights adds _offset back to restore absolute time. Without
+            # this the model returns absolute timestamps that get clamped to the
+            # chunk duration and dropped, so every chunk past the first is empty.
+            rebased = [
+                {**s, "start": s["start"] - start, "end": s["end"] - start}
+                for s in chunk_segs
+            ]
             chunk = dict(transcript)
-            chunk["segments"] = chunk_segs
-            chunk["duration"] = end - start
+            chunk["segments"] = rebased
+            # Cover the overlap tail, not just end - start.
+            chunk["duration"] = rebased[-1]["end"]
             chunk["_offset"] = start
             chunks.append(chunk)
         start += CHUNK_SIZE_SECONDS - CHUNK_OVERLAP_SECONDS
