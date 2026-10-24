@@ -16,6 +16,16 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").strip().lower()
+
+# Ollama settings — works with local or remote Ollama instances
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "300"))
+OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "32768"))
+
+# Target clip length in seconds (±5s tolerance). Leave unset to use the original 45-90s sweet spot.
+CLIP_LENGTH = os.getenv("CLIP_LENGTH")
+CLIP_LENGTH = int(CLIP_LENGTH) if CLIP_LENGTH else None
 LOCAL_WHISPER_MODEL = os.getenv("LOCAL_WHISPER_MODEL", "base")
 LOCAL_WHISPER_DEVICE = os.getenv("LOCAL_WHISPER_DEVICE", "auto")  # auto / cpu / cuda
 LOCAL_OUTPUT_DIR = os.getenv("LOCAL_OUTPUT_DIR", "output")
@@ -65,3 +75,12 @@ def require_gemini_key() -> str:
             "Add it to your .env or export it, or switch LLM_PROVIDER back to openai."
         )
     return GEMINI_API_KEY
+
+
+def require_ollama_url() -> str:
+    if not OLLAMA_BASE_URL:
+        raise RuntimeError(
+            "OLLAMA_BASE_URL is not set. Local mode needs an Ollama endpoint when LLM_PROVIDER=ollama. "
+            "Add it to your .env or export it (e.g. http://localhost:11434)."
+        )
+    return OLLAMA_BASE_URL
