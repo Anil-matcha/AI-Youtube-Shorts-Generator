@@ -204,12 +204,17 @@ def call_highlight_api(
     num_clips: int,
     is_chunk: bool = False,
     llm_fn: LLMFn = call_muapi_llm,
+    max_end: Optional[float] = None,
 ) -> Dict:
     # Ask for ~2× the user's target so dedupe has headroom, but cap so the model
     # doesn't have to generate a huge JSON payload (which times out gpt-5-mini).
     target = max(num_clips * 2, 5)
     natural_max = max(2 if is_chunk else 3, int(duration / 90))
     min_clips = min(target, natural_max, 8)
+    # Segments in the transcript keep absolute (video-wide) timestamps even
+    # inside a chunk, and the model mirrors those back — so the valid range
+    # for a chunk is [offset, offset + duration], not [0, duration].
+    max_end = max_end if max_end is not None else duration
     system = HIGHLIGHT_SYSTEM_PROMPT.format(
         virality_criteria=VIRALITY_CRITERIA,
         content_type=content_info.get("content_type", "other"),
@@ -224,7 +229,7 @@ def call_highlight_api(
         raw = llm_fn(prompt)
         try:
             parsed = _parse_json_loose(raw)
-            highlights = _sanitize_highlights(parsed.get("highlights"), duration=duration)
+            highlights = _sanitize_highlights(parsed.get("highlights"), duration=max_end)
             if highlights:
                 return {"highlights": highlights}
             last_error = "no valid highlights in response"
@@ -292,11 +297,13 @@ def get_highlights(
             offset = chunk.get("_offset", 0)
             text = build_transcript_text(chunk)
             print(f"[highlights] chunk {i + 1}/{len(chunks)} (offset {offset:.0f}s)", flush=True)
-            result = call_highlight_api(text, content_info, chunk["duration"], num_clips=num_clips, is_chunk=True, llm_fn=llm_fn)
-            for h in result.get("highlights", []):
-                h["start_time"] = float(h["start_time"]) + offset
-                h["end_time"] = float(h["end_time"]) + offset
-                all_highlights.append(h)
+            result = call_highlight_api(
+                text, content_info, chunk["duration"], num_clips=num_clips,
+                is_chunk=True, llm_fn=llm_fn, max_end=offset + chunk["duration"],
+            )
+            # Timestamps in transcript_text (and thus in the model's reply)
+            # are already absolute video-wide times — no offset to re-add.
+            all_highlights.extend(result.get("highlights", []))
         highlights = dedupe_highlights(all_highlights)
     else:
         text = build_transcript_text(transcript)
