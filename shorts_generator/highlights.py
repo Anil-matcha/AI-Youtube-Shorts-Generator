@@ -183,10 +183,20 @@ def chunk_transcript(transcript: Dict) -> List[Dict]:
     start = 0
     while start < duration:
         end = min(start + CHUNK_SIZE_SECONDS, duration)
-        chunk_segs = [
-            s for s in segments
-            if s["start"] >= start and s["end"] <= end + CHUNK_OVERLAP_SECONDS
-        ]
+        # The LLM and sanitizer expect timestamps relative to this chunk. Keep
+        # the original transcript untouched and restore absolute times later
+        # with the chunk's `_offset`.
+        chunk_segs = []
+        for segment in segments:
+            if segment["start"] < start or segment["start"] >= end:
+                continue
+            relative_segment = dict(segment)
+            relative_segment["start"] = float(segment["start"]) - start
+            relative_segment["end"] = min(
+                float(segment["end"]) - start,
+                end - start,
+            )
+            chunk_segs.append(relative_segment)
         if chunk_segs:
             chunk = dict(transcript)
             chunk["segments"] = chunk_segs
