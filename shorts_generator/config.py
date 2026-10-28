@@ -13,6 +13,9 @@ POLL_TIMEOUT_SECONDS = float(os.getenv("MUAPI_POLL_TIMEOUT", "600"))
 # Local-mode (--mode local) settings — only consulted when running offline.
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+# Point at any OpenAI-compatible server (Ollama, LM Studio, vLLM) to run the
+# ranking step fully offline. Empty means the real OpenAI API.
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").strip().lower()
@@ -51,6 +54,10 @@ def require_api_key() -> str:
 
 def require_openai_key() -> str:
     if not OPENAI_API_KEY:
+        if OPENAI_BASE_URL:
+            # Self-hosted OpenAI-compatible servers ignore the key, but the
+            # client still requires a non-empty placeholder.
+            return "local"
         raise RuntimeError(
             "OPENAI_API_KEY is not set. Local mode needs an OpenAI key for highlight ranking. "
             "Add it to your .env or export it, or switch back to --mode api."

@@ -1,6 +1,7 @@
 """Local LLM backend — OpenAI or Gemini, selected by LLM_PROVIDER."""
 from ..config import (
     GEMINI_MODEL,
+    OPENAI_BASE_URL,
     LLM_PROVIDER,
     OPENAI_MODEL,
     require_gemini_key,
@@ -18,7 +19,11 @@ def call_openai_llm(prompt: str) -> str:
             "    pip install -r requirements-local.txt"
         ) from e
 
-    client = OpenAI(api_key=require_openai_key())
+    client = OpenAI(
+        api_key=require_openai_key(),
+        base_url=OPENAI_BASE_URL or None,
+        timeout=600,
+    )
     response = client.chat.completions.create(
         model=OPENAI_MODEL,
         temperature=0.7,

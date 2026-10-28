@@ -72,39 +72,43 @@ def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str) -> str:
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(silent_path, fourcc, fps, (crop_w, crop_h))
 
-    last_center: Optional[Tuple[int, int]] = None
-    smoothing = 0.15  # how aggressively to chase a new face position
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    # Always release the capture/writer: on Windows a leaked handle keeps the
+    # temp file locked, and the caller's cleanup then masks the real error.
+    try:
+        last_center: Optional[Tuple[int, int]] = None
+        smoothing = 0.15  # how aggressively to chase a new face position
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
-        if len(faces) > 0:
-            # Pick the largest face — usually the speaker.
-            x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-            cx = x + w // 2
-            cy = y + h // 2
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
+            if len(faces) > 0:
+                # Pick the largest face — usually the speaker.
+                x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+                cx = x + w // 2
+                cy = y + h // 2
+                if last_center is None:
+                    last_center = (cx, cy)
+                else:
+                    lx, ly = last_center
+                    last_center = (
+                        int(lx + (cx - lx) * smoothing),
+                        int(ly + (cy - ly) * smoothing),
+                    )
             if last_center is None:
-                last_center = (cx, cy)
-            else:
-                lx, ly = last_center
-                last_center = (
-                    int(lx + (cx - lx) * smoothing),
-                    int(ly + (cy - ly) * smoothing),
-                )
-        if last_center is None:
-            last_center = (src_w // 2, src_h // 2)
+                last_center = (src_w // 2, src_h // 2)
 
-        cx, cy = last_center
-        x0 = max(0, min(src_w - crop_w, cx - crop_w // 2))
-        y0 = max(0, min(src_h - crop_h, cy - crop_h // 2))
-        cropped = frame[y0:y0 + crop_h, x0:x0 + crop_w]
-        writer.write(cropped)
+            cx, cy = last_center
+            x0 = max(0, min(src_w - crop_w, cx - crop_w // 2))
+            y0 = max(0, min(src_h - crop_h, cy - crop_h // 2))
+            cropped = frame[y0:y0 + crop_h, x0:x0 + crop_w]
+            writer.write(cropped)
 
-    cap.release()
-    writer.release()
+    finally:
+        cap.release()
+        writer.release()
 
     # Mux audio from the cut clip back onto the silent reframed video.
     cmd = [
@@ -136,7 +140,11 @@ def crop_clip_local(
         _reframe_vertical(cut_path, out_path, aspect_ratio)
     finally:
         if os.path.exists(cut_path):
-            os.remove(cut_path)
+            try:
+                os.remove(cut_path)
+            except OSError:
+                # Never let cleanup mask the real failure above.
+                pass
     return out_path
 
 
