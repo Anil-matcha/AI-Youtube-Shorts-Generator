@@ -21,6 +21,9 @@ def _run_local(
     download_format: str,
     language: Optional[str],
 ) -> Dict:
+    from functools import partial
+
+    from .config import LLM_PROVIDER
     from .local.clipper import crop_highlights_local
     from .local.downloader import download_youtube_local
     from .local.llm import call_local_llm
@@ -34,7 +37,16 @@ def _run_local(
             "Whisper produced no segments. The video may have no detectable speech."
         )
 
-    highlights_result = get_highlights(transcript, num_clips=num_clips, llm_fn=call_local_llm)
+    # TwelveLabs Pegasus ranks highlights from the video itself, so it needs the
+    # source path bound in; OpenAI / Gemini only see the transcript prompt.
+    if LLM_PROVIDER == "twelvelabs":
+        from .local.twelvelabs_provider import call_twelvelabs_llm
+
+        llm_fn = partial(call_twelvelabs_llm, video_path=source_path)
+    else:
+        llm_fn = call_local_llm
+
+    highlights_result = get_highlights(transcript, num_clips=num_clips, llm_fn=llm_fn)
     all_highlights: List[Dict] = highlights_result.get("highlights", [])
     if not all_highlights:
         raise RuntimeError("Highlight generator returned zero clips.")
