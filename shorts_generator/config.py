@@ -15,6 +15,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+ORCAROUTER_API_KEY = os.getenv("ORCAROUTER_API_KEY", "").strip()
+ORCAROUTER_MODEL = os.getenv("ORCAROUTER_MODEL", "orcarouter/auto")
+ORCAROUTER_API_BASE_URL = os.getenv("ORCAROUTER_API_BASE_URL", "https://api.orcarouter.ai/v1").rstrip("/")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").strip().lower()
 LOCAL_WHISPER_MODEL = os.getenv("LOCAL_WHISPER_MODEL", "base")
 LOCAL_WHISPER_DEVICE = os.getenv("LOCAL_WHISPER_DEVICE", "auto")  # auto / cpu / cuda
@@ -65,3 +68,13 @@ def require_gemini_key() -> str:
             "Add it to your .env or export it, or switch LLM_PROVIDER back to openai."
         )
     return GEMINI_API_KEY
+
+
+def require_orcarouter_key() -> str:
+    if not ORCAROUTER_API_KEY:
+        raise RuntimeError(
+            "ORCAROUTER_API_KEY is not set. Local mode needs an OrcaRouter key when "
+            "LLM_PROVIDER=orcarouter. Add it to your .env or export it, or switch "
+            "LLM_PROVIDER back to openai."
+        )
+    return ORCAROUTER_API_KEY
