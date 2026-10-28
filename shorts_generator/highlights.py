@@ -49,7 +49,9 @@ Your task: identify the most viral-worthy highlights from the transcript.
 
 Rules:
 - Every highlight must open with a strong HOOK — a line that grabs attention within the first 3 seconds
-- Duration sweet spot: 45-90 seconds. Go shorter (20-44s) only for a perfect standalone one-liner. Go longer (91-180s) only when a story arc needs full context to land
+- Each start_time and end_time must use the bracketed transcript timestamps for one continuous passage
+- Duration must be 20-60 seconds; strongly prefer 25-45 seconds
+- Include a complete HOOK → context/build → payoff arc; do not return only the hook sentence
 - Never cut mid-sentence or mid-thought — each clip must feel complete and self-contained
 - Clips must not overlap significantly with each other
 - Score 0-100 on viral potential (not general quality)
@@ -64,6 +66,9 @@ Respond ONLY with valid JSON (no markdown, no explanation):
 CHUNK_SIZE_SECONDS = 1200       # 20-min chunks for long videos
 LONG_VIDEO_THRESHOLD = 1800     # chunk videos longer than 30 min
 CHUNK_OVERLAP_SECONDS = 60
+MIN_HIGHLIGHT_SECONDS = 20
+TARGET_HIGHLIGHT_SECONDS = 40
+MAX_HIGHLIGHT_SECONDS = 60
 GPT_CALL_TIMEOUT_SECONDS = 300  # cap LLM polls at 5 min — a wedged call should fail fast
 MAX_HIGHLIGHT_API_ATTEMPTS = 3
 
@@ -124,8 +129,52 @@ def _coerce_int(value: object, default: int = 0) -> int:
         return default
 
 
-def _sanitize_highlights(raw_highlights: object, duration: float) -> List[Dict]:
-    """Normalize model output into the expected shape; skip invalid entries."""
+def _fit_to_transcript(
+    start: float,
+    end: float,
+    segments: List[Dict],
+) -> Optional[tuple]:
+    """Fit a model range to a complete 20-60s transcript passage."""
+    ordered = sorted(segments, key=lambda s: float(s["start"]))
+    anchor = next(
+        (
+            s
+            for s in ordered
+            if float(s["start"]) <= start < float(s["end"])
+        ),
+        next((s for s in ordered if float(s["start"]) >= start), None),
+    )
+    if anchor is None:
+        return None
+
+    aligned_start = float(anchor["start"])
+    valid_ends = [
+        float(s["end"])
+        for s in ordered
+        if MIN_HIGHLIGHT_SECONDS <= float(s["end"]) - aligned_start <= MAX_HIGHLIGHT_SECONDS
+    ]
+    if not valid_ends:
+        return None
+
+    sentence_ends = [
+        float(s["end"])
+        for s in ordered
+        if float(s["end"]) in valid_ends
+        and str(s.get("text", "")).rstrip().endswith((".", "?", "!"))
+    ]
+    model_duration = end - start
+    target_end = end if MIN_HIGHLIGHT_SECONDS <= model_duration <= MAX_HIGHLIGHT_SECONDS else aligned_start + TARGET_HIGHLIGHT_SECONDS
+    choices = sentence_ends or valid_ends
+    fitted_end = min(choices, key=lambda value: abs(value - target_end))
+    return aligned_start, fitted_end
+
+
+def _sanitize_highlights(
+    raw_highlights: object,
+    duration: float,
+    segments: Optional[List[Dict]] = None,
+) -> List[Dict]:
+    """Normalize model output and enforce transcript-aligned clip duration."""
     if not isinstance(raw_highlights, list):
         return []
 
@@ -145,6 +194,15 @@ def _sanitize_highlights(raw_highlights: object, duration: float) -> List[Dict]:
             end = min(end, max_end)
             if end <= start:
                 continue
+        if segments:
+            fitted = _fit_to_transcript(start, end, segments)
+            if fitted is None:
+                continue
+            start, end = fitted
+        elif not MIN_HIGHLIGHT_SECONDS <= end - start <= MAX_HIGHLIGHT_SECONDS:
+            # Repair requires real transcript boundaries; do not blindly clamp.
+            continue
+
 
         cleaned.append(
             {
@@ -183,14 +241,20 @@ def chunk_transcript(transcript: Dict) -> List[Dict]:
     start = 0
     while start < duration:
         end = min(start + CHUNK_SIZE_SECONDS, duration)
+        window_end = min(end + CHUNK_OVERLAP_SECONDS, duration)
         chunk_segs = [
-            s for s in segments
-            if s["start"] >= start and s["end"] <= end + CHUNK_OVERLAP_SECONDS
+            {
+                **s,
+                "start": float(s["start"]) - start,
+                "end": float(s["end"]) - start,
+            }
+            for s in segments
+            if s["start"] >= start and s["end"] <= window_end
         ]
         if chunk_segs:
             chunk = dict(transcript)
             chunk["segments"] = chunk_segs
-            chunk["duration"] = end - start
+            chunk["duration"] = window_end - start
             chunk["_offset"] = start
             chunks.append(chunk)
         start += CHUNK_SIZE_SECONDS - CHUNK_OVERLAP_SECONDS
@@ -204,6 +268,7 @@ def call_highlight_api(
     num_clips: int,
     is_chunk: bool = False,
     llm_fn: LLMFn = call_muapi_llm,
+    transcript_segments: Optional[List[Dict]] = None,
 ) -> Dict:
     # Ask for ~2× the user's target so dedupe has headroom, but cap so the model
     # doesn't have to generate a huge JSON payload (which times out gpt-5-mini).
@@ -224,7 +289,11 @@ def call_highlight_api(
         raw = llm_fn(prompt)
         try:
             parsed = _parse_json_loose(raw)
-            highlights = _sanitize_highlights(parsed.get("highlights"), duration=duration)
+            highlights = _sanitize_highlights(
+                parsed.get("highlights"),
+                duration=duration,
+                segments=transcript_segments,
+            )
             if highlights:
                 return {"highlights": highlights}
             last_error = "no valid highlights in response"
@@ -292,7 +361,15 @@ def get_highlights(
             offset = chunk.get("_offset", 0)
             text = build_transcript_text(chunk)
             print(f"[highlights] chunk {i + 1}/{len(chunks)} (offset {offset:.0f}s)", flush=True)
-            result = call_highlight_api(text, content_info, chunk["duration"], num_clips=num_clips, is_chunk=True, llm_fn=llm_fn)
+            result = call_highlight_api(
+                text,
+                content_info,
+                chunk["duration"],
+                num_clips=num_clips,
+                is_chunk=True,
+                llm_fn=llm_fn,
+                transcript_segments=chunk["segments"],
+            )
             for h in result.get("highlights", []):
                 h["start_time"] = float(h["start_time"]) + offset
                 h["end_time"] = float(h["end_time"]) + offset
@@ -300,7 +377,14 @@ def get_highlights(
         highlights = dedupe_highlights(all_highlights)
     else:
         text = build_transcript_text(transcript)
-        result = call_highlight_api(text, content_info, duration, num_clips=num_clips, llm_fn=llm_fn)
+        result = call_highlight_api(
+            text,
+            content_info,
+            duration,
+            num_clips=num_clips,
+            llm_fn=llm_fn,
+            transcript_segments=transcript.get("segments", []),
+        )
         highlights = dedupe_highlights(result.get("highlights", []))
 
     return {"highlights": highlights}
