@@ -66,6 +66,7 @@ LONG_VIDEO_THRESHOLD = 1800     # chunk videos longer than 30 min
 CHUNK_OVERLAP_SECONDS = 60
 GPT_CALL_TIMEOUT_SECONDS = 300  # cap LLM polls at 5 min — a wedged call should fail fast
 MAX_HIGHLIGHT_API_ATTEMPTS = 3
+MAX_HIGHLIGHT_SECONDS = 180     # hard cap — YouTube Shorts rejects anything longer
 
 
 def call_muapi_llm(prompt: str) -> str:
@@ -145,6 +146,12 @@ def _sanitize_highlights(raw_highlights: object, duration: float) -> List[Dict]:
             end = min(end, max_end)
             if end <= start:
                 continue
+
+        # Models drift past the requested duration sweet spot; a clip over the
+        # Shorts limit can't be published, so drop it rather than truncate it
+        # (truncating would cut mid-sentence).
+        if end - start > MAX_HIGHLIGHT_SECONDS:
+            continue
 
         cleaned.append(
             {
@@ -240,6 +247,7 @@ def call_highlight_api(
                 base_prompt
                 + "\n\nIMPORTANT: Return ONLY valid JSON with a top-level 'highlights' array."
                 + " Each item must include: title, start_time, end_time, score, hook_sentence, virality_reason."
+                + f" Every clip must be {MAX_HIGHLIGHT_SECONDS} seconds or shorter (end_time - start_time <= {MAX_HIGHLIGHT_SECONDS})."
                 + " No markdown fences, no commentary."
             )
 

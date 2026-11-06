@@ -31,6 +31,18 @@ def main() -> int:
     parser.add_argument("--aspect-ratio", default="9:16", help="Output aspect ratio (default: 9:16)")
     parser.add_argument("--format", default="720", help="Source download resolution: 360 / 480 / 720 / 1080 (default: 720)")
     parser.add_argument("--language", default=None, help="Force Whisper language code, e.g. 'en' (default: auto-detect)")
+    parser.add_argument(
+        "--fit",
+        choices=["crop", "blur", "letterbox"],
+        default="crop",
+        help=(
+            "local mode only — how to fill the target aspect ratio. "
+            "'crop' (default) slides a face-tracked window across the frame: large subject, but "
+            "anything spanning the full source width (slides, burned-in subtitles) gets cut. "
+            "'blur' / 'letterbox' shrink the whole frame into the canvas instead — nothing is lost, "
+            "subject is smaller."
+        ),
+    )
     parser.add_argument("--output-json", default=None, help="Write the full result JSON to this path")
     args = parser.parse_args()
 
@@ -42,6 +54,7 @@ def main() -> int:
             download_format=args.format,
             language=args.language,
             mode=args.mode,
+            fit=args.fit,
         )
     except Exception as e:
         print(f"\nFAILED: {e}", file=sys.stderr)
