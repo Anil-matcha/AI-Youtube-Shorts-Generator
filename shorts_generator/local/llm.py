@@ -44,7 +44,7 @@ def call_gemini_llm(prompt: str) -> str:
         config={
             "temperature": 0.2,
             "response_mime_type": "application/json",
-            "max_output_tokens": 8192,
+            "max_output_tokens": 24576,
         },
     )
     return response.text or ""
