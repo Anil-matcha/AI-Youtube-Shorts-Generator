@@ -37,7 +37,8 @@ def _format_for(fmt: str) -> str:
 
 def _extract_youtube_video_id(source: str) -> Optional[str]:
     """Best-effort extraction of a YouTube video id from a URL."""
-    parsed = urlparse(source)
+    clean = source.replace("\\?", "?").replace("\\=", "=")
+    parsed = urlparse(clean)
     host = (parsed.netloc or "").lower()
     if host.startswith("www."):
         host = host[4:]
@@ -110,7 +111,8 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
             print(f"[download/local] reusing cached download: {cached}", flush=True)
             return cached
 
-    print(f"[download/local] {video_url} @ {fmt}p → {out_dir}/", flush=True)
+    clean_url = video_url.replace("\\?", "?").replace("\\=", "=")
+    print(f"[download/local] {clean_url} @ {fmt}p → {out_dir}/", flush=True)
     ydl_opts = {
         "format": _format_for(fmt),
         "outtmpl": os.path.join(out_dir, "source_%(id)s.%(ext)s"),
@@ -121,7 +123,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(video_url, download=True)
+        info = ydl.extract_info(clean_url, download=True)
         path = ydl.prepare_filename(info)
         # merge_output_format may rename the extension after merge
         if not os.path.exists(path):
