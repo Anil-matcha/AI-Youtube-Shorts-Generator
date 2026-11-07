@@ -15,6 +15,14 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+# TwelveLabs Pegasus (LLM_PROVIDER=twelvelabs) — video-understanding highlight
+# ranking: Pegasus watches the video instead of only reading the transcript.
+TWELVELABS_API_KEY = os.getenv("TWELVELABS_API_KEY", "").strip()
+TWELVELABS_PEGASUS_MODEL = os.getenv("TWELVELABS_PEGASUS_MODEL", "pegasus1.5")
+TWELVELABS_INDEX_ID = os.getenv("TWELVELABS_INDEX_ID", "").strip()  # reuse an existing index; auto-created if blank
+TWELVELABS_MAX_TOKENS = int(os.getenv("TWELVELABS_MAX_TOKENS", "2048"))
+
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").strip().lower()
 LOCAL_WHISPER_MODEL = os.getenv("LOCAL_WHISPER_MODEL", "base")
 LOCAL_WHISPER_DEVICE = os.getenv("LOCAL_WHISPER_DEVICE", "auto")  # auto / cpu / cuda
@@ -65,3 +73,13 @@ def require_gemini_key() -> str:
             "Add it to your .env or export it, or switch LLM_PROVIDER back to openai."
         )
     return GEMINI_API_KEY
+
+
+def require_twelvelabs_key() -> str:
+    if not TWELVELABS_API_KEY:
+        raise RuntimeError(
+            "TWELVELABS_API_KEY is not set. Local mode needs a TwelveLabs key when "
+            "LLM_PROVIDER=twelvelabs. Add it to your .env or export it, or switch "
+            "LLM_PROVIDER back to openai. Grab a free key at https://twelvelabs.io."
+        )
+    return TWELVELABS_API_KEY
