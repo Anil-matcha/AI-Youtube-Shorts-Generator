@@ -2,7 +2,7 @@ import os
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 MUAPI_API_KEY = os.getenv("MUAPI_API_KEY", "").strip()
 MUAPI_BASE_URL = os.getenv("MUAPI_BASE_URL", "https://api.muapi.ai/api/v1").rstrip("/")
@@ -12,6 +12,7 @@ POLL_TIMEOUT_SECONDS = float(os.getenv("MUAPI_POLL_TIMEOUT", "600"))
 
 # Local-mode (--mode local) settings — only consulted when running offline.
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
@@ -25,10 +26,13 @@ LOCAL_OUTPUT_DIR = os.getenv("LOCAL_OUTPUT_DIR", "output")
 # Default min_speech_duration_ms is 250ms; increase to avoid tiny false positives
 # Default min_silence_duration_ms is 2000ms; increase to avoid splitting mid-sentence
 # DISABLED by default because VAD is too aggressive on mixed speech/music content
-LOCAL_WHISPER_VAD_FILTER = os.getenv("LOCAL_WHISPER_VAD_FILTER", "false").strip().lower() == "true"
+LOCAL_WHISPER_VAD_FILTER = (
+    os.getenv("LOCAL_WHISPER_VAD_FILTER", "false").strip().lower() == "true"
+)
 _vad_params_env = os.getenv("LOCAL_WHISPER_VAD_PARAMETERS", "")
 if _vad_params_env:
     import json
+
     LOCAL_WHISPER_VAD_PARAMETERS = json.loads(_vad_params_env)
 else:
     # Match faster-whisper defaults when VAD is enabled
