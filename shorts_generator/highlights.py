@@ -15,6 +15,7 @@ import re
 from typing import Callable, Dict, List, Optional
 
 from . import muapi
+from .config import CLIP_LENGTH
 
 
 LLMFn = Callable[[str], str]
@@ -50,6 +51,27 @@ Your task: identify the most viral-worthy highlights from the transcript.
 Rules:
 - Every highlight must open with a strong HOOK — a line that grabs attention within the first 3 seconds
 - Duration sweet spot: 45-90 seconds. Go shorter (20-44s) only for a perfect standalone one-liner. Go longer (91-180s) only when a story arc needs full context to land
+- Never cut mid-sentence or mid-thought — each clip must feel complete and self-contained
+- Clips must not overlap significantly with each other
+- Score 0-100 on viral potential (not general quality)
+- {num_clips_instruction}
+- For each highlight, identify the single best "hook_sentence" — the opening line that would make someone stop scrolling
+- Explain in one sentence why this clip is viral ("virality_reason")
+
+Respond ONLY with valid JSON (no markdown, no explanation):
+{{"highlights":[{{"title":"string","start_time":float,"end_time":float,"score":int,"hook_sentence":"string","virality_reason":"string"}}]}}"""
+
+HIGHLIGHT_SYSTEM_PROMPT_FIXED_LENGTH = """You are an elite short-form video editor who has studied thousands of viral clips on TikTok, Instagram Reels, and YouTube Shorts. You know exactly what makes viewers stop scrolling, watch to the end, and share.
+
+{virality_criteria}
+
+Content type: {content_type} | Density: {density}
+
+Your task: identify the most viral-worthy highlights from the transcript.
+
+Rules:
+- Every highlight must open with a strong HOOK — a line that grabs attention within the first 3 seconds
+- CRITICAL: Each clip MUST be between {target_min} and {target_max} seconds long. This is the most important rule. Clips shorter than {target_min}s or longer than {target_max}s will be rejected.
 - Never cut mid-sentence or mid-thought — each clip must feel complete and self-contained
 - Clips must not overlap significantly with each other
 - Score 0-100 on viral potential (not general quality)
@@ -124,7 +146,7 @@ def _coerce_int(value: object, default: int = 0) -> int:
         return default
 
 
-def _sanitize_highlights(raw_highlights: object, duration: float) -> List[Dict]:
+def _sanitize_highlights(raw_highlights: object, duration: float, min_duration: float = 3.0, max_duration: float = float("inf")) -> List[Dict]:
     """Normalize model output into the expected shape; skip invalid entries."""
     if not isinstance(raw_highlights, list):
         return []
@@ -145,6 +167,11 @@ def _sanitize_highlights(raw_highlights: object, duration: float) -> List[Dict]:
             end = min(end, max_end)
             if end <= start:
                 continue
+
+        # Enforce duration bounds — reject anything too short or too long
+        clip_dur = end - start
+        if clip_dur < min_duration or clip_dur > max_duration:
+            continue
 
         cleaned.append(
             {
@@ -204,18 +231,36 @@ def call_highlight_api(
     num_clips: int,
     is_chunk: bool = False,
     llm_fn: LLMFn = call_muapi_llm,
+    clip_length: Optional[int] = None,
 ) -> Dict:
+    # Use fixed-length prompt only when user explicitly sets clip_length
+    use_fixed = clip_length is not None or CLIP_LENGTH is not None
+    target = clip_length if clip_length is not None else (CLIP_LENGTH if CLIP_LENGTH is not None else 45)
+    target_min = max(5, target - 5)
+    target_max = target + 5
+
     # Ask for ~2× the user's target so dedupe has headroom, but cap so the model
     # doesn't have to generate a huge JSON payload (which times out gpt-5-mini).
     target = max(num_clips * 2, 5)
-    natural_max = max(2 if is_chunk else 3, int(duration / 90))
+    natural_max = max(2 if is_chunk else 3, int(duration / target_max))
     min_clips = min(target, natural_max, 8)
-    system = HIGHLIGHT_SYSTEM_PROMPT.format(
-        virality_criteria=VIRALITY_CRITERIA,
-        content_type=content_info.get("content_type", "other"),
-        density=content_info.get("density", "medium"),
-        num_clips_instruction=f"Generate at least {min_clips} highlights",
-    )
+
+    if use_fixed:
+        system = HIGHLIGHT_SYSTEM_PROMPT_FIXED_LENGTH.format(
+            virality_criteria=VIRALITY_CRITERIA,
+            content_type=content_info.get("content_type", "other"),
+            density=content_info.get("density", "medium"),
+            num_clips_instruction=f"Generate at least {min_clips} highlights",
+            target_min=target_min,
+            target_max=target_max,
+        )
+    else:
+        system = HIGHLIGHT_SYSTEM_PROMPT.format(
+            virality_criteria=VIRALITY_CRITERIA,
+            content_type=content_info.get("content_type", "other"),
+            density=content_info.get("density", "medium"),
+            num_clips_instruction=f"Generate at least {min_clips} highlights",
+        )
     base_prompt = f"{system}\n\nTranscript:\n{transcript_text}"
     prompt = base_prompt
     last_error = "unknown"
@@ -224,7 +269,10 @@ def call_highlight_api(
         raw = llm_fn(prompt)
         try:
             parsed = _parse_json_loose(raw)
-            highlights = _sanitize_highlights(parsed.get("highlights"), duration=duration)
+            if use_fixed:
+                highlights = _sanitize_highlights(parsed.get("highlights"), duration=duration, min_duration=target_min, max_duration=target_max)
+            else:
+                highlights = _sanitize_highlights(parsed.get("highlights"), duration=duration)
             if highlights:
                 return {"highlights": highlights}
             last_error = "no valid highlights in response"
@@ -272,6 +320,7 @@ def dedupe_highlights(highlights: List[Dict]) -> List[Dict]:
 def get_highlights(
     transcript: Dict,
     num_clips: int = 3,
+    clip_length: Optional[int] = None,
     llm_fn: Optional[LLMFn] = None,
 ) -> Dict:
     """Main entry point — returns {highlights: [...]} sorted by score.
@@ -292,7 +341,7 @@ def get_highlights(
             offset = chunk.get("_offset", 0)
             text = build_transcript_text(chunk)
             print(f"[highlights] chunk {i + 1}/{len(chunks)} (offset {offset:.0f}s)", flush=True)
-            result = call_highlight_api(text, content_info, chunk["duration"], num_clips=num_clips, is_chunk=True, llm_fn=llm_fn)
+            result = call_highlight_api(text, content_info, chunk["duration"], num_clips=num_clips, is_chunk=True, llm_fn=llm_fn, clip_length=clip_length)
             for h in result.get("highlights", []):
                 h["start_time"] = float(h["start_time"]) + offset
                 h["end_time"] = float(h["end_time"]) + offset
@@ -300,7 +349,7 @@ def get_highlights(
         highlights = dedupe_highlights(all_highlights)
     else:
         text = build_transcript_text(transcript)
-        result = call_highlight_api(text, content_info, duration, num_clips=num_clips, llm_fn=llm_fn)
+        result = call_highlight_api(text, content_info, duration, num_clips=num_clips, llm_fn=llm_fn, clip_length=clip_length)
         highlights = dedupe_highlights(result.get("highlights", []))
 
     return {"highlights": highlights}
