@@ -10,6 +10,14 @@ MUAPI_BASE_URL = os.getenv("MUAPI_BASE_URL", "https://api.muapi.ai/api/v1").rstr
 POLL_INTERVAL_SECONDS = float(os.getenv("MUAPI_POLL_INTERVAL", "5"))
 POLL_TIMEOUT_SECONDS = float(os.getenv("MUAPI_POLL_TIMEOUT", "600"))
 
+# Sonilo background music (--music) — generates an original soundtrack
+# matched to each rendered short and mixes it under the original audio.
+SONILO_API_KEY = os.getenv("SONILO_API_KEY", "").strip()
+SONILO_API_URL = os.getenv("SONILO_API_URL", "https://api.sonilo.com").rstrip("/")
+SONILO_MUSIC_VOLUME = float(os.getenv("SONILO_MUSIC_VOLUME", "0.3"))
+# Generation streams over a single request; match the backend's read timeout.
+SONILO_TIMEOUT_SECONDS = float(os.getenv("SONILO_TIMEOUT", "600"))
+
 # Local-mode (--mode local) settings — only consulted when running offline.
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -47,6 +55,16 @@ def require_api_key() -> str:
             "MUAPI_API_KEY is not set. Add it to your .env file or export it as an env var."
         )
     return MUAPI_API_KEY
+
+
+def require_sonilo_key() -> str:
+    if not SONILO_API_KEY:
+        raise RuntimeError(
+            "SONILO_API_KEY is not set. --music needs a Sonilo key. "
+            "Add it to your .env or export it, or drop the --music flag. "
+            "Keys: https://platform.sonilo.com/dashboard/api-keys"
+        )
+    return SONILO_API_KEY
 
 
 def require_openai_key() -> str:
