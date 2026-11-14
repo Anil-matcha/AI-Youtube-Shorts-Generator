@@ -8,9 +8,13 @@ Two stages per highlight:
 """
 import os
 import subprocess
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from ..config import LOCAL_OUTPUT_DIR
+
+_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_BUNDLED_CASCADE = _DATA_DIR / "haarcascade_frontalface_default.xml"
 
 
 def _ratio(aspect_ratio: str) -> float:
@@ -66,7 +70,10 @@ def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str) -> str:
     crop_w = max(2, crop_w - (crop_w % 2))
     crop_h = max(2, crop_h - (crop_h % 2))
 
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    cascade_path = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+    if not os.path.exists(cascade_path) and _BUNDLED_CASCADE.exists():
+        cascade_path = str(_BUNDLED_CASCADE)
+    face_cascade = cv2.CascadeClassifier(cascade_path)
 
     silent_path = out_path + ".silent.mp4"
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
