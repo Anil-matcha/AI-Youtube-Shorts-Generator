@@ -15,6 +15,15 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# LiteLLM gateway (LLM_PROVIDER=litellm) — one interface to 100+ providers or a
+# self-hosted proxy. LITELLM_MODEL is a LiteLLM model string (e.g. "gpt-4o-mini",
+# "anthropic/claude-sonnet-4-5", "gemini/gemini-2.5-flash"). LITELLM_API_KEY and
+# LITELLM_BASE_URL are optional: leave the key blank to let LiteLLM read the
+# upstream provider's own env var (OPENAI_API_KEY, ANTHROPIC_API_KEY, ...), and
+# set the base URL only when routing through a LiteLLM proxy.
+LITELLM_MODEL = os.getenv("LITELLM_MODEL", "gpt-4o-mini")
+LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "").strip()
+LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "").strip()
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").strip().lower()
 LOCAL_WHISPER_MODEL = os.getenv("LOCAL_WHISPER_MODEL", "base")
 LOCAL_WHISPER_DEVICE = os.getenv("LOCAL_WHISPER_DEVICE", "auto")  # auto / cpu / cuda
