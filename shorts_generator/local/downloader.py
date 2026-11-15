@@ -110,7 +110,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
             print(f"[download/local] reusing cached download: {cached}", flush=True)
             return cached
 
-    print(f"[download/local] {video_url} @ {fmt}p → {out_dir}/", flush=True)
+    print(f"[download/local] {video_url} @ {fmt}p -> {out_dir}/", flush=True)
     ydl_opts = {
         "format": _format_for(fmt),
         "outtmpl": os.path.join(out_dir, "source_%(id)s.%(ext)s"),
@@ -118,6 +118,11 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
+        # The default web client is served SABR-only streams that 403 on
+        # download; these clients still hand out plain progressive URLs.
+        "extractor_args": {
+            "youtube": {"player_client": ["android", "web_safari", "web"]}
+        },
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
