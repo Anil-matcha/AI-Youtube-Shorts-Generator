@@ -121,6 +121,13 @@ python main.py "https://www.youtube.com/watch?v=VIDEO_ID" --mode local
 
 Local mode writes the rendered shorts to `./output/short_01.mp4`, `short_02.mp4`, … (override with `LOCAL_OUTPUT_DIR`).
 
+### Security notes
+
+- Replace the example API key values in `.env.example` before running a mode that uses them. The app rejects empty, placeholder, and short keys before it starts downloading or processing a video; OpenAI and Gemini keys are also checked for their provider prefix.
+- Remote video URLs must use HTTPS and an exact YouTube or `youtu.be` hostname. Local mode also accepts a local path or `file://` URL for trusted, single-user use.
+- If you expose this library through a web service, validate user input at the service boundary: accept only approved YouTube URLs and do not pass user-supplied paths or `file://` URLs to local mode. The library intentionally supports local files for CLI use.
+- `MUAPI_BASE_URL` must use HTTPS and the host `api.muapi.ai`. Other hosts are rejected because requests include the configured `MUAPI_API_KEY`.
+
 ### With options
 
 ```bash

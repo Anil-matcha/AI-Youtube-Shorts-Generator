@@ -24,6 +24,8 @@ def _ratio(aspect_ratio: str) -> float:
 
 def _cut_subclip(source_path: str, start: float, end: float, out_path: str) -> str:
     """ffmpeg -ss start -to end → re-encoded mp4 with audio."""
+    source_path = os.path.abspath(os.path.expanduser(source_path))
+    out_path = os.path.abspath(os.path.expanduser(out_path))
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
         "-i", source_path,
@@ -39,6 +41,8 @@ def _cut_subclip(source_path: str, start: float, end: float, out_path: str) -> s
 
 def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str) -> str:
     """Crop the cut clip to the target aspect ratio, tracking faces if possible."""
+    in_path = os.path.abspath(os.path.expanduser(in_path))
+    out_path = os.path.abspath(os.path.expanduser(out_path))
     try:
         import cv2  # type: ignore
     except ImportError as e:
@@ -146,7 +150,7 @@ def crop_highlights_local(
     aspect_ratio: str = "9:16",
     out_dir: Optional[str] = None,
 ) -> List[Dict]:
-    out_dir = out_dir or LOCAL_OUTPUT_DIR
+    out_dir = os.path.abspath(os.path.expanduser(out_dir or LOCAL_OUTPUT_DIR))
     os.makedirs(out_dir, exist_ok=True)
     results: List[Dict] = []
     for i, h in enumerate(highlights, 1):
