@@ -1,33 +1,56 @@
-"""Multi-mode high-performance vertical clipper for short-form video.
+"""High-performance multi-mode vertical clipper with hardware acceleration.
 
-Supports intelligent framing modes:
-- split_stack: Dual-character stacked layout (Top: Left character, Bottom: Right character).
-- left_focus: Frames left side character (e.g. Driver / Jason) in full vertical 9:16.
-- right_focus: Frames right side character (e.g. Passenger / Gunner) in full vertical 9:16.
-- smart_focus: Centers active dialogue character or salient subject.
-- center: Standard geometric center crop.
-
-Integrates single-pass FFmpeg rendering with Lanczos scaling and optional
-dynamic animated karaoke subtitle burn-in.
+Features:
+- Dual-engine encoding: Auto-detects Intel Arc Quick Sync Video (h264_qsv)
+  with Direct3D11 hardware acceleration, falling back to multi-threaded libx264.
+- Broadcast audio mastering: EBU R128 loudness normalization (-14 LUFS, -1.5 dBFS True Peak),
+  highpass rumble cut (80 Hz), and vocal presence boost (3.2 kHz).
+- Studio reframing modes: split_stack, left_focus, right_focus, smart_focus, center.
+- Mobile streaming optimization: BT.709 broadcast colorimetry and moov atom faststart.
 """
 
 import os
 import subprocess
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
 from ..config import LOCAL_OUTPUT_DIR
 from .subtitles import generate_ass_file
 
 
-def get_source_dimensions(media_path: str) -> tuple[int, int]:
-    """Retrieve video width and height using ffprobe.
-
-    Args:
-        media_path: Local media file path.
+def detect_hardware_encoder() -> Tuple[str, List[str], str]:
+    """Probe system hardware to select optimal video encoder.
 
     Returns:
-        Tuple of (width, height).
+        Tuple of (encoder_name, extra_cli_flags, pixel_format_filter).
+    """
+    probe_cmd = [
+        "ffmpeg", "-v", "error",
+        "-f", "lavfi",
+        "-i", "color=c=black:s=128x128:r=30:d=0.1",
+        "-pix_fmt", "nv12",
+        "-c:v", "h264_qsv",
+        "-b:v", "1M",
+        "-f", "null", "-"
+    ]
+    try:
+        res = subprocess.run(probe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if res.returncode == 0:
+            return "h264_qsv", ["-global_quality", "21", "-look_ahead", "1"], "format=nv12"
+    except Exception:
+        pass
+
+    return "libx264", ["-preset", "slow", "-crf", "17", "-threads", "0"], "format=yuv420p"
+
+
+def get_source_dimensions(media_path: str) -> Tuple[int, int]:
+    """Retrieve video dimensions via ffprobe.
+
+    Args:
+        media_path: Path to source media file.
+
+    Returns:
+        Tuple of (width, height) in pixels.
     """
     cmd = [
         "ffprobe", "-v", "error",
@@ -45,23 +68,24 @@ def build_ffmpeg_filtergraph(
     src_w: int,
     src_h: int,
     framing: str = "split_stack",
-    ass_path: Optional[str] = None
+    ass_path: Optional[str] = None,
+    pixel_format: str = "format=nv12"
 ) -> str:
-    """Construct an FFmpeg filtergraph string based on the chosen framing layout.
+    """Construct FFmpeg video filtergraph with framing, separator, and subtitle burn-in.
 
     Args:
         src_w: Source video width in pixels.
         src_h: Source video height in pixels.
-        framing: Framing mode identifier (split_stack, left_focus, right_focus, smart_focus, center).
-        ass_path: Optional path to an ASS subtitle file to burn into the output.
+        framing: Framing mode (split_stack, left_focus, right_focus, smart_focus, center).
+        ass_path: Optional path to ASS subtitle file to overlay.
+        pixel_format: Pixel format filter string for encoder compatibility.
 
     Returns:
-        Complete FFmpeg filter string.
+        FFmpeg filtergraph string.
     """
     escaped_ass = ""
     if ass_path:
-        norm_path = os.path.abspath(ass_path).replace("\\", "/")
-        norm_path = norm_path.replace(":", "\\:")
+        norm_path = os.path.abspath(ass_path).replace("\\", "/").replace(":", "\\:")
         escaped_ass = f",ass='{norm_path}'"
 
     crop_w_9_16 = int(src_h * (9 / 16))
@@ -80,8 +104,8 @@ def build_ffmpeg_filtergraph(
         filtergraph = (
             f"[0:v]crop={sub_w}:{sub_h}:{x_left}:{y_pos},scale=1080:960:flags=lanczos[top]; "
             f"[0:v]crop={sub_w}:{sub_h}:{x_right}:{y_pos},scale=1080:960:flags=lanczos[bot]; "
-            f"[top][bot]vstack=inputs=2[v_stack]; "
-            f"[v_stack]null{escaped_ass}[v_out]"
+            f"[top][bot]vstack=inputs=2,drawbox=y=959:w=1080:h=2:color=black@0.9:t=fill"
+            f"{escaped_ass},{pixel_format}[v_out]"
         )
         return filtergraph
 
@@ -94,7 +118,7 @@ def build_ffmpeg_filtergraph(
     else:
         x_pos = (src_w - crop_w_9_16) // 2
 
-    filtergraph = f"crop={crop_w_9_16}:{src_h}:{x_pos}:0,scale=1080:1920:flags=lanczos{escaped_ass}"
+    filtergraph = f"crop={crop_w_9_16}:{src_h}:{x_pos}:0,scale=1080:1920:flags=lanczos{escaped_ass},{pixel_format}"
     return filtergraph
 
 
@@ -104,23 +128,34 @@ def render_short_clip(
     end_time: float,
     out_path: str,
     framing: str = "split_stack",
-    burn_subtitles: bool = True
+    burn_subtitles: bool = True,
+    master_audio: bool = True,
+    encoder_choice: str = "auto"
 ) -> str:
-    """Cut, reframe, scale, and burn subtitles into a vertical Short in a single pass.
+    """Render a mobile vertical Short with hardware acceleration and broadcast audio.
 
     Args:
-        source_path: Input media file path.
+        source_path: Local media file path.
         start_time: Start timestamp in seconds.
         end_time: End timestamp in seconds.
-        out_path: Output .mp4 destination file path.
-        framing: Framing mode (split_stack, left_focus, right_focus, smart_focus, center).
-        burn_subtitles: Whether to generate and burn animated karaoke subtitles.
+        out_path: Output file destination path.
+        framing: Framing strategy (split_stack, left_focus, right_focus, smart_focus, center).
+        burn_subtitles: Whether to burn animated karaoke subtitles.
+        master_audio: Whether to apply EBU R128 loudness normalization and EQ.
+        encoder_choice: Encoder selection ('auto', 'qsv', 'cpu').
 
     Returns:
         Path to rendered .mp4 file.
     """
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     src_w, src_h = get_source_dimensions(source_path)
+
+    if encoder_choice == "qsv":
+        encoder, extra_enc_args, pix_fmt = "h264_qsv", ["-global_quality", "21", "-look_ahead", "1"], "format=nv12"
+    elif encoder_choice == "cpu":
+        encoder, extra_enc_args, pix_fmt = "libx264", ["-preset", "slow", "-crf", "17", "-threads", "0"], "format=yuv420p"
+    else:
+        encoder, extra_enc_args, pix_fmt = detect_hardware_encoder()
 
     ass_path: Optional[str] = None
     if burn_subtitles:
@@ -129,7 +164,12 @@ def render_short_clip(
         margin_v = 480 if framing == "split_stack" else 520
         generate_ass_file(source_path, ass_path, margin_v=margin_v)
 
-    filtergraph = build_ffmpeg_filtergraph(src_w, src_h, framing=framing, ass_path=ass_path)
+    filtergraph = build_ffmpeg_filtergraph(
+        src_w, src_h,
+        framing=framing,
+        ass_path=ass_path,
+        pixel_format=pix_fmt
+    )
 
     duration = end_time - start_time
     cmd = [
@@ -147,16 +187,29 @@ def render_short_clip(
         ])
     else:
         cmd.extend([
-            "-vf", filtergraph,
+            "-vf", filtergraph
+        ])
+
+    if master_audio:
+        cmd.extend([
+            "-af", "highpass=f=80,equalizer=f=3200:t=q:w=1.5:g=3.0,loudnorm=I=-14:LRA=11:TP=-1.5,aresample=48000",
+            "-c:a", "aac",
+            "-b:a", "192k"
+        ])
+    else:
+        cmd.extend([
             "-c:a", "aac",
             "-b:a", "192k"
         ])
 
     cmd.extend([
-        "-c:v", "libx264",
-        "-preset", "slow",
-        "-crf", "17",
-        "-pix_fmt", "yuv420p",
+        "-c:v", encoder,
+        *extra_enc_args,
+        "-colorspace", "bt709",
+        "-color_primaries", "bt709",
+        "-color_trc", "bt709",
+        "-color_range", "tv",
+        "-movflags", "+faststart",
         out_path
     ])
 
@@ -167,17 +220,21 @@ def render_short_clip(
 def crop_highlights_local(
     source_path: str,
     highlights: List[Dict],
+    aspect_ratio: str = "9:16",
     framing: str = "split_stack",
     burn_subtitles: bool = True,
+    master_audio: bool = True,
     out_dir: Optional[str] = None
 ) -> List[Dict]:
-    """Process multiple highlights into ready-to-upload vertical Shorts.
+    """Batch render highlights into ready-to-upload vertical Shorts.
 
     Args:
-        source_path: Input source video file.
-        highlights: List of highlight metadata dictionaries with start_time and end_time.
-        framing: Framing strategy for reframing.
-        burn_subtitles: Whether to burn animated karaoke captions.
+        source_path: Local media file path.
+        highlights: List of highlight dictionaries with start_time and end_time.
+        aspect_ratio: Target aspect ratio string for backward compatibility.
+        framing: Framing strategy.
+        burn_subtitles: Whether to burn dynamic karaoke subtitles.
+        master_audio: Whether to apply EBU R128 audio mastering.
         out_dir: Output directory path.
 
     Returns:
@@ -197,7 +254,8 @@ def crop_highlights_local(
                 end_time=float(h["end_time"]),
                 out_path=out_path,
                 framing=framing,
-                burn_subtitles=burn_subtitles
+                burn_subtitles=burn_subtitles,
+                master_audio=master_audio
             )
             results.append({**h, "clip_url": out_path})
         except Exception as e:

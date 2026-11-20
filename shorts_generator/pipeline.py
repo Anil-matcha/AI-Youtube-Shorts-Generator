@@ -1,11 +1,10 @@
-"""End-to-end orchestrator.
+"""End-to-end orchestrator for video shorts generation.
 
-Two modes:
-  * mode="api"   (default) — MuAPI does download / transcribe / LLM / autocrop.
-                              Fast, no local deps, pay-per-call.
-  * mode="local"            — yt-dlp + faster-whisper + OpenAI or Gemini + ffmpeg/opencv.
-                              Self-hosted, LLM_PROVIDER selects OpenAI or Gemini.
+Two execution modes:
+- mode="local": yt-dlp + faster-whisper + OpenAI/Gemini + Intel Arc QSV / FFmpeg hardware pipeline.
+- mode="api": MuAPI cloud proxy.
 """
+
 from typing import Dict, List, Optional
 
 from .clipper import crop_highlights
@@ -20,7 +19,25 @@ def _run_local(
     aspect_ratio: str,
     download_format: str,
     language: Optional[str],
+    framing: str = "split_stack",
+    burn_subtitles: bool = True,
+    master_audio: bool = True
 ) -> Dict:
+    """Execute full local processing pipeline on the current machine.
+
+    Args:
+        youtube_url: YouTube URL or local video path.
+        num_clips: Number of top highlights to render.
+        aspect_ratio: Target aspect ratio string.
+        download_format: Video quality shorthand.
+        language: Language code hint for Whisper.
+        framing: Framing strategy (split_stack, left_focus, right_focus, smart_focus, center).
+        burn_subtitles: Whether to burn dynamic karaoke subtitles.
+        master_audio: Whether to apply EBU R128 audio mastering.
+
+    Returns:
+        Structured pipeline result dictionary.
+    """
     from .local.clipper import crop_highlights_local
     from .local.downloader import download_youtube_local
     from .local.llm import call_local_llm
@@ -40,9 +57,16 @@ def _run_local(
         raise RuntimeError("Highlight generator returned zero clips.")
 
     top = sorted(all_highlights, key=lambda h: int(h.get("score", 0)), reverse=True)[:num_clips]
-    print(f"[pipeline/local] cropping {len(top)} of {len(all_highlights)} candidates", flush=True)
+    print(f"[pipeline/local] cropping {len(top)} of {len(all_highlights)} candidates [{framing}]", flush=True)
 
-    shorts = crop_highlights_local(source_path, top, aspect_ratio=aspect_ratio)
+    shorts = crop_highlights_local(
+        source_path,
+        top,
+        aspect_ratio=aspect_ratio,
+        framing=framing,
+        burn_subtitles=burn_subtitles,
+        master_audio=master_audio
+    )
 
     return {
         "mode": "local",
@@ -60,6 +84,18 @@ def _run_api(
     download_format: str,
     language: Optional[str],
 ) -> Dict:
+    """Execute pipeline via remote MuAPI cloud endpoints.
+
+    Args:
+        youtube_url: YouTube video URL.
+        num_clips: Target count of shorts.
+        aspect_ratio: Aspect ratio specification.
+        download_format: Target format string.
+        language: Language code hint.
+
+    Returns:
+        Structured result dictionary.
+    """
     source_url = download_youtube(youtube_url, fmt=download_format)
 
     transcript = transcribe(source_url, language=language)
@@ -91,33 +127,41 @@ def generate_shorts(
     youtube_url: str,
     num_clips: int = 3,
     aspect_ratio: str = "9:16",
-    download_format: str = "720",
+    download_format: str = "2160",
     language: Optional[str] = None,
-    mode: str = "api",
+    mode: str = "local",
+    framing: str = "split_stack",
+    burn_subtitles: bool = True,
+    master_audio: bool = True
 ) -> Dict:
-    """Run the full pipeline and return a structured result.
+    """Execute end-to-end shorts generation workflow.
 
     Args:
-        youtube_url: source URL.
-        num_clips: how many shorts to render.
-        aspect_ratio: e.g. "9:16", "1:1".
-        download_format: source resolution ("360" / "480" / "720" / "1080").
-        language: ISO-639-1 to force Whisper language detection.
-        mode: "api" (default, MuAPI) or "local" (yt-dlp + faster-whisper +
-            OpenAI or Gemini + ffmpeg).
+        youtube_url: Source YouTube URL or local file path.
+        num_clips: Number of candidate shorts to produce.
+        aspect_ratio: Aspect ratio ('9:16', '1:1').
+        download_format: Ingest resolution ('720', '1080', '2160', '4k').
+        language: Language hint code.
+        mode: Execution backend ('local' or 'api').
+        framing: Layout framing strategy.
+        burn_subtitles: Whether to burn dynamic karaoke subtitles.
+        master_audio: Whether to apply broadcast loudness normalization.
 
     Returns:
-        {
-          "mode": "api" | "local",
-          "source_video_url": str,   # hosted URL (api) or local path (local)
-          "transcript": {...},
-          "highlights": [...],       # all candidates ranked
-          "shorts": [...],           # top `num_clips` with clip_url / local path
-        }
+        Dictionary containing transcript, ranked highlights, and rendered shorts metadata.
     """
-    mode = (mode or "api").lower()
+    mode = (mode or "local").lower()
     if mode == "local":
-        return _run_local(youtube_url, num_clips, aspect_ratio, download_format, language)
+        return _run_local(
+            youtube_url,
+            num_clips,
+            aspect_ratio,
+            download_format,
+            language,
+            framing=framing,
+            burn_subtitles=burn_subtitles,
+            master_audio=master_audio
+        )
     if mode == "api":
         return _run_api(youtube_url, num_clips, aspect_ratio, download_format, language)
     raise ValueError(f"Unknown mode: {mode!r}. Use 'api' or 'local'.")
