@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 from typing import Optional
 
-from ..config import LOCAL_OUTPUT_DIR
+from ..config import LOCAL_OUTPUT_DIR, RAW_VIDEO_DIR
 
 
 def _import_ytdlp():
@@ -143,7 +143,7 @@ def download_youtube_local(video_url: str, fmt: str = "2160", out_dir: Optional[
         return local_path
 
     yt_dlp = _import_ytdlp()
-    out_dir = out_dir or LOCAL_OUTPUT_DIR
+    out_dir = out_dir or RAW_VIDEO_DIR
     os.makedirs(out_dir, exist_ok=True)
 
     video_id = _extract_youtube_video_id(video_url)

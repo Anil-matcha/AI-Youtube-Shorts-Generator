@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from ..config import LOCAL_OUTPUT_DIR, LOCAL_WHISPER_DEVICE, LOCAL_WHISPER_MODEL
+from ..config import LOCAL_OUTPUT_DIR, LOCAL_WHISPER_DEVICE, LOCAL_WHISPER_MODEL, RAW_CAPTIONS_DIR
 
 
 def _transcript_json_cache_path(media_path: str) -> Path:
@@ -22,7 +22,7 @@ def _transcript_json_cache_path(media_path: str) -> Path:
     Returns:
         Path to JSON cache file.
     """
-    cache_dir = Path(LOCAL_OUTPUT_DIR)
+    cache_dir = Path(RAW_CAPTIONS_DIR)
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / (Path(media_path).stem + ".json")
 
@@ -36,7 +36,7 @@ def _transcript_cache_path(media_path: str) -> Path:
     Returns:
         Path to SRT cache file.
     """
-    cache_dir = Path(LOCAL_OUTPUT_DIR)
+    cache_dir = Path(RAW_CAPTIONS_DIR)
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / (Path(media_path).stem + ".srt")
 

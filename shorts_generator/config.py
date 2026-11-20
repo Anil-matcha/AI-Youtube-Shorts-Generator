@@ -20,6 +20,23 @@ LOCAL_WHISPER_MODEL = os.getenv("LOCAL_WHISPER_MODEL", "base")
 LOCAL_WHISPER_DEVICE = os.getenv("LOCAL_WHISPER_DEVICE", "auto")  # auto / cpu / cuda
 LOCAL_OUTPUT_DIR = os.getenv("LOCAL_OUTPUT_DIR", "output")
 
+from .paths import (
+    ensure_output_dirs,
+    get_output_dir,
+    get_raw_audio_dir,
+    get_raw_captions_dir,
+    get_raw_dir,
+    get_raw_images_dir,
+    get_raw_video_dir,
+)
+
+RAW_DIR = str(get_raw_dir())
+RAW_IMAGES_DIR = str(get_raw_images_dir())
+RAW_AUDIO_DIR = str(get_raw_audio_dir())
+RAW_VIDEO_DIR = str(get_raw_video_dir())
+RAW_CAPTIONS_DIR = str(get_raw_captions_dir())
+ensure_output_dirs()
+
 # VAD (Voice Activity Detection) settings for faster-whisper
 # Default threshold is 0.5; lower = more sensitive, higher = less sensitive
 # Default min_speech_duration_ms is 250ms; increase to avoid tiny false positives

@@ -14,7 +14,7 @@ import subprocess
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
-from ..config import LOCAL_OUTPUT_DIR
+from ..config import LOCAL_OUTPUT_DIR, RAW_CAPTIONS_DIR
 from .subtitles import generate_ass_file
 
 
@@ -178,7 +178,7 @@ def render_short_clip(
     ass_path: Optional[str] = None
     if burn_subtitles:
         stem = Path(out_path).stem
-        ass_path = os.path.join(os.path.dirname(os.path.abspath(out_path)), f"{stem}_captions.ass")
+        ass_path = os.path.join(RAW_CAPTIONS_DIR, f"{stem}_captions.ass")
         margin_v = 480 if framing in ["split_stack", "fit_blur", "zoom_blur"] else 520
         generate_ass_file(source_path, ass_path, margin_v=margin_v)
 
