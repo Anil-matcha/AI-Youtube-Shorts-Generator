@@ -109,6 +109,15 @@ def build_ffmpeg_filtergraph(
         )
         return filtergraph
 
+    if framing == "fit_blur":
+        filtergraph = (
+            f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5,eq=brightness=-0.30[bg]; "
+            f"[0:v]scale=1080:-1:flags=lanczos[fg]; "
+            f"[bg][fg]overlay=0:(H-h)/2"
+            f"{escaped_ass},{pixel_format}[v_out]"
+        )
+        return filtergraph
+
     if framing == "left_focus":
         x_pos = max(0, int(src_w * 0.18))
     elif framing == "right_focus":
@@ -179,7 +188,7 @@ def render_short_clip(
         "-i", source_path
     ]
 
-    if framing == "split_stack":
+    if framing in ["split_stack", "fit_blur"]:
         cmd.extend([
             "-filter_complex", filtergraph,
             "-map", "[v_out]",
