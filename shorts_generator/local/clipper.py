@@ -118,6 +118,15 @@ def build_ffmpeg_filtergraph(
         )
         return filtergraph
 
+    if framing == "zoom_blur":
+        filtergraph = (
+            f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5,eq=brightness=-0.35[bg]; "
+            f"[0:v]crop=2400:1350:800:300,scale=1080:608:flags=lanczos[fg]; "
+            f"[bg][fg]overlay=0:(H-h)/2"
+            f"{escaped_ass},{pixel_format}[v_out]"
+        )
+        return filtergraph
+
     if framing == "left_focus":
         x_pos = max(0, int(src_w * 0.18))
     elif framing == "right_focus":
@@ -170,7 +179,7 @@ def render_short_clip(
     if burn_subtitles:
         stem = Path(out_path).stem
         ass_path = os.path.join(os.path.dirname(os.path.abspath(out_path)), f"{stem}_captions.ass")
-        margin_v = 480 if framing == "split_stack" else 520
+        margin_v = 480 if framing in ["split_stack", "fit_blur", "zoom_blur"] else 520
         generate_ass_file(source_path, ass_path, margin_v=margin_v)
 
     filtergraph = build_ffmpeg_filtergraph(
@@ -188,7 +197,7 @@ def render_short_clip(
         "-i", source_path
     ]
 
-    if framing in ["split_stack", "fit_blur"]:
+    if framing in ["split_stack", "fit_blur", "zoom_blur"]:
         cmd.extend([
             "-filter_complex", filtergraph,
             "-map", "[v_out]",
