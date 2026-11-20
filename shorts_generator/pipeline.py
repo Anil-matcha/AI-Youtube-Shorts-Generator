@@ -5,12 +5,29 @@ Two execution modes:
 - mode="api": MuAPI cloud proxy.
 """
 
+import re
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from .clipper import crop_highlights
 from .downloader import download_youtube
 from .highlights import call_muapi_llm, get_highlights
 from .transcriber import transcribe
+
+
+def _extract_video_id(url_or_path: str) -> str:
+    """Extract YouTube video identifier or fallback to path stem.
+
+    Args:
+        url_or_path: YouTube URL string or filesystem path.
+
+    Returns:
+        Extracted identifier string.
+    """
+    m = re.search(r"(?:v=|\/|youtu\.be\/)([0-9A-Za-z_-]{11})", url_or_path)
+    if m:
+        return m.group(1)
+    return Path(url_or_path).stem
 
 
 def _run_local(
@@ -21,7 +38,9 @@ def _run_local(
     language: Optional[str],
     framing: str = "split_stack",
     burn_subtitles: bool = True,
-    master_audio: bool = True
+    master_audio: bool = True,
+    video_id: Optional[str] = None,
+    guard_band: float = 45.0
 ) -> Dict:
     """Execute full local processing pipeline on the current machine.
 
@@ -34,6 +53,8 @@ def _run_local(
         framing: Framing strategy (split_stack, left_focus, right_focus, smart_focus, center).
         burn_subtitles: Whether to burn dynamic karaoke subtitles.
         master_audio: Whether to apply EBU R128 audio mastering.
+        video_id: Optional video identifier for persistent exclusion.
+        guard_band: Minimum temporal separation between clips in seconds.
 
     Returns:
         Structured pipeline result dictionary.
@@ -43,6 +64,7 @@ def _run_local(
     from .local.llm import call_local_llm
     from .local.transcriber import transcribe_local
 
+    vid = video_id or _extract_video_id(youtube_url)
     source_path = download_youtube_local(youtube_url, fmt=download_format)
 
     transcript = transcribe_local(source_path, language=language)
@@ -51,7 +73,13 @@ def _run_local(
             "Whisper produced no segments. The video may have no detectable speech."
         )
 
-    highlights_result = get_highlights(transcript, num_clips=num_clips, llm_fn=call_local_llm)
+    highlights_result = get_highlights(
+        transcript,
+        num_clips=num_clips,
+        llm_fn=call_local_llm,
+        video_id=vid,
+        guard_band=guard_band
+    )
     all_highlights: List[Dict] = highlights_result.get("highlights", [])
     if not all_highlights:
         raise RuntimeError("Highlight generator returned zero clips.")
@@ -65,11 +93,13 @@ def _run_local(
         aspect_ratio=aspect_ratio,
         framing=framing,
         burn_subtitles=burn_subtitles,
-        master_audio=master_audio
+        master_audio=master_audio,
+        video_id=vid
     )
 
     return {
         "mode": "local",
+        "video_id": vid,
         "source_video_url": source_path,
         "transcript": transcript,
         "highlights": all_highlights,
@@ -132,7 +162,9 @@ def generate_shorts(
     mode: str = "local",
     framing: str = "split_stack",
     burn_subtitles: bool = True,
-    master_audio: bool = True
+    master_audio: bool = True,
+    video_id: Optional[str] = None,
+    guard_band: float = 45.0
 ) -> Dict:
     """Execute end-to-end shorts generation workflow.
 
@@ -146,6 +178,8 @@ def generate_shorts(
         framing: Layout framing strategy.
         burn_subtitles: Whether to burn dynamic karaoke subtitles.
         master_audio: Whether to apply broadcast loudness normalization.
+        video_id: Optional video identifier for persistent exclusion.
+        guard_band: Minimum temporal separation between clips in seconds.
 
     Returns:
         Dictionary containing transcript, ranked highlights, and rendered shorts metadata.
@@ -160,7 +194,9 @@ def generate_shorts(
             language,
             framing=framing,
             burn_subtitles=burn_subtitles,
-            master_audio=master_audio
+            master_audio=master_audio,
+            video_id=video_id,
+            guard_band=guard_band
         )
     if mode == "api":
         return _run_api(youtube_url, num_clips, aspect_ratio, download_format, language)

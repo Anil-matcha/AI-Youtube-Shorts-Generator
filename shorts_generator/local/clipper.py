@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
 from ..config import LOCAL_OUTPUT_DIR, RAW_CAPTIONS_DIR
+from ..clip_registry import ClipRegistry
 from .subtitles import generate_ass_file
 
 
@@ -209,8 +210,13 @@ def render_short_clip(
         ])
 
     if master_audio:
+        fade_out_st = max(0.0, duration - 0.03)
+        af_chain = (
+            f"afade=t=in:ss=0:d=0.02,afade=t=out:st={fade_out_st:.3f}:d=0.03,"
+            "highpass=f=80,equalizer=f=3200:t=q:w=1.5:g=3.0,loudnorm=I=-14:LRA=11:TP=-1.5,aresample=48000"
+        )
         cmd.extend([
-            "-af", "highpass=f=80,equalizer=f=3200:t=q:w=1.5:g=3.0,loudnorm=I=-14:LRA=11:TP=-1.5,aresample=48000",
+            "-af", af_chain,
             "-c:a", "aac",
             "-b:a", "192k"
         ])
@@ -242,9 +248,10 @@ def crop_highlights_local(
     framing: str = "split_stack",
     burn_subtitles: bool = True,
     master_audio: bool = True,
-    out_dir: Optional[str] = None
+    out_dir: Optional[str] = None,
+    video_id: Optional[str] = None
 ) -> List[Dict]:
-    """Batch render highlights into ready-to-upload vertical Shorts.
+    """Batch render highlights into ready-to-upload vertical Shorts with monotonic registry tracking.
 
     Args:
         source_path: Local media file path.
@@ -254,6 +261,7 @@ def crop_highlights_local(
         burn_subtitles: Whether to burn dynamic karaoke subtitles.
         master_audio: Whether to apply EBU R128 audio mastering.
         out_dir: Output directory path.
+        video_id: Optional video identifier for persistent sequence indexing.
 
     Returns:
         List of processed highlight dictionaries with clip_url paths.
@@ -261,10 +269,14 @@ def crop_highlights_local(
     out_dir = out_dir or LOCAL_OUTPUT_DIR
     os.makedirs(out_dir, exist_ok=True)
     results: List[Dict] = []
+    registry = ClipRegistry()
+    vid = video_id or Path(source_path).stem
 
     for i, h in enumerate(highlights, 1):
-        out_path = os.path.join(out_dir, f"short_{i:02d}.mp4")
-        print(f"[clip/local] Rendering {i}/{len(highlights)}: {h.get('title', '(untitled)')} [{framing}]", flush=True)
+        archetype = str(h.get("archetype", "HIGHLIGHT")).upper()
+        seq = registry.get_next_sequence_number(vid)
+        out_path = os.path.join(out_dir, f"short_{vid}_{seq:03d}_{archetype}.mp4")
+        print(f"[clip/local] Rendering {i}/{len(highlights)}: {h.get('title', '(untitled)')} [{framing}] -> {Path(out_path).name}", flush=True)
         try:
             render_short_clip(
                 source_path=source_path,
@@ -274,6 +286,17 @@ def crop_highlights_local(
                 framing=framing,
                 burn_subtitles=burn_subtitles,
                 master_audio=master_audio
+            )
+            registry.register_clip(
+                video_id=vid,
+                start_time=float(h["start_time"]),
+                end_time=float(h["end_time"]),
+                guard_band=45.0,
+                archetype=archetype,
+                score=int(h.get("score", 0)),
+                title=str(h.get("title", "")),
+                hook_sentence=str(h.get("hook_sentence", "")),
+                file_path=out_path
             )
             results.append({**h, "clip_url": out_path})
         except Exception as e:

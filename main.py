@@ -19,6 +19,11 @@ from shorts_generator import generate_shorts
 
 
 def main() -> int:
+    """CLI execution entrypoint.
+
+    Returns:
+        Process exit code integer.
+    """
     parser = argparse.ArgumentParser(description="AI YouTube Shorts Generator")
     parser.add_argument("url", help="YouTube URL, file:// URL, or local file path")
     parser.add_argument(
@@ -31,6 +36,14 @@ def main() -> int:
     parser.add_argument("--aspect-ratio", default="9:16", help="Output aspect ratio (default: 9:16)")
     parser.add_argument("--format", default="720", help="Source download resolution: 360 / 480 / 720 / 1080 (default: 720)")
     parser.add_argument("--language", default=None, help="Force Whisper language code, e.g. 'en' (default: auto-detect)")
+    parser.add_argument(
+        "--framing",
+        default="split_stack",
+        choices=["split_stack", "left_focus", "right_focus", "smart_focus", "center", "fit_blur", "zoom_blur"],
+        help="Layout framing strategy (default: split_stack)",
+    )
+    parser.add_argument("--guard-band", type=float, default=45.0, help="Minimum separation gap between clips in seconds (default: 45.0)")
+    parser.add_argument("--video-id", default=None, help="Unique identifier for persistent exclusion tracking across runs")
     parser.add_argument("--output-json", default=None, help="Write the full result JSON to this path")
     args = parser.parse_args()
 
@@ -42,6 +55,9 @@ def main() -> int:
             download_format=args.format,
             language=args.language,
             mode=args.mode,
+            framing=args.framing,
+            guard_band=args.guard_band,
+            video_id=args.video_id,
         )
     except Exception as e:
         print(f"\nFAILED: {e}", file=sys.stderr)
