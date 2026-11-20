@@ -114,32 +114,42 @@ def build_ass_script(
     active_color: str = "&H0000FFFF",
     inactive_color: str = "&H00FFFFFF",
     outline_color: str = "&H00000000",
-    outline_width: int = 7
+    outline_width: int = 7,
+    target_w: int = 1080,
+    target_h: int = 1920,
 ) -> str:
     """Build complete ASS document with active-word karaoke styling.
 
     Args:
         chunks: List of word chunks.
-        margin_v: Vertical margin from bottom edge in 1080x1920 coordinates.
+        margin_v: Vertical margin from bottom edge in reference coordinates.
         font_name: Font face name.
-        font_size: Point size of the subtitle text.
+        font_size: Point size of the subtitle text in 1080x1920 reference.
         active_color: ASS color code for currently spoken word.
         inactive_color: ASS color code for surrounding chunk words.
         outline_color: ASS color code for text stroke outline.
         outline_width: Pixel width of the stroke outline.
+        target_w: Target canvas width in pixels (1080 or 2160).
+        target_h: Target canvas height in pixels (1920 or 3840).
 
     Returns:
         Full UTF-8 ASS file content string.
     """
+    scale = target_h / 1920.0
+    effective_font_size = int(round(font_size * scale))
+    effective_outline = max(1, int(round(outline_width * scale)))
+    effective_margin_v = int(round(margin_v * scale))
+    effective_margin_lr = int(round(60 * scale))
+
     header = (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
-        "PlayResX: 1080\n"
-        "PlayResY: 1920\n"
+        f"PlayResX: {target_w}\n"
+        f"PlayResY: {target_h}\n"
         "ScaledBorderAndShadow: yes\n\n"
         "[V4+ Styles]\n"
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: Default,{font_name},{font_size},{inactive_color},{active_color},{outline_color},&H90000000,-1,0,0,0,100,100,2,0,1,{outline_width},3,2,60,60,{margin_v},1\n\n"
+        f"Style: Default,{font_name},{effective_font_size},{inactive_color},{active_color},{outline_color},&H90000000,-1,0,0,0,100,100,2,0,1,{effective_outline},3,2,{effective_margin_lr},{effective_margin_lr},{effective_margin_v},1\n\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
@@ -174,20 +184,28 @@ def build_ass_script(
     return header + "\n".join(events) + "\n"
 
 
-def generate_ass_file(input_media: str, output_ass: str, margin_v: int = 520) -> str:
+def generate_ass_file(
+    input_media: str,
+    output_ass: str,
+    margin_v: int = 520,
+    target_w: int = 1080,
+    target_h: int = 1920,
+) -> str:
     """Generate and write an ASS subtitle file from input media.
 
     Args:
         input_media: Path to video or audio source.
         output_ass: Path to write destination .ass file.
         margin_v: Vertical margin from bottom edge.
+        target_w: Canvas target width in pixels.
+        target_h: Canvas target height in pixels.
 
     Returns:
         Absolute path to the created ASS file.
     """
     words = extract_word_timings(input_media)
     chunks = group_into_chunks(words)
-    content = build_ass_script(chunks, margin_v=margin_v)
+    content = build_ass_script(chunks, margin_v=margin_v, target_w=target_w, target_h=target_h)
 
     os.makedirs(os.path.dirname(os.path.abspath(output_ass)), exist_ok=True)
     with open(output_ass, "w", encoding="utf-8") as f:

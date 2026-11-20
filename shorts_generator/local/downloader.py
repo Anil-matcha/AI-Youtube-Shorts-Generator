@@ -37,6 +37,9 @@ def _import_ytdlp():
 def _format_for(fmt: str) -> str:
     """Map quality selector shorthand to yt-dlp format specification.
 
+    Removes container format restrictions ([ext=mp4]) because YouTube serves 4K
+    strictly in VP9/AV1 streams, and relies on FFmpeg for post-download MP4 remuxing.
+
     Args:
         fmt: Desired quality ('720', '1080', '2160', '4k', 'best').
 
@@ -45,10 +48,10 @@ def _format_for(fmt: str) -> str:
     """
     fmt_lower = fmt.strip().lower()
     if fmt_lower in ("2160", "4k", "best"):
-        return "bestvideo[height<=2160][ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
+        return "bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best"
     if fmt_lower == "1080":
-        return "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best"
-    return "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]/best"
+        return "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
+    return "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
 
 
 def _extract_youtube_video_id(source: str) -> Optional[str]:
@@ -156,6 +159,10 @@ def download_youtube_local(video_url: str, fmt: str = "2160", out_dir: Optional[
         "format": _format_for(fmt),
         "outtmpl": os.path.join(out_dir, "source_%(id)s.%(ext)s"),
         "merge_output_format": "mp4",
+        "postprocessors": [{
+            "key": "FFmpegVideoRemuxer",
+            "preferedformat": "mp4",
+        }],
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,

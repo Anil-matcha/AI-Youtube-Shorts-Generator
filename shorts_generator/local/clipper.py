@@ -25,23 +25,47 @@ def detect_hardware_encoder() -> Tuple[str, List[str], str]:
     Returns:
         Tuple of (encoder_name, extra_cli_flags, pixel_format_filter).
     """
-    probe_cmd = [
-        "ffmpeg", "-v", "error",
-        "-f", "lavfi",
-        "-i", "color=c=black:s=128x128:r=30:d=0.1",
-        "-pix_fmt", "nv12",
-        "-c:v", "h264_qsv",
-        "-b:v", "1M",
-        "-f", "null", "-"
-    ]
-    try:
-        res = subprocess.run(probe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if res.returncode == 0:
-            return "h264_qsv", ["-global_quality", "21", "-look_ahead", "1"], "format=nv12"
-    except Exception:
-        pass
+    return get_encoder_config(encoder_choice="auto", resolution="4k")
 
-    return "libx264", ["-preset", "slow", "-crf", "17", "-threads", "0"], "format=yuv420p"
+
+def get_encoder_config(encoder_choice: str = "auto", resolution: str = "4k") -> Tuple[str, List[str], str]:
+    """Select optimal video encoder and high-bitrate flags for broadcast quality.
+
+    Args:
+        encoder_choice: Encoder selection ('auto', 'qsv', 'cpu').
+        resolution: Target resolution profile ('4k' or '1080p').
+
+    Returns:
+        Tuple of (encoder_name, extra_cli_flags, pixel_format_filter).
+    """
+    is_4k = (resolution or "4k").lower() == "4k"
+
+    if encoder_choice in ("auto", "qsv"):
+        probe_cmd = [
+            "ffmpeg", "-v", "error",
+            "-f", "lavfi",
+            "-i", "color=c=black:s=128x128:r=30:d=0.1",
+            "-pix_fmt", "nv12",
+            "-c:v", "h264_qsv",
+            "-b:v", "1M",
+            "-f", "null", "-"
+        ]
+        try:
+            res = subprocess.run(probe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if res.returncode == 0:
+                if is_4k:
+                    qsv_flags = ["-global_quality", "16", "-b:v", "35M", "-maxrate", "50M", "-bufsize", "60M", "-look_ahead", "1"]
+                else:
+                    qsv_flags = ["-global_quality", "18", "-b:v", "15M", "-maxrate", "25M", "-bufsize", "30M", "-look_ahead", "1"]
+                return "h264_qsv", qsv_flags, "format=nv12"
+        except Exception:
+            pass
+
+    if is_4k:
+        cpu_flags = ["-preset", "medium", "-crf", "16", "-b:v", "30M", "-maxrate", "45M", "-bufsize", "60M", "-threads", "0"]
+    else:
+        cpu_flags = ["-preset", "slow", "-crf", "17", "-b:v", "15M", "-maxrate", "25M", "-bufsize", "30M", "-threads", "0"]
+    return "libx264", cpu_flags, "format=yuv420p"
 
 
 def get_source_dimensions(media_path: str) -> Tuple[int, int]:
@@ -70,7 +94,8 @@ def build_ffmpeg_filtergraph(
     src_h: int,
     framing: str = "split_stack",
     ass_path: Optional[str] = None,
-    pixel_format: str = "format=nv12"
+    pixel_format: str = "format=nv12",
+    resolution: str = "4k"
 ) -> str:
     """Construct FFmpeg video filtergraph with framing, separator, and subtitle burn-in.
 
@@ -80,6 +105,7 @@ def build_ffmpeg_filtergraph(
         framing: Framing mode (split_stack, left_focus, right_focus, smart_focus, center).
         ass_path: Optional path to ASS subtitle file to overlay.
         pixel_format: Pixel format filter string for encoder compatibility.
+        resolution: Target resolution profile ('4k' for 2160x3840 or '1080p' for 1080x1920).
 
     Returns:
         FFmpeg filtergraph string.
@@ -89,40 +115,58 @@ def build_ffmpeg_filtergraph(
         norm_path = os.path.abspath(ass_path).replace("\\", "/").replace(":", "\\:")
         escaped_ass = f",ass='{norm_path}'"
 
-    crop_w_9_16 = int(src_h * (9 / 16))
+    is_4k = (resolution or "4k").lower() == "4k"
+    out_w = 2160 if is_4k else 1080
+    out_h = 3840 if is_4k else 1920
+
+    crop_w_9_16 = int(src_h * (out_w / out_h))
     crop_w_9_16 = max(2, crop_w_9_16 - (crop_w_9_16 % 2))
 
     if framing == "split_stack":
         sub_h = int(src_h * 0.72)
-        sub_w = int(sub_h * (1080 / 960))
+        sub_w = int(sub_h * (out_w / (out_h // 2)))
         sub_w = max(2, sub_w - (sub_w % 2))
         sub_h = max(2, sub_h - (sub_h % 2))
 
         x_left = max(0, int(src_w * 0.08))
         x_right = min(src_w - sub_w, int(src_w * 0.46))
         y_pos = int((src_h - sub_h) * 0.35)
+        half_h = out_h // 2
+        line_y = half_h - 1
+        line_thick = 4 if is_4k else 2
 
         filtergraph = (
-            f"[0:v]crop={sub_w}:{sub_h}:{x_left}:{y_pos},scale=1080:960:flags=lanczos[top]; "
-            f"[0:v]crop={sub_w}:{sub_h}:{x_right}:{y_pos},scale=1080:960:flags=lanczos[bot]; "
-            f"[top][bot]vstack=inputs=2,drawbox=y=959:w=1080:h=2:color=black@0.9:t=fill"
+            f"[0:v]crop={sub_w}:{sub_h}:{x_left}:{y_pos},scale={out_w}:{half_h}:flags=lanczos[top]; "
+            f"[0:v]crop={sub_w}:{sub_h}:{x_right}:{y_pos},scale={out_w}:{half_h}:flags=lanczos[bot]; "
+            f"[top][bot]vstack=inputs=2,drawbox=y={line_y}:w={out_w}:h={line_thick}:color=black@0.9:t=fill"
             f"{escaped_ass},{pixel_format}[v_out]"
         )
         return filtergraph
 
     if framing == "fit_blur":
+        box_blur = "50:10" if is_4k else "25:5"
         filtergraph = (
-            f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5,eq=brightness=-0.30[bg]; "
-            f"[0:v]scale=1080:-1:flags=lanczos[fg]; "
+            f"[0:v]scale={out_w}:{out_h}:force_original_aspect_ratio=increase,crop={out_w}:{out_h},boxblur={box_blur},eq=brightness=-0.30[bg]; "
+            f"[0:v]scale={out_w}:-1:flags=lanczos[fg]; "
             f"[bg][fg]overlay=0:(H-h)/2"
             f"{escaped_ass},{pixel_format}[v_out]"
         )
         return filtergraph
 
     if framing == "zoom_blur":
+        box_blur = "50:10" if is_4k else "25:5"
+        fg_crop_w = int(src_w * 0.625)
+        fg_crop_h = int(fg_crop_w * (9 / 16))
+        fg_crop_w = max(2, fg_crop_w - (fg_crop_w % 2))
+        fg_crop_h = max(2, fg_crop_h - (fg_crop_h % 2))
+        fg_crop_x = int(src_w * 0.208)
+        fg_crop_y = int(src_h * 0.138)
+        fg_h = int(out_w * (9 / 16))
+        fg_h = max(2, fg_h - (fg_h % 2))
+
         filtergraph = (
-            f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5,eq=brightness=-0.35[bg]; "
-            f"[0:v]crop=2400:1350:800:300,scale=1080:608:flags=lanczos[fg]; "
+            f"[0:v]scale={out_w}:{out_h}:force_original_aspect_ratio=increase,crop={out_w}:{out_h},boxblur={box_blur},eq=brightness=-0.35[bg]; "
+            f"[0:v]crop={fg_crop_w}:{fg_crop_h}:{fg_crop_x}:{fg_crop_y},scale={out_w}:{fg_h}:flags=lanczos[fg]; "
             f"[bg][fg]overlay=0:(H-h)/2"
             f"{escaped_ass},{pixel_format}[v_out]"
         )
@@ -137,7 +181,7 @@ def build_ffmpeg_filtergraph(
     else:
         x_pos = (src_w - crop_w_9_16) // 2
 
-    filtergraph = f"crop={crop_w_9_16}:{src_h}:{x_pos}:0,scale=1080:1920:flags=lanczos{escaped_ass},{pixel_format}"
+    filtergraph = f"crop={crop_w_9_16}:{src_h}:{x_pos}:0,scale={out_w}:{out_h}:flags=lanczos{escaped_ass},{pixel_format}"
     return filtergraph
 
 
@@ -149,7 +193,8 @@ def render_short_clip(
     framing: str = "split_stack",
     burn_subtitles: bool = True,
     master_audio: bool = True,
-    encoder_choice: str = "auto"
+    encoder_choice: str = "auto",
+    resolution: str = "4k",
 ) -> str:
     """Render a mobile vertical Short with hardware acceleration and broadcast audio.
 
@@ -158,10 +203,11 @@ def render_short_clip(
         start_time: Start timestamp in seconds.
         end_time: End timestamp in seconds.
         out_path: Output file destination path.
-        framing: Framing strategy (split_stack, left_focus, right_focus, smart_focus, center).
+        framing: Framing strategy (split_stack, left_focus, right_focus, smart_focus, center, fit_blur, zoom_blur).
         burn_subtitles: Whether to burn animated karaoke subtitles.
         master_audio: Whether to apply EBU R128 loudness normalization and EQ.
         encoder_choice: Encoder selection ('auto', 'qsv', 'cpu').
+        resolution: Output resolution profile ('4k' for 2160x3840 or '1080p' for 1080x1920).
 
     Returns:
         Path to rendered .mp4 file.
@@ -169,25 +215,25 @@ def render_short_clip(
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     src_w, src_h = get_source_dimensions(source_path)
 
-    if encoder_choice == "qsv":
-        encoder, extra_enc_args, pix_fmt = "h264_qsv", ["-global_quality", "21", "-look_ahead", "1"], "format=nv12"
-    elif encoder_choice == "cpu":
-        encoder, extra_enc_args, pix_fmt = "libx264", ["-preset", "slow", "-crf", "17", "-threads", "0"], "format=yuv420p"
-    else:
-        encoder, extra_enc_args, pix_fmt = detect_hardware_encoder()
+    is_4k = (resolution or "4k").lower() == "4k"
+    target_w = 2160 if is_4k else 1080
+    target_h = 3840 if is_4k else 1920
+
+    encoder, extra_enc_args, pix_fmt = get_encoder_config(encoder_choice, resolution=resolution)
 
     ass_path: Optional[str] = None
     if burn_subtitles:
         stem = Path(out_path).stem
         ass_path = os.path.join(RAW_CAPTIONS_DIR, f"{stem}_captions.ass")
         margin_v = 480 if framing in ["split_stack", "fit_blur", "zoom_blur"] else 520
-        generate_ass_file(source_path, ass_path, margin_v=margin_v)
+        generate_ass_file(source_path, ass_path, margin_v=margin_v, target_w=target_w, target_h=target_h)
 
     filtergraph = build_ffmpeg_filtergraph(
         src_w, src_h,
         framing=framing,
         ass_path=ass_path,
-        pixel_format=pix_fmt
+        pixel_format=pix_fmt,
+        resolution=resolution,
     )
 
     duration = end_time - start_time
@@ -249,7 +295,8 @@ def crop_highlights_local(
     burn_subtitles: bool = True,
     master_audio: bool = True,
     out_dir: Optional[str] = None,
-    video_id: Optional[str] = None
+    video_id: Optional[str] = None,
+    resolution: str = "4k",
 ) -> List[Dict]:
     """Batch render highlights into ready-to-upload vertical Shorts with monotonic registry tracking.
 
@@ -262,6 +309,7 @@ def crop_highlights_local(
         master_audio: Whether to apply EBU R128 audio mastering.
         out_dir: Output directory path.
         video_id: Optional video identifier for persistent sequence indexing.
+        resolution: Output resolution profile ('4k' or '1080p').
 
     Returns:
         List of processed highlight dictionaries with clip_url paths.
@@ -276,7 +324,7 @@ def crop_highlights_local(
         archetype = str(h.get("archetype", "HIGHLIGHT")).upper()
         seq = registry.get_next_sequence_number(vid)
         out_path = os.path.join(out_dir, f"short_{vid}_{seq:03d}_{archetype}.mp4")
-        print(f"[clip/local] Rendering {i}/{len(highlights)}: {h.get('title', '(untitled)')} [{framing}] -> {Path(out_path).name}", flush=True)
+        print(f"[clip/local] Rendering {i}/{len(highlights)}: {h.get('title', '(untitled)')} [{framing}] ({resolution}) -> {Path(out_path).name}", flush=True)
         try:
             render_short_clip(
                 source_path=source_path,
@@ -285,7 +333,8 @@ def crop_highlights_local(
                 out_path=out_path,
                 framing=framing,
                 burn_subtitles=burn_subtitles,
-                master_audio=master_audio
+                master_audio=master_audio,
+                resolution=resolution,
             )
             registry.register_clip(
                 video_id=vid,

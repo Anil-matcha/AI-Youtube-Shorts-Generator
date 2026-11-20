@@ -125,6 +125,7 @@ def run_pipeline():
             framing=spec["framing"],
             burn_subtitles=True,
             master_audio=True,
+            resolution="4k",
         )
         print(f"[{s_id}/8] Rendered in {time.time() - t_render:.2f} seconds!", flush=True)
 

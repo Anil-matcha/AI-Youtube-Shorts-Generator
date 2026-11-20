@@ -40,7 +40,8 @@ def _run_local(
     burn_subtitles: bool = True,
     master_audio: bool = True,
     video_id: Optional[str] = None,
-    guard_band: float = 45.0
+    guard_band: float = 45.0,
+    resolution: str = "4k",
 ) -> Dict:
     """Execute full local processing pipeline on the current machine.
 
@@ -55,6 +56,7 @@ def _run_local(
         master_audio: Whether to apply EBU R128 audio mastering.
         video_id: Optional video identifier for persistent exclusion.
         guard_band: Minimum temporal separation between clips in seconds.
+        resolution: Output resolution profile ('4k' for 2160x3840 or '1080p' for 1080x1920).
 
     Returns:
         Structured pipeline result dictionary.
@@ -85,7 +87,7 @@ def _run_local(
         raise RuntimeError("Highlight generator returned zero clips.")
 
     top = sorted(all_highlights, key=lambda h: int(h.get("score", 0)), reverse=True)[:num_clips]
-    print(f"[pipeline/local] cropping {len(top)} of {len(all_highlights)} candidates [{framing}]", flush=True)
+    print(f"[pipeline/local] cropping {len(top)} of {len(all_highlights)} candidates [{framing}] ({resolution})", flush=True)
 
     shorts = crop_highlights_local(
         source_path,
@@ -94,7 +96,8 @@ def _run_local(
         framing=framing,
         burn_subtitles=burn_subtitles,
         master_audio=master_audio,
-        video_id=vid
+        video_id=vid,
+        resolution=resolution,
     )
 
     return {
@@ -164,7 +167,8 @@ def generate_shorts(
     burn_subtitles: bool = True,
     master_audio: bool = True,
     video_id: Optional[str] = None,
-    guard_band: float = 45.0
+    guard_band: float = 45.0,
+    resolution: str = "4k",
 ) -> Dict:
     """Execute end-to-end shorts generation workflow.
 
@@ -180,6 +184,7 @@ def generate_shorts(
         master_audio: Whether to apply broadcast loudness normalization.
         video_id: Optional video identifier for persistent exclusion.
         guard_band: Minimum temporal separation between clips in seconds.
+        resolution: Output resolution profile ('4k' for 2160x3840 or '1080p' for 1080x1920).
 
     Returns:
         Dictionary containing transcript, ranked highlights, and rendered shorts metadata.
@@ -196,7 +201,8 @@ def generate_shorts(
             burn_subtitles=burn_subtitles,
             master_audio=master_audio,
             video_id=video_id,
-            guard_band=guard_band
+            guard_band=guard_band,
+            resolution=resolution,
         )
     if mode == "api":
         return _run_api(youtube_url, num_clips, aspect_ratio, download_format, language)

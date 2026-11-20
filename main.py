@@ -42,6 +42,12 @@ def main() -> int:
         choices=["split_stack", "left_focus", "right_focus", "smart_focus", "center", "fit_blur", "zoom_blur"],
         help="Layout framing strategy (default: split_stack)",
     )
+    parser.add_argument(
+        "--resolution",
+        default="4k",
+        choices=["4k", "1080p"],
+        help="Vertical output resolution: 4k (2160x3840 @ 35M) or 1080p (1080x1920 @ 15M) (default: 4k)",
+    )
     parser.add_argument("--guard-band", type=float, default=45.0, help="Minimum separation gap between clips in seconds (default: 45.0)")
     parser.add_argument("--video-id", default=None, help="Unique identifier for persistent exclusion tracking across runs")
     parser.add_argument("--output-json", default=None, help="Write the full result JSON to this path")
@@ -58,6 +64,7 @@ def main() -> int:
             framing=args.framing,
             guard_band=args.guard_band,
             video_id=args.video_id,
+            resolution=args.resolution,
         )
     except Exception as e:
         print(f"\nFAILED: {e}", file=sys.stderr)

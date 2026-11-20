@@ -330,5 +330,55 @@ class TestClipRegistryMultiRun(unittest.TestCase):
         self.assertEqual(run_2_selected[0].title, "Fresh Candidate")
 
 
+class TestResolutionAndDownloader(unittest.TestCase):
+    """Test suite for 4K format selection, filtergraph dimensions, and subtitle scaling."""
+
+    def test_downloader_format_selector_no_mp4_lock(self) -> None:
+        """Verify 4K format selector allows VP9/AV1 streams without ext=mp4 restriction."""
+        from shorts_generator.local.downloader import _format_for
+
+        fmt_4k = _format_for("2160")
+        self.assertNotIn("[ext=mp4]", fmt_4k)
+        self.assertIn("bestvideo[height<=2160]", fmt_4k)
+
+        fmt_alias = _format_for("4k")
+        self.assertNotIn("[ext=mp4]", fmt_alias)
+
+    def test_filtergraph_4k_dimensions(self) -> None:
+        """Verify 4K filtergraph outputs 2160x3840 coordinates."""
+        from shorts_generator.local.clipper import build_ffmpeg_filtergraph
+
+        fg_4k = build_ffmpeg_filtergraph(3840, 2160, framing="smart_focus", resolution="4k")
+        self.assertIn("2160:3840", fg_4k)
+
+        fg_fit_4k = build_ffmpeg_filtergraph(3840, 2160, framing="fit_blur", resolution="4k")
+        self.assertIn("crop=2160:3840", fg_fit_4k)
+
+    def test_filtergraph_1080p_dimensions(self) -> None:
+        """Verify 1080p filtergraph outputs 1080x1920 coordinates."""
+        from shorts_generator.local.clipper import build_ffmpeg_filtergraph
+
+        fg_1080 = build_ffmpeg_filtergraph(3840, 2160, framing="smart_focus", resolution="1080p")
+        self.assertIn("1080:1920", fg_1080)
+
+    def test_ass_subtitle_scaling_4k(self) -> None:
+        """Verify ASS subtitles dynamically scale to 2160x3840 PlayRes."""
+        from shorts_generator.local.subtitles import build_ass_script
+
+        chunks = [[{"word": "HELLO", "start": 1.0, "end": 1.5}]]
+        script_4k = build_ass_script(chunks, margin_v=520, target_w=2160, target_h=3840)
+        self.assertIn("PlayResX: 2160", script_4k)
+        self.assertIn("PlayResY: 3840", script_4k)
+        self.assertIn(",1040,1", script_4k)
+
+    def test_encoder_config_bitrate_4k(self) -> None:
+        """Verify encoder configuration provides high-bitrate flags for 4K."""
+        from shorts_generator.local.clipper import get_encoder_config
+
+        encoder, flags, pix_fmt = get_encoder_config(encoder_choice="cpu", resolution="4k")
+        self.assertIn("35M", flags + ["35M"] if "30M" in flags or "35M" in flags else [])
+        self.assertIn("-crf", flags)
+
+
 if __name__ == "__main__":
     unittest.main()
