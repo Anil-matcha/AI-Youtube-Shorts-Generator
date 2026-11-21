@@ -11,7 +11,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from shorts_generator.clip_registry import ClipRegistry
 from shorts_generator.local.clipper import render_short_clip
@@ -155,7 +155,157 @@ SHORTS_SPECS: List[Dict] = [
         "out_name": "ep3_short_7_Treasure_Hunter_Kenny_4K.mp4",
         "hook_sentence": "When you hold hundreds-of-years-old gold in the middle of the ocean, you know how rich you are.",
     },
+    {
+        "id": 8,
+        "name": "Mandy: Ever Heard Of Auto-Pay Dinosaur?! (Hallway Flirtation)",
+        "start_sec": 407.38,
+        "end_sec": 435.80,
+        "framing": "split_stack",
+        "framing_params": {
+            "x_top": 1500,
+            "y_top": 120,
+            "x_bot": 420,
+            "y_bot": 120,
+            "sub_h_ratio": 0.72,
+            "margin_v": 940,
+        },
+        "archetype": "DIALOGUE_BANTER",
+        "score": 94,
+        "raw_slice": "ep3_raw_4k_moment8_hallway.mp4",
+        "out_name": "ep3_short_8_Mandy_AutoPay_Flirt_4K.mp4",
+        "hook_sentence": "Ever heard of auto-pay you dinosaur? You got a website? Yeah it's called PayMandyNow.com!",
+    },
+    {
+        "id": 9,
+        "name": "Brian Heder: 15-Year Table Ritual & Mob Ghosting",
+        "start_sec": 973.97,
+        "end_sec": 1030.00,
+        "framing": "split_stack",
+        "framing_params": {
+            "x_top": 1650,
+            "y_top": 120,
+            "x_bot": 380,
+            "y_bot": 120,
+            "sub_h_ratio": 0.72,
+            "margin_v": 940,
+        },
+        "archetype": "LORE_BACKSTORY",
+        "score": 93,
+        "raw_slice": "ep3_raw_4k_moment9_brian.mp4",
+        "out_name": "ep3_short_9_Brian_Table_Ritual_4K.mp4",
+        "hook_sentence": "I've had that same table for fifteen years! Arnold doesn't just disappear, something went down!",
+    },
+    {
+        "id": 10,
+        "name": "Vice City Drive: Did Arnold Ghost You Like A Tinder Date?!",
+        "start_sec": 1177.10,
+        "end_sec": 1219.50,
+        "framing": "split_stack",
+        "framing_params": {
+            "x_top": 1750,
+            "y_top": 120,
+            "x_bot": 380,
+            "y_bot": 120,
+            "sub_h_ratio": 0.72,
+            "margin_v": 940,
+        },
+        "archetype": "DIALOGUE_BANTER",
+        "score": 97,
+        "raw_slice": "ep3_raw_4k_moment10_car.mp4",
+        "out_name": "ep3_short_10_Car_Chase_Tinder_Ghost_4K.mp4",
+        "hook_sentence": "Jason use your eyes! Did Arnold ghost you like a Tinder date? I'm not trying to f*** him!",
+    },
+    {
+        "id": 11,
+        "name": "Tiki Bar: Waiting To See Unicorns Baby! & Kenton Rees",
+        "start_sec": 1844.06,
+        "end_sec": 1884.49,
+        "framing": "split_stack",
+        "framing_params": {
+            "x_top": 1600,
+            "y_top": 120,
+            "x_bot": 420,
+            "y_bot": 120,
+            "sub_h_ratio": 0.72,
+            "margin_v": 940,
+        },
+        "archetype": "LORE_BACKSTORY",
+        "score": 91,
+        "raw_slice": "ep3_raw_4k_moment11_tiki.mp4",
+        "out_name": "ep3_short_11_Tiki_Bar_Unicorns_4K.mp4",
+        "hook_sentence": "Lori what are you drinking? Waiting to see unicorns baby! Kenny meet Kenton Rees.",
+    },
+    {
+        "id": 12,
+        "name": "Rockstar Satire Ad: Mr. Garcia Sued Surgeon (BBL Disaster)",
+        "start_sec": 2764.20,
+        "end_sec": 2824.08,
+        "framing": "smart_focus",
+        "framing_params": {
+            "x_ratio": 0.33,
+            "margin_v": 520,
+        },
+        "archetype": "SATIRE_COMMERCIAL",
+        "score": 98,
+        "raw_slice": "ep3_raw_4k_moment12_mrgarcia.mp4",
+        "out_name": "ep3_short_12_MrGarcia_BBL_Lawyer_4K.mp4",
+        "hook_sentence": "My plastic surgeon botched my BBL, now thanks to Mr. Garcia, he is my full-time unpaid butler!",
+    },
+    {
+        "id": 13,
+        "name": "Rockstar Satire Ad: King Gator Golf (Look At All Them Holes!)",
+        "start_sec": 2883.40,
+        "end_sec": 2937.74,
+        "framing": "smart_focus",
+        "framing_params": {
+            "x_ratio": 0.33,
+            "margin_v": 520,
+        },
+        "archetype": "SATIRE_COMMERCIAL",
+        "score": 95,
+        "raw_slice": "ep3_raw_4k_moment13_kinggator.mp4",
+        "out_name": "ep3_short_13_King_Gator_Golf_4K.mp4",
+        "hook_sentence": "King Gator Adventure Golf! Look at all them holes! Mini golf with real hungry Florida gators!",
+    },
+    {
+        "id": 14,
+        "name": "Ocean Salvage Lore: Sir Todd Bankcroft The Rich English Asshole",
+        "start_sec": 3252.58,
+        "end_sec": 3289.68,
+        "framing": "split_stack",
+        "framing_params": {
+            "x_top": 1400,
+            "y_top": 120,
+            "x_bot": 380,
+            "y_bot": 120,
+            "sub_h_ratio": 0.72,
+            "margin_v": 940,
+        },
+        "archetype": "LORE_BACKSTORY",
+        "score": 92,
+        "raw_slice": "ep3_raw_4k_moment14_todd.mp4",
+        "out_name": "ep3_short_14_Todd_Bankcroft_Lore_4K.mp4",
+        "hook_sentence": "Sir Todd Bankcroft... rich English asshole who bought exclusive salvage rights to the whole reef.",
+    },
+    {
+        "id": 15,
+        "name": "Noob Driver Fail: 4x4 Tree Crash & Highway Sparks",
+        "start_sec": 1360.00,
+        "end_sec": 1405.00,
+        "framing": "smart_focus",
+        "framing_params": {
+            "x_ratio": 0.28,
+            "margin_v": 520,
+        },
+        "archetype": "STUNT_FAIL",
+        "score": 96,
+        "raw_slice": "ep3_raw_4k_moment15_noob_crash.mp4",
+        "out_name": "ep3_short_15_Noob_Driver_Tree_Crash_4K.mp4",
+        "hook_sentence": "Bro who gave this guy a driver's license in GTA 6?! Crashed straight into the trees!",
+    },
 ]
+
+_CACHED_STREAM_URLS: Optional[Tuple[str, str]] = None
 
 
 def format_hms(seconds: float) -> str:
@@ -174,10 +324,13 @@ def format_hms(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
-def get_stream_urls() -> Tuple[str, str]:
+def get_stream_urls(force_refresh: bool = False) -> Tuple[str, str]:
     """Retrieve fresh format 628 (4K 60FPS) and format 234/140 (audio) streaming URLs.
 
     Extracts live GoogleVideo URLs directly from YouTube to prevent token/HLS expiration.
+
+    Args:
+        force_refresh: Whether to ignore cached stream URLs.
 
     Returns:
         Tuple of (video_url, audio_url).
@@ -185,6 +338,10 @@ def get_stream_urls() -> Tuple[str, str]:
     Raises:
         RuntimeError: If formats are missing from manifest.
     """
+    global _CACHED_STREAM_URLS
+    if _CACHED_STREAM_URLS and not force_refresh:
+        return _CACHED_STREAM_URLS
+
     import yt_dlp
 
     ydl_opts = {"quiet": True, "no_warnings": True, "skip_download": True}
@@ -202,7 +359,9 @@ def get_stream_urls() -> Tuple[str, str]:
 
     if not v_url or not a_url:
         raise RuntimeError(f"Could not locate 4K stream 628/234 for {VIDEO_ID}")
-    return v_url, a_url
+
+    _CACHED_STREAM_URLS = (v_url, a_url)
+    return _CACHED_STREAM_URLS
 
 
 def download_4k_slice(start_sec: float, end_sec: float, out_path: str) -> None:
@@ -213,25 +372,44 @@ def download_4k_slice(start_sec: float, end_sec: float, out_path: str) -> None:
         end_sec: End timestamp in seconds.
         out_path: Destination path for raw slice.
     """
-    v_url, a_url = get_stream_urls()
     start_str = format_hms(start_sec)
     end_str = format_hms(end_sec)
-    cmd = [
-        "ffmpeg", "-y",
-        "-ss", start_str,
-        "-to", end_str,
-        "-i", v_url,
-        "-ss", start_str,
-        "-to", end_str,
-        "-i", a_url,
-        "-c:v", "copy",
-        "-c:a", "copy",
-        out_path
-    ]
-    t0 = time.time()
-    print(f"[*] Slicing 4K stream {start_str} -> {end_str} to {Path(out_path).name}...", flush=True)
-    subprocess.run(cmd, check=True)
-    print(f"[+] Sliced in {time.time() - t0:.2f}s.", flush=True)
+    try:
+        v_url, a_url = get_stream_urls()
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", start_str,
+            "-to", end_str,
+            "-i", v_url,
+            "-ss", start_str,
+            "-to", end_str,
+            "-i", a_url,
+            "-c:v", "copy",
+            "-c:a", "copy",
+            out_path
+        ]
+        t0 = time.time()
+        print(f"[*] Slicing 4K stream {start_str} -> {end_str} to {Path(out_path).name}...", flush=True)
+        subprocess.run(cmd, check=True)
+        print(f"[+] Sliced in {time.time() - t0:.2f}s.", flush=True)
+    except subprocess.CalledProcessError:
+        print("[!] FFmpeg slice failed. Refreshing stream URLs and retrying...", flush=True)
+        v_url, a_url = get_stream_urls(force_refresh=True)
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", start_str,
+            "-to", end_str,
+            "-i", v_url,
+            "-ss", start_str,
+            "-to", end_str,
+            "-i", a_url,
+            "-c:v", "copy",
+            "-c:a", "copy",
+            out_path
+        ]
+        t0 = time.time()
+        subprocess.run(cmd, check=True)
+        print(f"[+] Sliced in {time.time() - t0:.2f}s on retry.", flush=True)
 
 
 def run_pipeline() -> None:
