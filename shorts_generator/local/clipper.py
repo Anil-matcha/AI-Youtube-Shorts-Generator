@@ -95,7 +95,8 @@ def build_ffmpeg_filtergraph(
     framing: str = "split_stack",
     ass_path: Optional[str] = None,
     pixel_format: str = "format=nv12",
-    resolution: str = "4k"
+    resolution: str = "4k",
+    framing_params: Optional[Dict] = None,
 ) -> str:
     """Construct FFmpeg video filtergraph with framing, separator, and subtitle burn-in.
 
@@ -106,6 +107,7 @@ def build_ffmpeg_filtergraph(
         ass_path: Optional path to ASS subtitle file to overlay.
         pixel_format: Pixel format filter string for encoder compatibility.
         resolution: Target resolution profile ('4k' for 2160x3840 or '1080p' for 1080x1920).
+        framing_params: Optional dictionary of fine-tuned spatial coordinates and ratios.
 
     Returns:
         FFmpeg filtergraph string.
@@ -123,21 +125,28 @@ def build_ffmpeg_filtergraph(
     crop_w_9_16 = max(2, crop_w_9_16 - (crop_w_9_16 % 2))
 
     if framing == "split_stack":
-        sub_h = int(src_h * 0.72)
+        sub_ratio = framing_params.get("sub_h_ratio", 0.72) if framing_params else 0.72
+        sub_h = int(src_h * sub_ratio)
         sub_w = int(sub_h * (out_w / (out_h // 2)))
         sub_w = max(2, sub_w - (sub_w % 2))
         sub_h = max(2, sub_h - (sub_h % 2))
 
-        x_left = max(0, int(src_w * 0.08))
-        x_right = min(src_w - sub_w, int(src_w * 0.46))
-        y_pos = int((src_h - sub_h) * 0.35)
+        def_x_left = max(0, int(src_w * 0.08))
+        def_x_right = min(src_w - sub_w, int(src_w * 0.46))
+        def_y = int((src_h - sub_h) * 0.35)
+
+        x_top = framing_params.get("x_top", def_x_left) if framing_params else def_x_left
+        x_bot = framing_params.get("x_bot", def_x_right) if framing_params else def_x_right
+        y_top = framing_params.get("y_top", def_y) if framing_params else def_y
+        y_bot = framing_params.get("y_bot", def_y) if framing_params else def_y
+
         half_h = out_h // 2
         line_y = half_h - 1
         line_thick = 4 if is_4k else 2
 
         filtergraph = (
-            f"[0:v]crop={sub_w}:{sub_h}:{x_left}:{y_pos},scale={out_w}:{half_h}:flags=lanczos[top]; "
-            f"[0:v]crop={sub_w}:{sub_h}:{x_right}:{y_pos},scale={out_w}:{half_h}:flags=lanczos[bot]; "
+            f"[0:v]crop={sub_w}:{sub_h}:{x_top}:{y_top},scale={out_w}:{half_h}:flags=lanczos[top]; "
+            f"[0:v]crop={sub_w}:{sub_h}:{x_bot}:{y_bot},scale={out_w}:{half_h}:flags=lanczos[bot]; "
             f"[top][bot]vstack=inputs=2,drawbox=y={line_y}:w={out_w}:h={line_thick}:color=black@0.9:t=fill"
             f"{escaped_ass},{pixel_format}[v_out]"
         )
@@ -177,7 +186,18 @@ def build_ffmpeg_filtergraph(
     elif framing == "right_focus":
         x_pos = min(src_w - crop_w_9_16, int(src_w * 0.48))
     elif framing == "smart_focus":
-        x_pos = max(0, min(src_w - crop_w_9_16, int(src_w * 0.28)))
+        strip_letterbox = framing_params.get("strip_letterbox", False) if framing_params else False
+        if strip_letterbox:
+            active_h = framing_params.get("active_h", int(src_h * 0.88)) if framing_params else int(src_h * 0.88)
+            active_h = max(2, active_h - (active_h % 2))
+            crop_w = int(active_h * (out_w / out_h))
+            crop_w = max(2, crop_w - (crop_w % 2))
+            y_offset = framing_params.get("y_offset", (src_h - active_h) // 2) if framing_params else (src_h - active_h) // 2
+            x_ratio = framing_params.get("x_ratio", 0.30) if framing_params else 0.30
+            x_pos = max(0, min(src_w - crop_w, int(src_w * x_ratio)))
+            return f"crop={crop_w}:{active_h}:{x_pos}:{y_offset},scale={out_w}:{out_h}:flags=lanczos{escaped_ass},{pixel_format}"
+        x_ratio = framing_params.get("x_ratio", 0.28) if framing_params else 0.28
+        x_pos = max(0, min(src_w - crop_w_9_16, int(src_w * x_ratio)))
     else:
         x_pos = (src_w - crop_w_9_16) // 2
 
@@ -195,6 +215,7 @@ def render_short_clip(
     master_audio: bool = True,
     encoder_choice: str = "auto",
     resolution: str = "4k",
+    framing_params: Optional[Dict] = None,
 ) -> str:
     """Render a mobile vertical Short with hardware acceleration and broadcast audio.
 
@@ -208,6 +229,7 @@ def render_short_clip(
         master_audio: Whether to apply EBU R128 loudness normalization and EQ.
         encoder_choice: Encoder selection ('auto', 'qsv', 'cpu').
         resolution: Output resolution profile ('4k' for 2160x3840 or '1080p' for 1080x1920).
+        framing_params: Optional dictionary of fine-tuned spatial coordinates and ratios.
 
     Returns:
         Path to rendered .mp4 file.
@@ -225,7 +247,8 @@ def render_short_clip(
     if burn_subtitles:
         stem = Path(out_path).stem
         ass_path = os.path.join(RAW_CAPTIONS_DIR, f"{stem}_captions.ass")
-        margin_v = 480 if framing in ["split_stack", "fit_blur", "zoom_blur"] else 520
+        default_margin_v = 940 if framing == "split_stack" else 520
+        margin_v = framing_params.get("margin_v", default_margin_v) if framing_params else default_margin_v
         generate_ass_file(source_path, ass_path, margin_v=margin_v, target_w=target_w, target_h=target_h)
 
     filtergraph = build_ffmpeg_filtergraph(
@@ -234,6 +257,7 @@ def render_short_clip(
         ass_path=ass_path,
         pixel_format=pix_fmt,
         resolution=resolution,
+        framing_params=framing_params,
     )
 
     duration = end_time - start_time
@@ -322,19 +346,22 @@ def crop_highlights_local(
 
     for i, h in enumerate(highlights, 1):
         archetype = str(h.get("archetype", "HIGHLIGHT")).upper()
+        clip_framing = h.get("framing", framing)
+        clip_framing_params = h.get("framing_params", None)
         seq = registry.get_next_sequence_number(vid)
         out_path = os.path.join(out_dir, f"short_{vid}_{seq:03d}_{archetype}.mp4")
-        print(f"[clip/local] Rendering {i}/{len(highlights)}: {h.get('title', '(untitled)')} [{framing}] ({resolution}) -> {Path(out_path).name}", flush=True)
+        print(f"[clip/local] Rendering {i}/{len(highlights)}: {h.get('title', '(untitled)')} [{clip_framing}] ({resolution}) -> {Path(out_path).name}", flush=True)
         try:
             render_short_clip(
                 source_path=source_path,
                 start_time=float(h["start_time"]),
                 end_time=float(h["end_time"]),
                 out_path=out_path,
-                framing=framing,
+                framing=clip_framing,
                 burn_subtitles=burn_subtitles,
                 master_audio=master_audio,
                 resolution=resolution,
+                framing_params=clip_framing_params,
             )
             registry.register_clip(
                 video_id=vid,
