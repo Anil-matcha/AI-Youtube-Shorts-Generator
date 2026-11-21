@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from typing import Optional
 
 from ..config import LOCAL_OUTPUT_DIR
+from ..url_validation import validate_youtube_url
 
 
 def _import_ytdlp():
@@ -38,15 +39,13 @@ def _format_for(fmt: str) -> str:
 def _extract_youtube_video_id(source: str) -> Optional[str]:
     """Best-effort extraction of a YouTube video id from a URL."""
     parsed = urlparse(source)
-    host = (parsed.netloc or "").lower()
-    if host.startswith("www."):
-        host = host[4:]
+    host = (parsed.hostname or "").lower()
 
-    if host in ("youtu.be", "www.youtu.be"):
+    if host == "youtu.be":
         video_id = parsed.path.lstrip("/").split("/", 1)[0]
         return video_id or None
 
-    if "youtube.com" in host:
+    if host in ("youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"):
         if parsed.path.startswith("/watch"):
             qs = parse_qs(parsed.query)
             video_id = qs.get("v", [""])[0]
@@ -99,8 +98,10 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         print(f"[download/local] using local file: {local_path}", flush=True)
         return local_path
 
+    video_url = validate_youtube_url(video_url)
+
     yt_dlp = _import_ytdlp()
-    out_dir = out_dir or LOCAL_OUTPUT_DIR
+    out_dir = os.path.abspath(os.path.expanduser(out_dir or LOCAL_OUTPUT_DIR))
     os.makedirs(out_dir, exist_ok=True)
 
     video_id = _extract_youtube_video_id(video_url)

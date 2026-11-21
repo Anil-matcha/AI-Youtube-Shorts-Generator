@@ -9,6 +9,7 @@ Two modes:
 from typing import Dict, List, Optional
 
 from .clipper import crop_highlights
+from .config import LLM_PROVIDER, require_api_key, require_gemini_key, require_openai_key
 from .downloader import download_youtube
 from .highlights import call_muapi_llm, get_highlights
 from .transcriber import transcribe
@@ -117,7 +118,15 @@ def generate_shorts(
     """
     mode = (mode or "api").lower()
     if mode == "local":
+        provider = (LLM_PROVIDER or "openai").strip().lower()
+        if provider == "openai":
+            require_openai_key()
+        elif provider == "gemini":
+            require_gemini_key()
+        else:
+            raise RuntimeError(f"Unknown LLM_PROVIDER={provider!r}. Use 'openai' or 'gemini'.")
         return _run_local(youtube_url, num_clips, aspect_ratio, download_format, language)
     if mode == "api":
+        require_api_key()
         return _run_api(youtube_url, num_clips, aspect_ratio, download_format, language)
     raise ValueError(f"Unknown mode: {mode!r}. Use 'api' or 'local'.")

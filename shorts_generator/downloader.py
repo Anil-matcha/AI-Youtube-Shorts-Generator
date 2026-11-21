@@ -2,6 +2,7 @@
 from typing import Dict
 
 from . import muapi
+from .url_validation import validate_youtube_url
 
 
 def _extract_video_url(result: Dict) -> str:
@@ -25,6 +26,7 @@ def _extract_video_url(result: Dict) -> str:
 
 def download_youtube(video_url: str, fmt: str = "720") -> str:
     """Hand a YouTube URL to MuAPI; return a hosted mp4 URL we can read from."""
+    video_url = validate_youtube_url(video_url)
     print(f"[download] requesting {video_url} @ {fmt}p", flush=True)
     result = muapi.run(
         "youtube-download",
