@@ -7,8 +7,8 @@
 
 Built for creators, agencies, and developers who don't want to pay $20–$300/month or be capped on minutes processed. Uses GPT-class LLM highlight detection and Whisper transcription to extract the most viral-worthy moments and auto-crop them vertically for TikTok, Reels, and Shorts.
 
-<p align="center"><a href="https://www.youtube.com/watch?v=eVOV_WK4yHw"><img src="https://i.ytimg.com/vi/eVOV_WK4yHw/maxresdefault.jpg" width="720"></a></p>
-<p align="center"><a href="https://www.youtube.com/watch?v=eVOV_WK4yHw"><b>▶  Watch: Seedance 2.5 Flash API: Nearly 2x Faster, 34% Cheaper (How to Use It) </b></a></p>
+<p align="center"><a href="https://www.youtube.com/watch?v=16f6fyhmX1c"><img src="https://i.ytimg.com/vi/16f6fyhmX1c/maxresdefault.jpg" width="720"></a></p>
+<p align="center"><a href="https://www.youtube.com/watch?v=16f6fyhmX1c"><b>▶  Watch: Suno API Guide: Best AI Music API (Full Songs From Code) </b></a></p>
 
 > **Building your own Opus Clip–style SaaS?** Skip the infra and ship on the same APIs that power this repo:
 > - [AI Clipping API](https://muapi.ai/playground/ai-clipping?utm_source=github&utm_medium=readme&utm_campaign=ai-youtube-shorts-generator) — end-to-end clip selection + render
@@ -120,6 +120,13 @@ python main.py "https://www.youtube.com/watch?v=VIDEO_ID" --mode local
 ```
 
 Local mode writes the rendered shorts to `./output/short_01.mp4`, `short_02.mp4`, … (override with `LOCAL_OUTPUT_DIR`).
+
+### Security notes
+
+- Replace the example API key values in `.env.example` before running a mode that uses them. The app rejects empty, placeholder, and short keys before it starts downloading or processing a video; OpenAI and Gemini keys are also checked for their provider prefix.
+- Remote video URLs must use HTTPS and an exact YouTube or `youtu.be` hostname. Local mode also accepts a local path or `file://` URL for trusted, single-user use.
+- If you expose this library through a web service, validate user input at the service boundary: accept only approved YouTube URLs and do not pass user-supplied paths or `file://` URLs to local mode. The library intentionally supports local files for CLI use.
+- `MUAPI_BASE_URL` must use HTTPS and the host `api.muapi.ai`. Other hosts are rejected because requests include the configured `MUAPI_API_KEY`.
 
 ### With options
 

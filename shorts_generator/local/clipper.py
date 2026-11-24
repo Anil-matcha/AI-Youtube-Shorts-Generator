@@ -346,26 +346,7 @@ def crop_highlights_local(
     auto_framing: bool = True,
     auto_zoom: bool = True,
 ) -> List[Dict]:
-    """Batch render highlights into ready-to-upload vertical Shorts with monotonic registry tracking.
-
-    Args:
-        source_path: Local media file path.
-        highlights: List of highlight dictionaries with start_time and end_time.
-        aspect_ratio: Target aspect ratio string for backward compatibility.
-        framing: Framing strategy.
-        burn_subtitles: Whether to burn dynamic karaoke subtitles.
-        master_audio: Whether to apply EBU R128 audio mastering.
-        out_dir: Output directory path.
-        video_id: Optional video identifier for persistent sequence indexing.
-        resolution: Output resolution profile ('4k' or '1080p').
-        transcript_segments: Optional Whisper transcript segments for intelligent framing.
-        auto_framing: Whether to automatically analyze and recommend framing for clips.
-        auto_zoom: Whether to automatically schedule dynamic viral zoom-ins on impactful moments.
-
-    Returns:
-        List of processed highlight dictionaries with clip_url paths.
-    """
-    out_dir = out_dir or LOCAL_OUTPUT_DIR
+    out_dir = os.path.abspath(os.path.expanduser(out_dir or LOCAL_OUTPUT_DIR))
     os.makedirs(out_dir, exist_ok=True)
     results: List[Dict] = []
     registry = ClipRegistry()

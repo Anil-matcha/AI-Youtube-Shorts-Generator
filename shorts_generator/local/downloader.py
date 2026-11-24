@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from typing import Optional
 
 from ..config import LOCAL_OUTPUT_DIR, RAW_VIDEO_DIR
+from ..url_validation import validate_youtube_url
 
 
 def _import_ytdlp():
@@ -64,14 +65,12 @@ def _extract_youtube_video_id(source: str) -> Optional[str]:
         11-character video ID if found, else None.
     """
     parsed = urlparse(source)
-    host = (parsed.netloc or "").lower()
-    if host.startswith("www."):
-        host = host[4:]
+    host = (parsed.hostname or "").lower()
 
     if host in ("youtu.be", "www.youtu.be"):
         return parsed.path.lstrip("/").split("/", 1)[0] or None
 
-    if "youtube.com" in host:
+    if host in ("youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"):
         if parsed.path.startswith("/watch"):
             return parse_qs(parsed.query).get("v", [""])[0] or None
         match = re.search(r"/(?:shorts|embed|live)/([^/?#&]+)", parsed.path)
@@ -145,8 +144,10 @@ def download_youtube_local(video_url: str, fmt: str = "2160", out_dir: Optional[
     if local_path:
         return local_path
 
+    video_url = validate_youtube_url(video_url)
+
     yt_dlp = _import_ytdlp()
-    out_dir = out_dir or RAW_VIDEO_DIR
+    out_dir = os.path.abspath(os.path.expanduser(out_dir or RAW_VIDEO_DIR))
     os.makedirs(out_dir, exist_ok=True)
 
     video_id = _extract_youtube_video_id(video_url)
