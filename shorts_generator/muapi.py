@@ -65,14 +65,33 @@ def poll(
     timeout: float = POLL_TIMEOUT_SECONDS,
     label: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Block until the prediction is done; return the final payload."""
-    deadline = time.time() + timeout
+    """Block until the prediction is done; return the final payload.
+
+    Args:
+        request_id: Asynchronous job identifier.
+        interval: Polling frequency in seconds.
+        timeout: Maximum wait time in seconds before raising timeout.
+        label: Optional diagnostic task label.
+
+    Returns:
+        Final prediction response payload dictionary.
+
+    Raises:
+        MuAPIError: If the job fails or reaches timeout.
+    """
+    start_time = time.time()
+    deadline = start_time + timeout
     last_status = None
     while time.time() < deadline:
         data = fetch_result(request_id)
         status = (data.get("status") or "").lower()
+        elapsed = time.time() - start_time
         if status and status != last_status:
-            print(f"[muapi] {label or request_id}: {status}", flush=True)
+            print(
+                f"[muapi] {label or request_id}: {status} "
+                f"(elapsed: {int(elapsed)}s / timeout: {int(timeout)}s)",
+                flush=True,
+            )
             last_status = status
 
         if status in ("completed", "succeeded", "success"):
@@ -82,7 +101,12 @@ def poll(
 
         time.sleep(interval)
 
-    raise MuAPIError(f"{label or request_id} timed out after {timeout}s")
+    raise MuAPIError(
+        f"{label or request_id} timed out after {int(timeout)}s.\n"
+        "For long-form videos (>30 mins), you can increase the timeout with "
+        "--timeout 3600 (or MUAPI_POLL_TIMEOUT=3600), or switch to "
+        "--mode local for zero-timeout local processing."
+    )
 
 
 def run(

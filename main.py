@@ -50,8 +50,15 @@ def main() -> int:
     )
     parser.add_argument("--guard-band", type=float, default=45.0, help="Minimum separation gap between clips in seconds (default: 45.0)")
     parser.add_argument("--video-id", default=None, help="Unique identifier for persistent exclusion tracking across runs")
+    parser.add_argument("--timeout", type=float, default=1800.0, help="Polling and download timeout in seconds (default: 1800.0)")
+    parser.add_argument("--no-zoom", action="store_true", default=False, help="Disable automated dynamic viral zoom punch-ins")
+    parser.add_argument("--cookies", default=None, help="Path to Netscape cookies file to bypass YouTube 403 Forbidden throttling")
     parser.add_argument("--output-json", default=None, help="Write the full result JSON to this path")
     args = parser.parse_args()
+
+    if args.cookies:
+        import os
+        os.environ["YTDLP_COOKIES_PATH"] = args.cookies
 
     try:
         result = generate_shorts(
@@ -65,6 +72,8 @@ def main() -> int:
             guard_band=args.guard_band,
             video_id=args.video_id,
             resolution=args.resolution,
+            auto_zoom=not args.no_zoom,
+            timeout=args.timeout,
         )
     except Exception as e:
         print(f"\nFAILED: {e}", file=sys.stderr)

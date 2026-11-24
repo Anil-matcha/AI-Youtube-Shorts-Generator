@@ -43,6 +43,7 @@ def _run_local(
     video_id: Optional[str] = None,
     guard_band: float = 45.0,
     resolution: str = "4k",
+    auto_zoom: bool = True,
 ) -> Dict:
     """Execute full local processing pipeline on the current machine.
 
@@ -101,7 +102,7 @@ def _run_local(
         resolution=resolution,
         transcript_segments=transcript.get("segments"),
         auto_framing=(framing in ("auto", "smart", "split_stack")),
-        auto_zoom=True,
+        auto_zoom=auto_zoom,
     )
 
     return {
@@ -173,6 +174,8 @@ def generate_shorts(
     video_id: Optional[str] = None,
     guard_band: float = 45.0,
     resolution: str = "4k",
+    auto_zoom: bool = True,
+    timeout: Optional[float] = None,
 ) -> Dict:
     """Execute end-to-end shorts generation workflow.
 
@@ -218,6 +221,7 @@ def generate_shorts(
             video_id=video_id,
             guard_band=guard_band,
             resolution=resolution,
+            auto_zoom=auto_zoom,
         )
     if mode == "api":
         require_api_key()

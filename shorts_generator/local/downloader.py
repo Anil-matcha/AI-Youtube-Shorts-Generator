@@ -172,6 +172,7 @@ def download_youtube_local(video_url: str, fmt: str = "2160", out_dir: Optional[
                 "player_client": ["android", "web"]
             }
         },
+        "live_from_start": True,
         "socket_timeout": 30,
         "quiet": True,
         "no_warnings": True,
@@ -245,6 +246,7 @@ def download_youtube_slice(
                 "player_client": ["android", "web"]
             }
         },
+        "live_from_start": True,
         "socket_timeout": 30,
         "merge_output_format": "mp4",
         "overwrites": True,
