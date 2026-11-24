@@ -1,0 +1,65 @@
+================================================================================
+           NEW YOUTUBE CHANNEL SETUP: QUICK COPY-PASTE CHECKLIST
+================================================================================
+Creator: Piyush Makhija
+Recommended Channel Name: Piyush Makhija Gaming
+Handle: @PiyushMakhijaGaming (or @PiyushPlaysHindi)
+
+--------------------------------------------------------------------------------
+STEP 1: CHANNEL NAME & HANDLE
+--------------------------------------------------------------------------------
+Name:
+Piyush Makhija Gaming
+
+Handle:
+@PiyushMakhijaGaming
+
+--------------------------------------------------------------------------------
+STEP 2: CHANNEL ABOUT / DESCRIPTION (COPY-PASTE EXACTLY)
+--------------------------------------------------------------------------------
+Hey everyone! 👋 Main hu Piyush Makhija, ek passionate PC aur PS5 gamer. 🎮
+
+Agar aapko High-Octane GTA 6 Gameplay (True 4K 60FPS), savage roasts, crazy driving fails, epic stunts aur hilarious Hindi commentary dekhna pasand hai, toh aap bilkul sahi jagah par aaye ho! 🔥
+
+Yahan hum khelenge:
+🕹️ GTA 6 Full Story Walkthrough & Missions (Lucia & Jason)
+🚀 Crazy Stunts, Police Chases & Hilarious Accidents
+💥 Trending PC & PS5 AAA Open-World Blockbusters
+
+📅 UPLOAD SCHEDULE:
+⚡ Daily 4K Vertical Shorts: Every Evening at 8:00 PM IST
+🎬 Full 4K Story Walkthroughs: Regular Episodes with High-Octane Action
+
+Chalo milkar gaming ka maza lete hain! Subscribe karo aur bano hamari gaming family ka hissa! 🚀
+
+For Business Enquiries: contact.piyushmakhijagaming@gmail.com
+Instagram: @piyushmakhijagaming
+
+--------------------------------------------------------------------------------
+STEP 3: MASTER CHANNEL KEYWORDS (PASTE IN STUDIO -> SETTINGS -> CHANNEL)
+--------------------------------------------------------------------------------
+(Character count: 454 / 500 characters)
+
+Piyush Makhija, Piyush Makhija Gaming, PiyushPlays, GTA 6, GTA 6 Hindi, GTA 6 Gameplay, GTA 6 Walkthrough, GTA 6 Indian Gamer, GTA 6 Vice City, GTA 6 Shorts, GTA 6 Funny Moments, GTA 6 Stunts, GTA 6 PC 4K, GTA 6 PS5 Gameplay, GTA 6 Car Crash, GTA 6 Police Chase, GTA 6 Missions Hindi, GTA 6 Lucia Jason, Indian Gaming Channel, Hindi Gaming, PC Gaming Hindi, PS5 Gaming Hindi, Gaming Shorts Hindi, Funny Gaming Shorts, Best Gaming Moments, Next Gen Gaming
+
+--------------------------------------------------------------------------------
+STEP 4: BACKEND SETTINGS CHECKLIST (DO NOT MISS ANY)
+--------------------------------------------------------------------------------
+[ ] Settings -> Channel -> Basic Info -> Country of Residence = India
+[ ] Settings -> Channel -> Advanced Settings -> "No, set this channel as not made for kids"
+[ ] Settings -> Channel -> Feature Eligibility -> Intermediate: Verify Phone Number (OTP)
+[ ] Settings -> Channel -> Feature Eligibility -> Advanced: Video Verification (Removes 24h limit)
+[ ] Settings -> Upload Defaults -> Category = Gaming -> Game Title = Grand Theft Auto VI
+[ ] Settings -> Upload Defaults -> Video Language = Hindi
+[ ] Settings -> Upload Defaults -> Title & Description Language = English (India)
+[ ] Settings -> Upload Defaults -> Visibility = Private (or Unlisted)
+
+--------------------------------------------------------------------------------
+STEP 5: DAY 1 LAUNCH SEQUENCE
+--------------------------------------------------------------------------------
+1. Upload Episode 1 Long-Form 4K Video -> Set to Public.
+2. Upload Episode 1 Short 1 -> Set to Schedule for 8:00 PM IST.
+3. In Short settings, click "Related Video" -> Select Episode 1 Long Video.
+4. Pin engaging comment asking viewers about their favorite moment.
+5. Relax and let YouTube's algorithm deliver impressions cleanly!
+================================================================================
