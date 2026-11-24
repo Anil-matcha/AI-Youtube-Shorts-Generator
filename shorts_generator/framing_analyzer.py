@@ -279,3 +279,68 @@ class FramingAnalyzer:
             reason="Standard single-subject monologue reframed using adaptive rule-of-thirds smart focus.",
             params=params,
         )
+
+
+def smooth_speaker_tracking(
+    detections: List[Dict],
+    frame_width: int,
+    deadband_ratio: float = 0.08,
+    hold_seconds: float = 2.5
+) -> List[Dict]:
+    """Smooth detected active speaker centroids using deadband filtering and hysteresis hold.
+
+    Addresses two-person podcast framing instability (Issue #81):
+    1. Deadband zone: Suppresses camera pan jitter if speaker centroid drift is within
+       the threshold (default 8% of frame width).
+    2. Hysteresis hold: Suppresses erratic switching between two speakers by requiring
+       the new speaker to persist for at least hold_seconds (default 2.5s) before panning.
+
+    Args:
+        detections: List of detection dictionaries containing 'timestamp', 'center_x',
+            and optional 'speaker_id'.
+        frame_width: Source video frame width in pixels.
+        deadband_ratio: Fraction of frame width defining the deadband threshold.
+        hold_seconds: Minimum duration before allowing a camera pan switch to another speaker.
+
+    Returns:
+        List of smoothed detection dictionaries with 'smoothed_x' and 'active_speaker'.
+    """
+    if not detections:
+        return []
+
+    deadband_px = frame_width * deadband_ratio
+    first = detections[0]
+    current_x = float(first.get("center_x", frame_width * 0.5))
+    current_speaker = first.get("speaker_id", 0)
+    last_switch_time = float(first.get("timestamp", 0.0))
+    pending_speaker = current_speaker
+    pending_speaker_start = last_switch_time
+
+    smoothed: List[Dict] = []
+    for det in detections:
+        t = float(det.get("timestamp", 0.0))
+        target_x = float(det.get("center_x", current_x))
+        speaker = det.get("speaker_id", current_speaker)
+
+        if speaker != current_speaker:
+            if speaker != pending_speaker:
+                pending_speaker = speaker
+                pending_speaker_start = t
+            elif t - pending_speaker_start >= hold_seconds:
+                current_speaker = speaker
+                last_switch_time = t
+        else:
+            pending_speaker = current_speaker
+
+        if abs(target_x - current_x) > deadband_px:
+            current_x = current_x + 0.35 * (target_x - current_x)
+
+        smoothed.append({
+            "timestamp": t,
+            "center_x": target_x,
+            "smoothed_x": round(current_x, 2),
+            "speaker_id": speaker,
+            "active_speaker": current_speaker,
+        })
+
+    return smoothed

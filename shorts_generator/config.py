@@ -52,8 +52,12 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").strip().lower()
+ARC_RUNNER_BASE_URL = os.getenv("ARC_RUNNER_BASE_URL", "http://127.0.0.1:11434").strip().rstrip("/")
+ARC_RUNNER_MODEL = os.getenv("ARC_RUNNER_MODEL", "llama-3.2-3b").strip()
+ARC_RUNNER_TIMEOUT = float(os.getenv("ARC_RUNNER_TIMEOUT", "120.0"))
+YTDLP_COOKIES_PATH = os.getenv("YTDLP_COOKIES_PATH", "").strip()
 LOCAL_WHISPER_MODEL = os.getenv("LOCAL_WHISPER_MODEL", "base")
-LOCAL_WHISPER_DEVICE = os.getenv("LOCAL_WHISPER_DEVICE", "auto")  # auto / cpu / cuda
+LOCAL_WHISPER_DEVICE = os.getenv("LOCAL_WHISPER_DEVICE", "auto")
 LOCAL_OUTPUT_DIR = os.path.abspath(
     os.path.expanduser(os.getenv("LOCAL_OUTPUT_DIR", "output").strip() or "output")
 )

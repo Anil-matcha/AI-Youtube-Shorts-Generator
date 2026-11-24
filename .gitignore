@@ -4,5 +4,6 @@ __pycache__/
 .venv/
 venv/
 output/
+scratch/
 *.mp4
 .DS_Store

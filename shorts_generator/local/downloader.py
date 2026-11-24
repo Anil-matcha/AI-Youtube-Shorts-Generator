@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 from typing import Optional
 
-from ..config import LOCAL_OUTPUT_DIR, RAW_VIDEO_DIR
+from ..config import LOCAL_OUTPUT_DIR, RAW_VIDEO_DIR, YTDLP_COOKIES_PATH
 from ..url_validation import validate_youtube_url
 
 
@@ -132,6 +132,9 @@ def _existing_download(out_dir: str, video_id: str) -> Optional[str]:
 def download_youtube_local(video_url: str, fmt: str = "2160", out_dir: Optional[str] = None) -> str:
     """Download a YouTube video or return a local media path.
 
+    Includes anti-throttling and 403 Forbidden mitigation by selecting
+    the Android/Web player client and optional Netscape cookie authentication.
+
     Args:
         video_url: Video URL or local path.
         fmt: Target resolution format.
@@ -164,22 +167,46 @@ def download_youtube_local(video_url: str, fmt: str = "2160", out_dir: Optional[
             "key": "FFmpegVideoRemuxer",
             "preferedformat": "mp4",
         }],
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "web"]
+            }
+        },
+        "socket_timeout": 30,
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
     }
+    if YTDLP_COOKIES_PATH and os.path.exists(YTDLP_COOKIES_PATH):
+        ydl_opts["cookiefile"] = YTDLP_COOKIES_PATH
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(video_url, download=True)
-        path = ydl.prepare_filename(info)
-        if not os.path.exists(path):
-            stem, _ = os.path.splitext(path)
-            for ext in (".mp4", ".mkv", ".webm"):
-                if os.path.exists(stem + ext):
-                    path = stem + ext
-                    break
-
-    return path
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=True)
+            path = ydl.prepare_filename(info)
+            if not os.path.exists(path):
+                stem, _ = os.path.splitext(path)
+                for ext in (".mp4", ".mkv", ".webm"):
+                    if os.path.exists(stem + ext):
+                        path = stem + ext
+                        break
+        return path
+    except Exception as err:
+        err_msg = str(err).lower()
+        if "403" in err_msg or "forbidden" in err_msg:
+            fallback_opts = dict(ydl_opts)
+            fallback_opts["extractor_args"] = {"youtube": {"player_client": ["ios", "mweb"]}}
+            with yt_dlp.YoutubeDL(fallback_opts) as ydl:
+                info = ydl.extract_info(video_url, download=True)
+                path = ydl.prepare_filename(info)
+                if not os.path.exists(path):
+                    stem, _ = os.path.splitext(path)
+                    for ext in (".mp4", ".mkv", ".webm"):
+                        if os.path.exists(stem + ext):
+                            path = stem + ext
+                            break
+            return path
+        raise
 
 
 def download_youtube_slice(
@@ -190,6 +217,8 @@ def download_youtube_slice(
     fmt: str = "2160"
 ) -> str:
     """Download only a specified time slice of a remote YouTube video at native quality.
+
+    Uses external FFmpeg fast-seek streaming with Android/Web player client anti-throttling.
 
     Args:
         video_url: Remote YouTube URL.
@@ -211,13 +240,31 @@ def download_youtube_slice(
         "external_downloader_args": {
             "ffmpeg_i": ["-ss", f"{start_seconds:.2f}", "-to", f"{end_seconds:.2f}"]
         },
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "web"]
+            }
+        },
+        "socket_timeout": 30,
         "merge_output_format": "mp4",
         "overwrites": True,
         "quiet": True,
         "no_warnings": True,
     }
+    if YTDLP_COOKIES_PATH and os.path.exists(YTDLP_COOKIES_PATH):
+        ydl_opts["cookiefile"] = YTDLP_COOKIES_PATH
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([video_url])
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([video_url])
+    except Exception as err:
+        err_msg = str(err).lower()
+        if "403" in err_msg or "forbidden" in err_msg:
+            fallback_opts = dict(ydl_opts)
+            fallback_opts["extractor_args"] = {"youtube": {"player_client": ["ios", "mweb"]}}
+            with yt_dlp.YoutubeDL(fallback_opts) as ydl:
+                ydl.download([video_url])
+        else:
+            raise
 
     return out_path

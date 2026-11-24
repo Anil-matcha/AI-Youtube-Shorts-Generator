@@ -196,12 +196,16 @@ def generate_shorts(
     mode = (mode or "local").lower()
     if mode == "local":
         provider = (LLM_PROVIDER or "openai").strip().lower()
-        if provider == "openai":
+        if provider in ("arc_runner", "intel_arc", "arc"):
+            pass
+        elif provider == "openai":
             require_openai_key()
         elif provider == "gemini":
             require_gemini_key()
         else:
-            raise RuntimeError(f"Unknown LLM_PROVIDER={provider!r}. Use 'openai' or 'gemini'.")
+            raise RuntimeError(
+                f"Unknown LLM_PROVIDER={provider!r}. Use 'arc_runner', 'openai', or 'gemini'."
+            )
         return _run_local(
             youtube_url,
             num_clips,
