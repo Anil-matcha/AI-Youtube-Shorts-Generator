@@ -166,7 +166,7 @@ def create_channel_banner(output_path: Path, raw_bg_path: Path | None = None) ->
     s_w = s_box[2] - s_box[0]
     draw_text_with_outline(draw, (center_x - s_w // 2, 680), sub_text, font_sub, (255, 255, 255, 255), (0, 0, 0, 255), 4)
 
-    schedule_text = "⚡ NEW 4K SHORT DAILY AT 8:00 PM IST  |  SUBSCRIBE FOR EPIC MISSIONS"
+    schedule_text = "NEW 4K SHORT DAILY AT 8:00 PM IST  |  SUBSCRIBE FOR EPIC MISSIONS"
     sch_box = font_badge.getbbox(schedule_text)
     sch_w = sch_box[2] - sch_box[0]
 
@@ -280,11 +280,11 @@ def create_ep1_master_thumbnail(output_path: Path, raw_ep1_art_path: Path | None
 
     draw_text_with_outline(draw, (70, 370), "BHAI NE BOLA", font_hindi_hook, (255, 235, 50, 255), (0, 0, 0, 255), 7)
     draw_text_with_outline(draw, (70, 500), "MARNE KA TOH", font_hindi_hook, (255, 255, 255, 255), (0, 0, 0, 255), 7)
-    draw_text_with_outline(draw, (70, 630), "MARNE KA! 💀", font_hindi_hook, (255, 40, 80, 255), (0, 0, 0, 255), 8)
+    draw_text_with_outline(draw, (70, 630), "MARNE KA!!!", font_hindi_hook, (255, 40, 80, 255), (0, 0, 0, 255), 8)
 
     bottom_bar = (70, 880, 1050, 990)
     draw.rounded_rectangle(bottom_bar, radius=24, fill=(15, 15, 25, 230), outline=(0, 240, 255, 200), width=3)
-    draw.text((105, 910), "🎮 PC & PS5 MAX SETTINGS  •  FULL WALKTHROUGH", font=font_meta, fill=(255, 255, 255, 255))
+    draw.text((105, 910), "PC & PS5 MAX SETTINGS  •  FULL WALKTHROUGH", font=font_meta, fill=(255, 255, 255, 255))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     img.save(output_path, "PNG", optimize=True)
