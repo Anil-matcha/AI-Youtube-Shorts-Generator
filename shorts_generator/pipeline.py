@@ -98,6 +98,9 @@ def _run_local(
         master_audio=master_audio,
         video_id=vid,
         resolution=resolution,
+        transcript_segments=transcript.get("segments"),
+        auto_framing=(framing in ("auto", "smart", "split_stack")),
+        auto_zoom=True,
     )
 
     return {

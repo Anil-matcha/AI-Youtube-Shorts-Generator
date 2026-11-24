@@ -16,6 +16,9 @@ from pathlib import Path
 
 from ..config import LOCAL_OUTPUT_DIR, RAW_CAPTIONS_DIR
 from ..clip_registry import ClipRegistry
+from ..diversity_types import CandidateHighlight, FramingMode, HighlightArchetype, ZoomPlan
+from ..framing_analyzer import FramingAnalyzer
+from ..viral_zoom_analyzer import ViralZoomAnalyzer
 from .subtitles import generate_ass_file
 
 
@@ -98,16 +101,16 @@ def build_ffmpeg_filtergraph(
     resolution: str = "4k",
     framing_params: Optional[Dict] = None,
 ) -> str:
-    """Construct FFmpeg video filtergraph with framing, separator, and subtitle burn-in.
+    """Construct FFmpeg video filtergraph with framing, separator, zoom, and subtitle burn-in.
 
     Args:
         src_w: Source video width in pixels.
         src_h: Source video height in pixels.
-        framing: Framing mode (split_stack, left_focus, right_focus, smart_focus, center).
+        framing: Framing mode (split_stack, left_focus, right_focus, smart_focus, center, fit_blur, zoom_blur).
         ass_path: Optional path to ASS subtitle file to overlay.
         pixel_format: Pixel format filter string for encoder compatibility.
         resolution: Target resolution profile ('4k' for 2160x3840 or '1080p' for 1080x1920).
-        framing_params: Optional dictionary of fine-tuned spatial coordinates and ratios.
+        framing_params: Optional dictionary of fine-tuned spatial coordinates, ratios, and dynamic zoom plans.
 
     Returns:
         FFmpeg filtergraph string.
@@ -123,6 +126,10 @@ def build_ffmpeg_filtergraph(
 
     crop_w_9_16 = int(src_h * (out_w / out_h))
     crop_w_9_16 = max(2, crop_w_9_16 - (crop_w_9_16 % 2))
+
+    zoom_plan = framing_params.get("zoom_plan", None) if framing_params else None
+    focal_x = framing_params.get("focal_x", 0.5) if framing_params else 0.5
+    focal_y = framing_params.get("focal_y", 0.45) if framing_params else 0.45
 
     if framing == "split_stack":
         sub_ratio = framing_params.get("sub_h_ratio", 0.72) if framing_params else 0.72
@@ -144,9 +151,15 @@ def build_ffmpeg_filtergraph(
         line_y = half_h - 1
         line_thick = 4 if is_4k else 2
 
+        zoom_plan_top = framing_params.get("zoom_plan_top", zoom_plan) if framing_params else zoom_plan
+        zoom_plan_bot = framing_params.get("zoom_plan_bot", None) if framing_params else None
+
+        crop_top = ViralZoomAnalyzer.build_crop_filter_with_zoom(sub_w, sub_h, x_top, y_top, zoom_plan_top, focal_x, focal_y)
+        crop_bot = ViralZoomAnalyzer.build_crop_filter_with_zoom(sub_w, sub_h, x_bot, y_bot, zoom_plan_bot, focal_x, focal_y)
+
         filtergraph = (
-            f"[0:v]crop={sub_w}:{sub_h}:{x_top}:{y_top},scale={out_w}:{half_h}:flags=lanczos[top]; "
-            f"[0:v]crop={sub_w}:{sub_h}:{x_bot}:{y_bot},scale={out_w}:{half_h}:flags=lanczos[bot]; "
+            f"[0:v]{crop_top},scale={out_w}:{half_h}:flags=lanczos[top]; "
+            f"[0:v]{crop_bot},scale={out_w}:{half_h}:flags=lanczos[bot]; "
             f"[top][bot]vstack=inputs=2,drawbox=y={line_y}:w={out_w}:h={line_thick}:color=black@0.9:t=fill"
             f"{escaped_ass},{pixel_format}[v_out]"
         )
@@ -183,9 +196,15 @@ def build_ffmpeg_filtergraph(
 
     if framing == "left_focus":
         x_pos = max(0, int(src_w * 0.18))
-    elif framing == "right_focus":
+        crop_filter = ViralZoomAnalyzer.build_crop_filter_with_zoom(crop_w_9_16, src_h, x_pos, 0, zoom_plan, focal_x, focal_y)
+        return f"{crop_filter},scale={out_w}:{out_h}:flags=lanczos{escaped_ass},{pixel_format}"
+
+    if framing == "right_focus":
         x_pos = min(src_w - crop_w_9_16, int(src_w * 0.48))
-    elif framing == "smart_focus":
+        crop_filter = ViralZoomAnalyzer.build_crop_filter_with_zoom(crop_w_9_16, src_h, x_pos, 0, zoom_plan, focal_x, focal_y)
+        return f"{crop_filter},scale={out_w}:{out_h}:flags=lanczos{escaped_ass},{pixel_format}"
+
+    if framing == "smart_focus":
         strip_letterbox = framing_params.get("strip_letterbox", False) if framing_params else False
         if strip_letterbox:
             active_h = framing_params.get("active_h", int(src_h * 0.88)) if framing_params else int(src_h * 0.88)
@@ -195,14 +214,16 @@ def build_ffmpeg_filtergraph(
             y_offset = framing_params.get("y_offset", (src_h - active_h) // 2) if framing_params else (src_h - active_h) // 2
             x_ratio = framing_params.get("x_ratio", 0.30) if framing_params else 0.30
             x_pos = max(0, min(src_w - crop_w, int(src_w * x_ratio)))
-            return f"crop={crop_w}:{active_h}:{x_pos}:{y_offset},scale={out_w}:{out_h}:flags=lanczos{escaped_ass},{pixel_format}"
+            crop_filter = ViralZoomAnalyzer.build_crop_filter_with_zoom(crop_w, active_h, x_pos, y_offset, zoom_plan, focal_x, focal_y)
+            return f"{crop_filter},scale={out_w}:{out_h}:flags=lanczos{escaped_ass},{pixel_format}"
         x_ratio = framing_params.get("x_ratio", 0.28) if framing_params else 0.28
         x_pos = max(0, min(src_w - crop_w_9_16, int(src_w * x_ratio)))
-    else:
-        x_pos = (src_w - crop_w_9_16) // 2
+        crop_filter = ViralZoomAnalyzer.build_crop_filter_with_zoom(crop_w_9_16, src_h, x_pos, 0, zoom_plan, focal_x, focal_y)
+        return f"{crop_filter},scale={out_w}:{out_h}:flags=lanczos{escaped_ass},{pixel_format}"
 
-    filtergraph = f"crop={crop_w_9_16}:{src_h}:{x_pos}:0,scale={out_w}:{out_h}:flags=lanczos{escaped_ass},{pixel_format}"
-    return filtergraph
+    x_pos = (src_w - crop_w_9_16) // 2
+    crop_filter = ViralZoomAnalyzer.build_crop_filter_with_zoom(crop_w_9_16, src_h, x_pos, 0, zoom_plan, focal_x, focal_y)
+    return f"{crop_filter},scale={out_w}:{out_h}:flags=lanczos{escaped_ass},{pixel_format}"
 
 
 def render_short_clip(
@@ -321,6 +342,9 @@ def crop_highlights_local(
     out_dir: Optional[str] = None,
     video_id: Optional[str] = None,
     resolution: str = "4k",
+    transcript_segments: Optional[List[Dict]] = None,
+    auto_framing: bool = True,
+    auto_zoom: bool = True,
 ) -> List[Dict]:
     """Batch render highlights into ready-to-upload vertical Shorts with monotonic registry tracking.
 
@@ -334,6 +358,9 @@ def crop_highlights_local(
         out_dir: Output directory path.
         video_id: Optional video identifier for persistent sequence indexing.
         resolution: Output resolution profile ('4k' or '1080p').
+        transcript_segments: Optional Whisper transcript segments for intelligent framing.
+        auto_framing: Whether to automatically analyze and recommend framing for clips.
+        auto_zoom: Whether to automatically schedule dynamic viral zoom-ins on impactful moments.
 
     Returns:
         List of processed highlight dictionaries with clip_url paths.
@@ -343,13 +370,47 @@ def crop_highlights_local(
     results: List[Dict] = []
     registry = ClipRegistry()
     vid = video_id or Path(source_path).stem
+    src_dims = get_source_dimensions(source_path)
+
+    framing_analyzer = FramingAnalyzer(target_resolution=resolution) if auto_framing else None
+    zoom_analyzer = ViralZoomAnalyzer() if auto_zoom else None
 
     for i, h in enumerate(highlights, 1):
-        archetype = str(h.get("archetype", "HIGHLIGHT")).upper()
+        archetype_str = str(h.get("archetype", "HIGHLIGHT")).upper()
+        archetype_enum = HighlightArchetype.from_string(archetype_str)
         clip_framing = h.get("framing", framing)
-        clip_framing_params = h.get("framing_params", None)
+        clip_framing_params = dict(h.get("framing_params") or {})
+
+        candidate = CandidateHighlight(
+            title=str(h.get("title", "")),
+            raw_start=float(h["start_time"]),
+            raw_end=float(h["end_time"]),
+            score=int(h.get("score", 0)),
+            archetype=archetype_enum,
+            hook_sentence=str(h.get("hook_sentence", "")),
+            virality_reason=str(h.get("virality_reason", "")),
+            snapped_start=float(h.get("snapped_start", h["start_time"])),
+            snapped_end=float(h.get("snapped_end", h["end_time"])),
+            is_snapped=bool(h.get("is_snapped", False)),
+        )
+
+        if auto_framing and framing_analyzer and (clip_framing in ("auto", None) or not clip_framing_params):
+            rec = framing_analyzer.recommend_framing(
+                highlight=candidate,
+                transcript_segments=transcript_segments,
+                source_dimensions=src_dims,
+            )
+            if clip_framing in ("auto", None):
+                clip_framing = rec.mode
+            clip_framing_params = {**rec.params, **clip_framing_params}
+
+        if auto_zoom and zoom_analyzer and "zoom_plan" not in clip_framing_params:
+            z_plan = zoom_analyzer.plan_zooms(candidate)
+            if z_plan.events:
+                clip_framing_params["zoom_plan"] = z_plan
+
         seq = registry.get_next_sequence_number(vid)
-        out_path = os.path.join(out_dir, f"short_{vid}_{seq:03d}_{archetype}.mp4")
+        out_path = os.path.join(out_dir, f"short_{vid}_{seq:03d}_{archetype_str}.mp4")
         print(f"[clip/local] Rendering {i}/{len(highlights)}: {h.get('title', '(untitled)')} [{clip_framing}] ({resolution}) -> {Path(out_path).name}", flush=True)
         try:
             render_short_clip(
@@ -368,13 +429,18 @@ def crop_highlights_local(
                 start_time=float(h["start_time"]),
                 end_time=float(h["end_time"]),
                 guard_band=45.0,
-                archetype=archetype,
+                archetype=archetype_str,
                 score=int(h.get("score", 0)),
                 title=str(h.get("title", "")),
                 hook_sentence=str(h.get("hook_sentence", "")),
                 file_path=out_path
             )
-            results.append({**h, "clip_url": out_path})
+            results.append({
+                **h,
+                "clip_url": out_path,
+                "framing": clip_framing,
+                "framing_params": clip_framing_params,
+            })
         except Exception as e:
             print(f"[clip/local] Error on clip {i}: {e}", flush=True)
             results.append({**h, "clip_url": None, "error": str(e)})

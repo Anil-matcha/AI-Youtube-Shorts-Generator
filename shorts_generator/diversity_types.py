@@ -4,12 +4,14 @@ Enforces strict typing and structured representations for:
 - 5-Tier narrative archetypes.
 - Microsecond-precision Whisper word events.
 - Boundary-snapped candidate highlights.
+- Dynamic framing modes and intelligent recommendations.
+- Timeline-based viral zoom events and plans.
 - Persistent registry clip records.
 """
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class HighlightArchetype(str, Enum):
@@ -37,6 +39,77 @@ class HighlightArchetype(str, Enum):
             if clean in member.value or member.value in clean:
                 return member
         return cls.DIALOGUE_BANTER
+
+
+class FramingMode(str, Enum):
+    """Supported spatial reframing strategies for vertical short video generation."""
+    SPLIT_STACK = "split_stack"
+    SMART_FOCUS = "smart_focus"
+    CENTER = "center"
+    LEFT_FOCUS = "left_focus"
+    RIGHT_FOCUS = "right_focus"
+    FIT_BLUR = "fit_blur"
+    ZOOM_BLUR = "zoom_blur"
+
+
+@dataclass
+class FramingRecommendation:
+    """Automated recommendation for scene framing mode and spatial parameters.
+
+    Attributes:
+        mode: Selected FramingMode identifier string.
+        confidence: Prediction confidence score between 0.0 and 1.0.
+        reason: Diagnostic explanation of why this framing mode was chosen.
+        params: Dictionary of fine-tuned spatial coordinates, crops, and offsets.
+    """
+    mode: str
+    confidence: float
+    reason: str
+    params: Dict[str, Any] = field(default_factory=dict)
+
+
+class ZoomEventType(str, Enum):
+    """Taxonomy of dynamic zoom events for visual punctuation and audience retention."""
+    HOOK_PUNCH = "hook_punch"
+    IMPACT_PUNCH = "impact_punch"
+    TENSION_CREEP = "tension_creep"
+    FOCAL_HOLD = "focal_hold"
+
+
+@dataclass
+class ZoomEvent:
+    """A scheduled dynamic zoom transformation window.
+
+    Attributes:
+        event_type: Category of zoom event.
+        start_time: Clip-relative start timestamp in seconds.
+        end_time: Clip-relative end timestamp in seconds.
+        target_zoom: Maximum zoom magnification factor (e.g. 1.25 for 1.25x).
+        focal_x: Normalized horizontal focal anchor point (0.0=left, 0.5=center, 1.0=right).
+        focal_y: Normalized vertical focal anchor point (0.0=top, 0.5=center, 1.0=bottom).
+        ease_in_sec: Duration in seconds to ramp up zoom factor.
+        ease_out_sec: Duration in seconds to ramp down zoom factor back to baseline.
+    """
+    event_type: ZoomEventType
+    start_time: float
+    end_time: float
+    target_zoom: float
+    focal_x: float = 0.5
+    focal_y: float = 0.5
+    ease_in_sec: float = 0.3
+    ease_out_sec: float = 0.4
+
+
+@dataclass
+class ZoomPlan:
+    """Complete temporal schedule of dynamic zoom transformations for a clip.
+
+    Attributes:
+        events: Chronologically ordered list of zoom events.
+        base_zoom: Base stationary zoom factor (defaults to 1.0).
+    """
+    events: List[ZoomEvent] = field(default_factory=list)
+    base_zoom: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -97,6 +170,9 @@ class CandidateHighlight:
         snapped_start: Acoustically snapped start timestamp.
         snapped_end: Acoustically snapped end timestamp.
         is_snapped: Whether boundary snapping has occurred.
+        framing: Recommended or user-specified framing mode string.
+        framing_params: Spatial coordinates, offsets, and ratios for reframing.
+        zoom_plan: Dynamic zoom timeline schedule.
     """
     title: str
     raw_start: float
@@ -108,6 +184,9 @@ class CandidateHighlight:
     snapped_start: float = 0.0
     snapped_end: float = 0.0
     is_snapped: bool = False
+    framing: Optional[str] = None
+    framing_params: Optional[Dict[str, Any]] = None
+    zoom_plan: Optional[ZoomPlan] = None
 
     @property
     def duration(self) -> float:
